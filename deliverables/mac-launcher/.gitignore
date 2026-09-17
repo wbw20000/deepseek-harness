@@ -1,0 +1,4 @@
+# SwiftPM build outputs and caches, including the default candidate output
+# (DeepSeek Harness (Candidate).app) that build.sh publishes under .build/.
+# Never stage built artifacts.
+.build/
