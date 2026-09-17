@@ -42,6 +42,8 @@ type SandboxEnforcement = 'full' | 'partial'
 
 The complete execution policy is resolved and carried per capability call. It includes `danger-full-access` so a consumer can resolve policy once before deciding whether to bypass confinement. Normal tool calls derive `workspaceRoot` from the calling session's immutable cwd; deployment configuration is the agentless fallback. The resolver preserves absolute execution-world spelling. Enforcing providers canonicalize the root where the files exist, so a cwd containing `symlink/..` identifies the directory where the paired subprocess provider actually runs.
 
+Deployment configuration may add extra writable roots beside the workspace root and the platform temp areas. Only `workspace-write` consumes them, and a backend that cannot revoke such a grant refuses the policy: the windows-acl backend fails closed for a policy that carries extras.
+
 ```ts type-equiv
 /**
  * The complete file-effect policy resolved for one capability call. The root
@@ -53,6 +55,13 @@ interface SandboxExecutionPolicy {
   mode: SandboxMode
   /** Absolute root directory `workspace-write` may write under. */
   workspaceRoot: string
+  /**
+   * Deployment-configured extra writable roots (absolute execution-world
+   * paths) granted beyond the workspace root and the platform temp areas
+   * under `workspace-write`. Absent when none are configured; `read-only`
+   * and `danger-full-access` never consult it.
+   */
+  extraWritableRoots?: readonly string[]
   /**
    * Opaque identity of the calling session (the branded `dsh-session`
    * SessionId). Backends key per-session state off it (e.g. windows-acl gives

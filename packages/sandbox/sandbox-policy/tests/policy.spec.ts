@@ -15,7 +15,7 @@ import SandboxPolicyService, { SANDBOX_MODES, setSandboxMode } from '@deepseek-a
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import SystemPrompt, { renderContextSnapshot, renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 
-async function mounted(config: { mode?: 'read-only' | 'workspace-write' | 'danger-full-access'; workspaceRoot?: string } = {}) {
+async function mounted(config: { mode?: 'read-only' | 'workspace-write' | 'danger-full-access'; workspaceRoot?: string; extraWritableRoots?: string[] } = {}) {
   const ctx = new Context()
   await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(SandboxPolicyService, config)
@@ -61,6 +61,47 @@ describe('SandboxPolicyService', () => {
       await ctx.plugin(SessionProjectionRegistry)
       await expect(ctx.plugin(SandboxPolicyService, { workspaceRoot: 'relative/workspace' }))
         .rejects.toThrow('sandbox-policy: workspace root must be an absolute execution-world path')
+      expect(ctx.get('sandboxPolicy')).toBeUndefined()
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('carries configured extra writable roots through resolve and drops duplicates', async () => {
+    const ctx = await mounted({ mode: 'workspace-write', workspaceRoot: '/fallback', extraWritableRoots: ['/opt/rec', '/opt/rec', '/tmp'] })
+    expect(ctx.sandboxPolicy.extraWritableRoots).toEqual(['/opt/rec', '/tmp'])
+    expect(ctx.sandboxPolicy.resolve()).toEqual({
+      mode: 'workspace-write',
+      workspaceRoot: '/fallback',
+      extraWritableRoots: ['/opt/rec', '/tmp'],
+    })
+    // A session cwd replaces the fallback root; extra roots travel unchanged.
+    expect(ctx.sandboxPolicy.resolve({ session: session('sess-extra', '/projects/first') })).toEqual({
+      mode: 'workspace-write',
+      workspaceRoot: '/projects/first',
+      extraWritableRoots: ['/opt/rec', '/tmp'],
+      sessionId: 'sess-extra',
+    })
+  })
+
+  it('omits the extra roots field entirely when none are configured', async () => {
+    const ctx = await mounted({ mode: 'workspace-write', workspaceRoot: '/fallback' })
+    expect(ctx.sandboxPolicy.extraWritableRoots).toEqual([])
+    expect(ctx.sandboxPolicy.resolve()).toEqual({ mode: 'workspace-write', workspaceRoot: '/fallback' })
+    expect(ctx.sandboxPolicy.resolve()).not.toHaveProperty('extraWritableRoots')
+  })
+
+  it('an explicitly empty extra-roots list grants nothing and keeps the historical policy shape', async () => {
+    const ctx = await mounted({ mode: 'workspace-write', workspaceRoot: '/fallback', extraWritableRoots: [] })
+    expect(ctx.sandboxPolicy.resolve()).not.toHaveProperty('extraWritableRoots')
+  })
+
+  it('rejects a relative extra writable root at load', async () => {
+    const ctx = new Context()
+    try {
+      await ctx.plugin(SessionProjectionRegistry)
+      await expect(ctx.plugin(SandboxPolicyService, { extraWritableRoots: ['relative/extra'] }))
+        .rejects.toThrow('sandbox-policy: extra writable root must be an absolute execution-world path')
       expect(ctx.get('sandboxPolicy')).toBeUndefined()
     } finally {
       await ctx.fiber.dispose()
@@ -161,7 +202,7 @@ describe('SandboxPolicyService', () => {
 })
 
 describe('sandbox:policy request context', () => {
-  async function promptMounted(config: { mode?: 'read-only' | 'workspace-write' | 'danger-full-access'; workspaceRoot?: string } = {}): Promise<Context> {
+  async function promptMounted(config: { mode?: 'read-only' | 'workspace-write' | 'danger-full-access'; workspaceRoot?: string; extraWritableRoots?: string[] } = {}): Promise<Context> {
     const ctx = new Context()
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(SessionProjectionRegistry)
@@ -179,6 +220,17 @@ describe('sandbox:policy request context', () => {
     } as const
 
     expect(await policyContext(ctx, session(`sess-${mode}`, '/projects/../projects/current'))).toBe(expected[mode])
+  })
+
+  it('appends the extra writable roots note only when roots are configured', async () => {
+    const base = `Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files under the session workspace: ${JSON.stringify('/projects/current')}. Some platform temporary areas may also be writable.`
+
+    const plain = await promptMounted({ mode: 'workspace-write', workspaceRoot: '/fallback' })
+    expect(await policyContext(plain, session('sess-plain', '/projects/current'))).toBe(base)
+
+    const withExtra = await promptMounted({ mode: 'workspace-write', workspaceRoot: '/fallback', extraWritableRoots: ['/opt/recording'] })
+    expect(await policyContext(withExtra, session('sess-extra', '/projects/current')))
+      .toBe(`${base} Deployment-approved extra writable roots: "/opt/recording".`)
   })
 
   it('keeps the complete rendered prompt byte-stable across TMPDIR changes', async () => {

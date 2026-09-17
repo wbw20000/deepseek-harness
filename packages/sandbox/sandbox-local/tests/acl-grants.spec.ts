@@ -156,6 +156,71 @@ describe('windows-acl write grants (LocalSandboxProvider)', () => {
     }
   })
 
+  it('workspace-write with configured extra roots fails closed: no grant, no runner argv', async () => {
+    try {
+      const { sandbox, fiber } = await setup()
+      const ws = workspaceRoot()
+      const extra = workspaceRoot()
+      scratch.push(ws, extra)
+      const policy: SandboxPolicy = {
+        mode: 'workspace-write', workspaceRoot: ws, extraWritableRoots: [extra], sessionId: SessionId('extra'),
+      }
+
+      // The rejection precedes grant materialization and the runner argv is
+      // never assembled, so the caller has no wrapped command to spawn.
+      await expect(sandbox.confine(['true'], policy))
+        .rejects.toThrow('sandbox-local: the windows-acl runner does not support extraWritableRoots')
+      expect(mockState.grants).toHaveLength(0)
+
+      // The agentless path hits the same refusal at the same boundary.
+      await expect(sandbox.confine(['true'], {
+        mode: 'workspace-write', workspaceRoot: ws, extraWritableRoots: [extra],
+      }))
+        .rejects.toThrow('sandbox-local: the windows-acl runner does not support extraWritableRoots')
+      expect(mockState.grants).toHaveLength(0)
+
+      // The refusal leaves no partial state: the same provider still confines
+      // an ordinary no-extra policy with its exact historical argv.
+      const confined = await sandbox.confine(['true'], { mode: 'workspace-write', workspaceRoot: ws, sessionId: SessionId('after') })
+      expect(confined.argv).toEqual([
+        'node', 'windows-acl-runner.js',
+        '--workspace', ws,
+        '--temp', flag(confined.argv, '--temp'),
+        '--mode', 'workspace-write',
+        '--write-sid', WORKSPACE_SID,
+        '--temp-write-sid', flag(confined.argv, '--temp-write-sid'),
+        '--', 'true',
+      ])
+
+      await fiber.dispose()
+    } finally {
+      cleanup()
+    }
+  })
+
+  it('read-only keeps the no-extra contract whatever is configured', async () => {
+    try {
+      const { sandbox, fiber } = await setup()
+      const ws = workspaceRoot()
+      const extra = workspaceRoot()
+      scratch.push(ws, extra)
+
+      const readOnly = await sandbox.confine(['true'], {
+        mode: 'read-only', workspaceRoot: ws, extraWritableRoots: [extra], sessionId: SessionId('ro'),
+      })
+      expect(readOnly.argv).toEqual([
+        'node', 'windows-acl-runner.js',
+        '--workspace', ws, '--temp', tmpdir(), '--mode', 'read-only',
+        '--', 'true',
+      ])
+      expect(mockState.grants).toHaveLength(0)
+
+      await fiber.dispose()
+    } finally {
+      cleanup()
+    }
+  })
+
   it('read-only materializes no capability; upgrade creates them and downgrade leaves them reusable', async () => {
     try {
       const { sandbox, fiber } = await setup()

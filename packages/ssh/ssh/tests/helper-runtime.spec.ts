@@ -1,8 +1,10 @@
 /** Real helper dispatch over private in-memory transport, without changing the Harness process cwd. */
-import { symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { LocalSandboxProvider } from '@deepseek-ai/dsh-sandbox-local'
 import { z } from 'zod'
+import { outsideTempWorkspaceParent } from '../../../../scripts/snapshot-workspace-parent.ts'
 import { createHelperHarness as helper } from './fixtures/helper.ts'
 import { targetSchema, writeResultSchema, editResultSchema, infoSchema, entriesSchema } from '../src/schemas.ts'
 
@@ -82,6 +84,31 @@ describe.skipIf(process.platform === 'win32')('SSH helper runtime', () => {
       await test.client.request('fs.streamClose', { id: early }, z.null())
       await expect(test.client.request('fs.next', { id: early }, nextSchema)).rejects.toThrow('Unknown SSH text stream')
     } finally { await test.close() }
+  })
+
+  it('carries extra writable roots across the wire: grants the configured tree, denies its sibling', async () => {
+    // The extra root sits outside the automatic temp grants, so an allowed
+    // write there proves the configured root (not a temp area) carried the
+    // grant, and the sibling denial proves containment still applies.
+    const parent = await mkdtemp(join(outsideTempWorkspaceParent(), '.dsh-ssh-extra-'))
+    const extra = join(parent, 'extra')
+    await mkdir(extra)
+    try {
+      const test = await helper()
+      try {
+        const extraTarget = await test.client.request('fs.resolve', { path: 'extra.txt', cwd: extra }, targetSchema)
+        const bare = { mode: 'workspace-write', workspaceRoot: test.root } as const
+        await expect(test.client.request('fs.write', { target: extraTarget, content: 'granted', policy: bare }, writeResultSchema))
+          .rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+        const withExtra = { mode: 'workspace-write', workspaceRoot: test.root, extraWritableRoots: [extra] } as const
+        const created = await test.client.request('fs.write', { target: extraTarget, content: 'granted', policy: { ...withExtra } }, writeResultSchema)
+        expect(created).toMatchObject({ operation: 'create', after: 'granted' })
+        const adjacentTarget = await test.client.request('fs.resolve', { path: 'adjacent.txt', cwd: parent }, targetSchema)
+        await expect(test.client.request('fs.write', { target: adjacentTarget, content: 'x', policy: { ...withExtra } }, writeResultSchema))
+          .rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+        expect(await test.client.request('fs.readText', { target: extraTarget }, z.string())).toBe('granted')
+      } finally { await test.close() }
+    } finally { await rm(parent, { recursive: true, force: true }) }
   })
 
   it('refuses unconfined sandbox requests and resolves executables in the helper world', async () => {

@@ -29,10 +29,14 @@ let ctx: Context
 let fs: SandboxedFileSystem
 let fiber: Awaited<ReturnType<Context['plugin']>>
 
-async function boot(mode: SandboxMode): Promise<void> {
+async function boot(mode: SandboxMode, extraWritableRoots?: string[]): Promise<void> {
   ctx = new Context()
   await ctx.plugin(SessionProjectionRegistry)
-  await ctx.plugin(SandboxPolicyService, { mode, workspaceRoot: workspace })
+  await ctx.plugin(SandboxPolicyService, {
+    mode,
+    workspaceRoot: workspace,
+    ...(extraWritableRoots === undefined ? {} : { extraWritableRoots }),
+  })
   fiber = await ctx.plugin(SandboxedFileSystem, { cwd: workspace })
   fs = ctx.fs as SandboxedFileSystem
 }
@@ -49,7 +53,9 @@ beforeEach(async ({ onTestFinished }) => {
   await mkdir(outside)
 })
 afterEach(async () => {
-  await fiber?.dispose()
+  // Dispose the context's root fiber: SessionProjectionRegistry and
+  // SandboxPolicyService stay mounted beside the fs provider fiber.
+  await ctx?.fiber.dispose()
 })
 
 /** Resolve a path through the backend and return its target. */
@@ -188,6 +194,47 @@ describe('workspace-write with the filesystem root as the workspace (a root endi
     } finally {
       await rootFiber.dispose()
     }
+  })
+})
+
+describe('workspace-write with configured extra writable roots', () => {
+  let extra: string
+
+  beforeEach(() => {
+    extra = join(base, 'extra')
+    return mkdir(extra)
+  })
+
+  it('a write under an extra root lands (real fs fence, real policy service)', async () => {
+    await boot('workspace-write', [extra])
+    const path = join(extra, 'granted.txt')
+    await fs.writeText(await target(path), 'extra')
+    expect(await readFile(path, 'utf8')).toBe('extra')
+  })
+
+  it('a path adjacent to the extra root stays denied', async () => {
+    await boot('workspace-write', [extra])
+    const path = join(base, 'adjacent.txt')
+    await expect(fs.writeText(await target(path), 'x')).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    expect(existsSync(path)).toBe(false)
+  })
+
+  it('a symlinked spelling of the extra root grants the canonical directory', async () => {
+    // The deployment may configure the root through a symlink; the shared
+    // roots derivation canonicalizes grants, so the write through the real
+    // path lands.
+    await symlink(extra, join(base, 'extra-link'))
+    await boot('workspace-write', [join(base, 'extra-link')])
+    const path = join(extra, 'aliased.txt')
+    await fs.writeText(await target(path), 'aliased')
+    expect(await readFile(path, 'utf8')).toBe('aliased')
+  })
+
+  it('read-only still denies with extra roots configured', async () => {
+    await boot('read-only', [extra])
+    const path = join(extra, 'denied.txt')
+    await expect(fs.writeText(await target(path), 'x')).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    expect(existsSync(path)).toBe(false)
   })
 })
 

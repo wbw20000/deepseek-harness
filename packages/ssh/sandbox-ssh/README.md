@@ -27,7 +27,7 @@ English | [中文](README.zh.md)
 
 Mount this provider with the shared [`SSH connection`](../ssh/README.md), SSH filesystem and SSH subprocess providers. It has no package-specific configuration. Await `confine(argv, policy, signal)` to resolve each policy and command through the running remote helper.
 
-Pass a complete `read-only` or `workspace-write` policy. The workspace is interpreted and canonicalized on the remote host. Consumers bypass `confine()` for `danger-full-access`; the connection does not invent an additional local/remote policy flag.
+Pass a complete `read-only` or `workspace-write` policy. The workspace is interpreted and canonicalized on the remote host. Consumers bypass `confine()` for `danger-full-access`; the connection does not invent an additional local/remote policy flag. `extraWritableRoots` travels on the wire verbatim and is resolved by the remote execution world like every other root, so configured roots must exist where the commands run; a remote backend that cannot honor them (the windows-acl rung) refuses the policy there.
 
 -----
 

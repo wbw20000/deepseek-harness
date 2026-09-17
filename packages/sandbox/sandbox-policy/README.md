@@ -46,6 +46,7 @@ Load the package with a default mode; the fail-safe default is `read-only`, and 
 |---|---|---|
 | `mode` | `read-only` | The deployment default mode a session starts from, validated at load |
 | `workspaceRoot` | `process.cwd()` | Absolute fallback root for agentless calls or sessions without a cwd; relative values fail at load. Normal agent calls use the session's immutable cwd |
+| `extraWritableRoots` | `[]` | Absolute directories `workspace-write` may additionally write under (a fixed second tree such as a recording project); duplicates are dropped, relative values fail at load. Absent from the resolved policy — and from the model-visible note — when empty |
 
 The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-sandbox-policy) is the exhaustive source for every accepted field and its JSDoc.
 
@@ -123,6 +124,12 @@ Current DSH file policy: read-only. Any available operation enforced by the DSH 
 Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files under the session workspace: "<workspace root>". Some platform temporary areas may also be writable.
 ```
 
+##### Workspace-write with configured extra roots
+
+```markdown
+Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files under the session workspace: "<workspace root>". Some platform temporary areas may also be writable. Deployment-approved extra writable roots: "<extra root>".
+```
+
 ##### Danger-full-access
 
 ```markdown
@@ -131,7 +138,7 @@ Current DSH file policy: danger-full-access. The DSH file sandbox does not restr
 
 #### Token effect
 
-One concise durable context message on the first request and each effective policy change; unchanged requests add nothing. `workspace-write` carries only the recorded session workspace path; platform-specific temporary paths are summarized without adding host-dependent bytes.
+One concise durable context message on the first request and each effective policy change; unchanged requests add nothing. `workspace-write` names the recorded session workspace and any configured extra writable roots; platform-specific temporary paths are summarized without adding host-dependent bytes. Without extra roots, the message omits the additional sentence.
 
 #### KV Cache effect
 
@@ -144,7 +151,8 @@ The stable system prompt remains byte-identical across mode changes. A changed f
 
 These limits define the policy surface this package provides. They are current package constraints, not a general sandbox comparison or a task backlog.
 
-- **One primary workspace root per session** — policy resolves `SessionHeader.cwd`; extra writable roots are not part of `SandboxExecutionPolicy`.
+- **One primary workspace root per session** — policy resolves `SessionHeader.cwd`; configured extra writable roots are deployment-wide and identical for every session, never per-session boundaries.
+- **Backend support varies** — the resolved policy carries extra writable roots to every enforcing provider; backends that cannot revoke such a grant (windows-acl) refuse the policy instead of expanding it ([backend contract](../sandbox-local/README.md#known-limitations-and-deferred-work)).
 - **File-effect modes only** — `SandboxMode` governs file effects; network and process policy are outside its vocabulary, so no knob here restricts them.
 - **Temporary areas are deliberately summarized** — enforcing backends grant different platform temporary areas, which are selected after policy resolution and therefore cannot be enumerated truthfully in the current context.
 

@@ -46,6 +46,7 @@ kind: "package-reference"
 |---|---|---|
 | `mode` | `read-only` | 会话起始的部署默认模式，加载时验证 |
 | `workspaceRoot` | `process.cwd()` | 无 agent 调用或没有 cwd 的会话所用的绝对回退根目录；相对值在加载时拒绝。普通 agent 调用使用会话的不可变 cwd |
+| `extraWritableRoots` | `[]` | `workspace-write` 额外可写入的绝对目录（如固定的第二个工作树，例如录制项目目录）；去重，相对值在加载时拒绝。为空时不进入解析后的策略，也不进入模型可见说明 |
 
 生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-sandbox-policy)是每个受支持字段及其 JSDoc 的穷尽式真源。
 
@@ -123,6 +124,12 @@ Current DSH file policy: read-only. Any available operation enforced by the DSH 
 Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files under the session workspace: "<workspace root>". Some platform temporary areas may also be writable.
 ```
 
+##### 配置了额外根目录的工作区可写模式
+
+```markdown
+Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files under the session workspace: "<workspace root>". Some platform temporary areas may also be writable. Deployment-approved extra writable roots: "<extra root>".
+```
+
 ##### 完全访问
 
 ```markdown
@@ -131,7 +138,7 @@ Current DSH file policy: danger-full-access. The DSH file sandbox does not restr
 
 #### Token 影响
 
-首次请求和有效策略每次变化时增加一条简洁的持久上下文消息；未变化的请求不增加内容。`workspace-write` 只携带已记录的会话工作区路径；平台特定的临时路径会以摘要表述，不会加入依赖主机的字节。
+首次请求和有效策略每次变化时增加一条简洁的持久上下文消息；未变化的请求不增加内容。`workspace-write` 列出已记录的会话工作区与配置的额外可写根目录；平台特定的临时路径以摘要表述，不会加入依赖主机的字节。没有额外根目录时，消息不含追加的句子。
 
 #### KV Cache 影响
 
@@ -144,7 +151,8 @@ Current DSH file policy: danger-full-access. The DSH file sandbox does not restr
 
 这些限制界定了本包提供的策略范围。它们是当前的包级约束，并非通用沙箱对比，也不是待办事项清单。
 
-- **每个会话只有一个主要工作区根目录**——策略解析 `SessionHeader.cwd`；额外可写根目录不属于 `SandboxExecutionPolicy`。
+- **每个会话只有一个主要工作区根目录**——策略解析 `SessionHeader.cwd`；配置的额外可写根目录是部署级配置，对所有会话相同，绝不是按会话划分的边界。
+- **各后端支持程度不同**——解析后的策略会把额外可写根目录传给每个强制执行提供方；无法撤销此类授权的后端（windows-acl）会拒绝该策略而不是扩大它（[后端约定](../sandbox-local/README.zh.md#known-limitations-and-deferred-work)）。
 - **仅限文件操作模式**——`SandboxMode` 管控文件操作；网络和进程策略不在其词汇中，因此这里没有限制它们的旋钮。
 - **有意概述临时区域**——强制执行后端会授予不同的平台临时区域，这些区域在策略解析后才会选定，因此无法在当前上下文中如实枚举。
 

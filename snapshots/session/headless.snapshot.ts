@@ -459,6 +459,12 @@ async function seedWorkspace(scenario: HeadlessScenario, cwd: string): Promise<v
 }
 
 const workspaceSetups: Record<string, (cwd: string) => Promise<void>> = {
+  // session-sandbox-extra-roots: the deployment-configured extra writable
+  // root the scenario's sandbox-policy patch names — a directory the harness
+  // must create because Git cannot seed an empty one.
+  async 'sandbox-extra-root'(cwd) {
+    await mkdir(join(cwd, 'extra-root'), { recursive: true })
+  },
   async 'editing-cordis-skill'(cwd) {
     const target = join(cwd, '.dsh', 'skills', 'editing-cordis-compositions', 'SKILL.md')
     await mkdir(dirname(target), { recursive: true })

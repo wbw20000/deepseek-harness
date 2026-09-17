@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-`dsh-fs-sandbox` confines model file writes and edits according to each session's sandbox mode while preserving the local filesystem's read behavior. In `read-only`, it rejects every mutation; in `workspace-write`, it permits targets only inside the session workspace or a platform temporary root; in `danger-full-access`, it does not restrict mutations. Use it instead of `fs-local` with `ctx.sandboxPolicy` when sessions need workspace-confined file changes. Denied operations return `FS_SANDBOX_DENIED`, which filesystem tools present with the active mode and a same-turn escalation hint.
+`dsh-fs-sandbox` confines model file writes and edits according to each session's sandbox mode while preserving the local filesystem's read behavior. In `read-only`, it rejects every mutation; in `workspace-write`, it permits targets only inside the session workspace, a configured extra writable root, or a platform temporary root; in `danger-full-access`, it does not restrict mutations. Use it instead of `fs-local` with `ctx.sandboxPolicy` when sessions need workspace-confined file changes. Denied operations return `FS_SANDBOX_DENIED`, which filesystem tools present with the active mode and a same-turn escalation hint.
 
 ## Table of Contents
 
@@ -43,7 +43,7 @@ The backend's config is unchanged from the local backend's (`cwd` resolution def
 
 ### How the fence behaves
 
-The effective mode comes from the calling session's override or escalation grant, falling back to the deployment default when neither is in force. `read-only` denies every mutation with the structured `FS_SANDBOX_DENIED`. `workspace-write` allows a mutation only when the target canonicalizes under the workspace root or a platform temp area (`/tmp`, `os.tmpdir()`) — the same writable set the Seatbelt profile grants. `danger-full-access` delegates unfenced.
+The effective mode comes from the calling session's override or escalation grant, falling back to the deployment default when neither is in force. `read-only` denies every mutation with the structured `FS_SANDBOX_DENIED`. `workspace-write` allows a mutation only when the target canonicalizes under the workspace root, a configured extra writable root, or a platform temp area (`/tmp`, `os.tmpdir()`) — the same writable set the Seatbelt profile grants. `danger-full-access` delegates unfenced.
 
 ### Observable success and failures
 

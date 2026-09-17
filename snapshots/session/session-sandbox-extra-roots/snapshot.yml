@@ -1,0 +1,17 @@
+version: 1
+scenario: session-sandbox-extra-roots
+profile: headless
+composition: session-sandbox-extra-roots
+recording: authored
+header:
+  class: session-sandbox-extra-roots
+  pin: true
+  systemPromptSource: text-turn
+  toolSchemasSource: text-turn
+replay:
+  override: true
+permission: workspace-write
+workspace:
+  setup: sandbox-extra-root
+  final: true
+  parent: outside-temp

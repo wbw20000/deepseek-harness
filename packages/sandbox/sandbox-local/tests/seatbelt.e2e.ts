@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -93,6 +93,26 @@ describe.skipIf(!seatbeltUsable)('sandbox-local: real Seatbelt confinement throu
     const denied = await runConfined(sandbox, `echo hi > ${outside}/denied.txt`, { mode: 'workspace-write', workspaceRoot: workdir })
     expect(denied.result.status).not.toBe(0)
     expect(existsSync(join(outside, 'denied.txt'))).toBe(false)
+  })
+
+  it('workspace-write lands a write in a configured extra root and still denies its sibling', async () => {
+    // The extra root and its parent live outside the workspace and the temp
+    // areas, so the allowed write proves the configured grant and the sibling
+    // denial proves containment still applies beside it.
+    const workdir = await tempDir(homedir())
+    const parent = await tempDir(homedir())
+    const extra = join(parent, 'extra')
+    await mkdir(extra)
+    const sandbox = await provider()
+    const policy: SandboxPolicy = { mode: 'workspace-write', workspaceRoot: workdir, extraWritableRoots: [extra] }
+
+    const allowed = await runConfined(sandbox, `printf extra-ok > ${extra}/allowed.txt`, policy)
+    expect(allowed.result.status).toBe(0)
+    expect(readFileSync(join(extra, 'allowed.txt'), 'utf8')).toBe('extra-ok')
+
+    const denied = await runConfined(sandbox, `echo hi > ${parent}/adjacent.txt`, policy)
+    expect(denied.result.status).not.toBe(0)
+    expect(existsSync(join(parent, 'adjacent.txt'))).toBe(false)
   })
 
   it('workspace-write grants /tmp and the user temp dir (the documented Seatbelt-profile temp areas)', async () => {

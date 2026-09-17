@@ -1,0 +1,12 @@
+# Extra-roots sandbox snapshot overlay. The generated session cwd lives
+# outside the automatic temp grants, the deployment fallback root points at
+# /tmp, and one configured extra root sits inside the cwd — so the runtime
+# context note is the deployment's only model-visible statement about the
+# configured tree, and the sibling denial pins containment beside it.
+- id: sandbox-policy
+  name: '@deepseek-ai/dsh-sandbox-policy'
+  config:
+    mode: !!js "process.env.DSH_PERMISSION_MODE ?? (process.env.DSH_SNAPSHOT === undefined ? 'workspace-write' : 'danger-full-access')"
+    workspaceRoot: /tmp
+    extraWritableRoots:
+      - !!js "process.cwd() + '/extra-root'"

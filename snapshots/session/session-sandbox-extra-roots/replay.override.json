@@ -1,0 +1,24 @@
+[
+  {
+    "kind": "chunks",
+    "chunks": [
+      { "type": "block-start", "index": 0, "blockType": "tool-call" },
+      { "type": "tool-call-delta", "index": 0, "id": "call_extra_write", "name": "write", "argumentsDelta": "{\"file_path\":\"extra-root/extra-note.txt\",\"content\":\"extra root\"}" },
+      { "type": "block-end", "index": 0, "block": { "type": "tool-call", "id": "call_extra_write", "name": "write", "arguments": "{\"file_path\":\"extra-root/extra-note.txt\",\"content\":\"extra root\"}" } },
+      { "type": "tool-call-delta", "index": 1, "id": "call_adjacent_write", "name": "write", "argumentsDelta": "{\"file_path\":\"../dsh-sandbox-extra-adjacent.txt\",\"content\":\"adjacent\"}" },
+      { "type": "block-end", "index": 1, "block": { "type": "tool-call", "id": "call_adjacent_write", "name": "write", "arguments": "{\"file_path\":\"../dsh-sandbox-extra-adjacent.txt\",\"content\":\"adjacent\"}" } },
+      { "type": "usage", "usage": { "inputTokens": 10, "outputTokens": 5 } },
+      { "type": "finish", "reason": { "kind": "tool-calls" } }
+    ]
+  },
+  {
+    "kind": "chunks",
+    "chunks": [
+      { "type": "block-start", "index": 0, "blockType": "text" },
+      { "type": "text-delta", "index": 0, "text": "DONE" },
+      { "type": "block-end", "index": 0, "block": { "type": "text", "text": "DONE" } },
+      { "type": "usage", "usage": { "inputTokens": 10, "outputTokens": 2 } },
+      { "type": "finish", "reason": { "kind": "stop" } }
+    ]
+  }
+]

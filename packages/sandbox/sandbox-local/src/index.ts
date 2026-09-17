@@ -7,7 +7,7 @@
  *
  * The windows-acl rung additionally owns the write grants: the write SID is
  * the per-WORKSPACE identity derived from the canonical workspace path
- * (`workspaceWriteSid`), while every live session receives a RANDOM private
+ * (`workspaceWriteSid`), and every live session receives a RANDOM private
  * temp directory and its own derived capability (`tempWriteSid`). The
  * workspace-root ACE materializes once per workspace per server lifetime
  * and STANDS (the cross-session reuse cache — the exact-ACE skip makes
@@ -245,7 +245,9 @@ const RUNNER_FAILURE_RULES = {
  * ({@link AclWriteGrant}: the standing workspace-root grant per workspace
  * and the revocable private-temp grant per live session/workspace pair, the
  * latter revoked on provider dispose); the one-time probes spawn nothing
- * else.
+ * else. Configured extra writable roots are refused on this rung: they would
+ * have to share the workspace's deterministic standing SID, whose ACE never
+ * leaves the directory when the deployment later drops the root.
  */
 export class LocalSandboxProvider extends SandboxProvider {
   // Inline schema call: the config catalog walks `static Config` statically.
@@ -316,7 +318,14 @@ export class LocalSandboxProvider extends SandboxProvider {
    */
   async confine(argv: readonly string[], policy: SandboxPolicy, signal?: AbortSignal): Promise<ConfinedArgv> {
     signal?.throwIfAborted()
-    policy = { ...policy, workspaceRoot: canonicalPath(policy.workspaceRoot) }
+    // Canonicalize every granted root: the profiles and the ACL rung match or
+    // key on these paths, so `symlink/..` spellings must name the directory the
+    // paired subprocess provider actually runs in.
+    policy = {
+      ...policy,
+      workspaceRoot: canonicalPath(policy.workspaceRoot),
+      ...(policy.extraWritableRoots === undefined ? {} : { extraWritableRoots: policy.extraWritableRoots.map(canonicalPath) }),
+    }
     if (this.runnerCommand !== undefined) {
       return Promise.resolve<ConfinedArgv>({
         argv: [...this.runnerCommand, ...bwrapProfileArgs(policy), '--', ...argv],
@@ -355,11 +364,24 @@ export class LocalSandboxProvider extends SandboxProvider {
    * `--temp-write-sid` and grants nothing itself. Agentless workspace-write
    * calls pass the ambient temp ROOT and no SID flags: the runner creates and
    * removes a random private child directory for that one invocation.
+   *
+   * Configured extra writable roots fail closed on this rung before any
+   * grant or child spawn: expressing them needs the workspace's deterministic
+   * standing SID, and such an ACE stays on the directory after the deployment
+   * drops the root from its configuration — a standing grant no config change
+   * can revoke.
    * @param policy - the resolved per-call policy.
    * @returns the runner invocation.
    */
   private windowsAclRunnerArgv(policy: SandboxPolicy): string[] {
     const sessionId = policy.sessionId
+    if (policy.mode === 'workspace-write' && (policy.extraWritableRoots ?? []).length > 0) {
+      throw new Error(
+        'sandbox-local: the windows-acl runner does not support extraWritableRoots; '
+        + 'remove extraWritableRoots from the sandbox-policy config, or run the deployment '
+        + 'on a platform whose runner carries them (bwrap, landlock, seatbelt)',
+      )
+    }
     if (sessionId === undefined || policy.mode === 'read-only') {
       return [
         ...this.windowsAclRunnerInvocation(),

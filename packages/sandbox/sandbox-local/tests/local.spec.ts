@@ -8,7 +8,7 @@
  */
 
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -114,6 +114,53 @@ describe('profile dialects', () => {
     const grant = `(subpath "${realpathSync(tmpdir())}")`
     expect(profile).toContain(grant)
     expect(profile.split(grant)).toHaveLength(2)
+  })
+
+  it('bwrap workspace-write binds each configured extra root read-write and read-only mounts none', () => {
+    expect(bwrapProfileArgs({ ...WW, extraWritableRoots: ['/opt/rec', '/srv/data'] })).toEqual([
+      '--ro-bind', '/', '/', '--dev', '/dev', '--unshare-pid', '--proc', '/proc', '--die-with-parent',
+      '--tmpfs', '/tmp', '--bind', '/ws', '/ws', '--bind', '/opt/rec', '/opt/rec', '--bind', '/srv/data', '/srv/data',
+    ])
+  })
+
+  it('landlock workspace-write grants each configured extra root read-write', () => {
+    expect(landlockProfileArgs({ ...WW, extraWritableRoots: ['/opt/rec', '/srv/data'] }))
+      .toEqual(['--ro', '/', '--rw', '/dev/null', '--rw', '/tmp', '--rw', '/ws', '--rw', '/opt/rec', '--rw', '/srv/data'])
+  })
+
+  it('seatbelt workspace-write grants each configured extra root as one canonicalized subpath', () => {
+    // The roots flow through the shared writableRoots derivation, so an
+    // existing extra root is granted canonicalized (Seatbelt matches resolved
+    // paths) exactly like the workspace root and the temp areas.
+    const extra = mkdtempSync(join(tmpdir(), 'dsh-extra-seatbelt-'))
+    tempDirs.push(extra)
+    const canonicalExtra = realpathSync(extra)
+    const roots = [...new Set(['/ws', canonicalExtra, realpathSync('/tmp'), realpathSync(tmpdir())])]
+    const allow = `(allow file-write* ${roots.map(root => `(subpath "${root}")`).join(' ')})`
+    expect(seatbeltProfileArgs({ mode: 'workspace-write', workspaceRoot: '/ws', extraWritableRoots: [extra] }))
+      .toEqual(['-p', `${SEATBELT_RO_PROFILE} ${allow}`])
+  })
+
+  it('read-only profiles ignore configured extra roots entirely', () => {
+    expect(bwrapProfileArgs({ ...RO, extraWritableRoots: ['/opt/rec'] })).toEqual(bwrapProfileArgs(RO))
+    expect(landlockProfileArgs({ ...RO, extraWritableRoots: ['/opt/rec'] })).toEqual(landlockProfileArgs(RO))
+    expect(seatbeltProfileArgs({ ...RO, extraWritableRoots: ['/opt/rec'] })).toEqual(seatbeltProfileArgs(RO))
+  })
+
+  it('confine canonicalizes extra-root spellings before profile assembly', async () => {
+    // The link is a previously nonexistent child of a private parent, so the
+    // symlink never collides with a real directory; cleanup is registered
+    // before the assertions run.
+    const parent = mkdtempSync(join(tmpdir(), 'dsh-extra-link-'))
+    const target = mkdtempSync(join(tmpdir(), 'dsh-extra-target-'))
+    tempDirs.push(parent, target)
+    const link = join(parent, 'extra')
+    symlinkSync(target, link)
+    const { sandbox } = await setup({}, { chain: ['seatbelt'], probeSeatbelt: () => true, seatbeltExec: fakeSeatbeltExec(0) })
+    const confined = await sandbox.confine(['true'], { ...WW, extraWritableRoots: [link] })
+    // The profile grant names the canonical directory, not the symlink spelling.
+    expect(confined.argv.join(' ')).toContain(`(subpath "${realpathSync(target)}")`)
+    expect(confined.argv.join(' ')).not.toContain(link)
   })
 })
 

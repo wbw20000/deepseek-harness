@@ -27,7 +27,7 @@ kind: "package-reference"
 
 将本提供方与共享 [SSH 连接](../ssh/README.zh.md)、SSH 文件系统及 SSH 子进程提供方一同挂载。本包没有专用配置。等待 `confine(argv, policy, signal)`，由正在运行的远端辅助程序解析每次调用的策略与命令。
 
-传入完整的 `read-only` 或 `workspace-write` 策略。工作区路径在远端主机解释并规范化。消费方在 `danger-full-access` 模式下绕过 `confine()`；连接不额外引入本地／远端策略标记。
+传入完整的 `read-only` 或 `workspace-write` 策略。工作区路径在远端主机解释并规范化。消费方在 `danger-full-access` 模式下绕过 `confine()`；连接不额外引入本地／远端策略标记。`extraWritableRoots` 在 wire 上原样传输，与其他根目录一样由远端执行世界解析，因此配置的根目录必须存在于命令实际运行的位置；无法满足它们的后端（windows-acl 档）会在远端拒绝该策略。
 
 -----
 

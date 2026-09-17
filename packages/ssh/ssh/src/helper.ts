@@ -11,6 +11,7 @@ import { LocalSubprocessRuntime } from '@deepseek-ai/dsh-subprocess-local'
 import { LocalSandboxProvider } from '@deepseek-ai/dsh-sandbox-local'
 import { SandboxPolicyService } from '@deepseek-ai/dsh-sandbox-policy'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
+import { SessionId } from '@deepseek-ai/dsh-session'
 import type { SandboxExecutionPolicy, SandboxPolicy } from '@deepseek-ai/dsh-sandbox'
 import { z } from 'zod'
 import { SshRpcPeer, RemoteOperationError, SSH_MAX_PROCESS_HANDLES, SSH_MAX_TEXT_STREAMS, SSH_PROTOCOL_VERSION } from './protocol.ts'
@@ -86,7 +87,12 @@ export async function runSshHelper(transport: HelperTransport): Promise<void> {
   const policy = async (raw: unknown, signal: AbortSignal): Promise<SandboxExecutionPolicy> => {
     const parsed = policySchema.parse(raw)
     const target = await ctx.fs.resolve(parsed.workspaceRoot, { signal })
-    return { ...parsed, workspaceRoot: ctx.fs.processPath(target) } as SandboxExecutionPolicy
+    return {
+      mode: parsed.mode,
+      workspaceRoot: ctx.fs.processPath(target),
+      ...(parsed.extraWritableRoots === undefined ? {} : { extraWritableRoots: parsed.extraWritableRoots }),
+      ...(parsed.sessionId === undefined ? {} : { sessionId: SessionId(parsed.sessionId) }),
+    }
   }
   const asTarget = (raw: unknown): FsTarget => targetSchema.parse(raw) as FsTarget
   const peer = new SshRpcPeer(transport.input, transport.output, MAX_FRAME_BYTES, 128, async (method, raw, requestSignal) => {

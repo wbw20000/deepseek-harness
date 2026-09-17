@@ -1970,12 +1970,21 @@ export interface Config {
    * `process.cwd()`). Normal agent calls use their session cwd instead.
    */
   workspaceRoot?: string
+  /**
+   * Absolute extra directories `workspace-write` may write under BESIDES the
+   * session workspace and the platform temp areas — for deployments whose
+   * agent legitimately works across a fixed second tree (e.g. a recording
+   * project directory) without widening the mode beyond `workspace-write`.
+   * Spelling is preserved (enforcement resolves identity); duplicates are
+   * dropped. Absent/empty grants nothing extra.
+   */
+  extraWritableRoots?: string[]
 }
 ```
 
 Depends on: [`SandboxMode`](subsystems/sandbox.md)
 
-Source: [`packages/sandbox/sandbox-policy/src/index.ts:71`](../packages/sandbox/sandbox-policy/src/index.ts)
+Source: [`packages/sandbox/sandbox-policy/src/index.ts:78`](../packages/sandbox/sandbox-policy/src/index.ts)
 
 <a id="deepseek-aidsh-sdk-app"></a>
 
