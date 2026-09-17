@@ -90,6 +90,10 @@ enum Fixtures {
             behavior = "echo fixture-not-ready >&2\nexit 7\n"
         case "env-dump":
             behavior = "printf 'HOME=%s\\nDSH_HOME=%s\\n' \"$HOME\" \"$DSH_HOME\" > \"$1.env\"\ncat \"$1.url\"\nexec sleep 120\n"
+        case "frozen-env-dump":
+            behavior = "printf 'HOME=%s\\nDSH_HOME=%s\\nNODE_OPTIONS=%s\\nDYLD_FALLBACK=%s\\nDEEPSEEK_API_KEY=%s\\nPWD=%s\\n' " +
+                "\"$HOME\" \"$DSH_HOME\" \"$NODE_OPTIONS\" \"$DYLD_FALLBACK_LIBRARY_PATH\" \"$DEEPSEEK_API_KEY\" \"$(pwd -P)\" > \"$1.env\"\n" +
+                "cat \"$1.url\"\nexec sleep 120\n"
         default:
             fatalError("unknown fixture mode \(mode)")
         }

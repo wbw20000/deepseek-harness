@@ -169,6 +169,13 @@ mkdir -p "$fixture_root/nobin/apps/cli"
 print -r -- '{ "name": "fixture" }' > "$fixture_root/nobin/apps/cli/package.json"
 expect_rejection "manifest without bin.dsh is refused" --project-dir "$fixture_root/nobin" --node "$node_executable" --output "$reject_destination"
 
+begin "rejects a CLI manifest entry outside the source checkout"
+reject_destination="$fixture_root/escaping/App.app"
+mkdir -p "$fixture_root/escaping/apps/cli"
+print -r -- 'throw new Error("outside entry must not run")' > "$fixture_root/outside.js"
+print -r -- '{ "bin": { "dsh": "../../../outside.js" } }' > "$fixture_root/escaping/apps/cli/package.json"
+expect_rejection "escaping bin.dsh is refused" --project-dir "$fixture_root/escaping" --node "$node_executable" --output "$reject_destination"
+
 # --- build failure ------------------------------------------------------------
 
 begin "a failed SwiftPM build leaves no destination and no staging residue"

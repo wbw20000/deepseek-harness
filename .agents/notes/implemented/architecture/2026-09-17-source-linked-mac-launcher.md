@@ -32,7 +32,7 @@ The launcher owns only the child it spawned: SIGTERM first, SIGKILL after a boun
 
 ## Existing decisions and supersession
 
-[One dsh launcher for application profiles](2026-08-22-single-dsh-application-launcher.md) owns which entries may launch Node applications; this candidate launches `dsh web`, inside that inventory, and the note keeps its authority. No active note is superseded by this decision.
+[One dsh launcher for application profiles](2026-08-22-single-dsh-application-launcher.md) owns which entries may launch Node applications; this candidate launches `dsh web`, inside that inventory, and the note keeps its authority. No active note is superseded by this decision. [Frozen candidate runtime](2026-09-17-frozen-mac-launcher.md) owns the separate opt-in materialized mode; this note remains authoritative for source-linked mode and shared publication and lifecycle behavior.
 
 ## Alternatives considered
 

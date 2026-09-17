@@ -12,10 +12,25 @@ import Foundation
 @MainActor
 public final class BackendController {
 
+    /// Which runtime a controller launches. `sourceLinked` runs a configured
+    /// checkout's built CLI; `frozen` runs the bundle's materialized runtime
+    /// copy after its integrity has been validated.
+    public enum LaunchMode {
+        case sourceLinked(LauncherConfig)
+        case frozen(FrozenLauncherConfig.Resolved)
+    }
+
+    /// Integrity validation for a frozen launch; injectable for tests.
+    public typealias IntegrityValidator =
+        @Sendable (URL) async -> Result<Void, RuntimeIntegrityValidator.IntegrityError>
+
     /// Lifecycle phase; the UI maps these to status text.
     public enum Phase: Equatable {
         case idle
         case starting
+        /// Frozen builds only: the materialized runtime is being validated
+        /// before the bundled Node may start.
+        case validating
         case running
         case stopping
         case failed(String)
@@ -89,11 +104,13 @@ public final class BackendController {
     }
 
     private var state: State = .idle
-    private let config: LauncherConfig
+    private let mode: LaunchMode
+    private let integrityValidator: IntegrityValidator
     private let diagnosticLog: DiagnosticLog?
     private let probe: AuthenticatedProbe?
     private let workingDirectory: URL
     private let dshHomeOverride: URL?
+    private let environmentSource: [String: String]?
     private let terminationGrace: TimeInterval
     private let startupTimeout: TimeInterval
     private let onPhaseChange: (Phase) -> Void
@@ -108,24 +125,57 @@ public final class BackendController {
     private var probeGeneration = 0
     private var pollTask: Task<Void, Never>?
     private var startupDeadlineTask: Task<Void, Never>?
+    private var validationTask: Task<Void, Never>?
+    private var launchGeneration = 0
     private var stopCompletions: [() -> Void] = []
     private var stopStartedAt: Date?
     private var didSendKill = false
 
     /// - Parameters:
-    ///   - config: launcher configuration; validated again at start.
+    ///   - mode: which runtime to launch; see `LaunchMode`.
     ///   - diagnosticLog: redacted, capped diagnostics; `nil` keeps diagnostics in memory only.
     ///   - probe: HTTP confirmation of the announced server; `nil` skips it (tests).
-    ///   - workingDirectory: child working directory. The current user's real home;
-    ///     never the harness data home.
+    ///   - workingDirectory: child working directory for source-linked launches.
+    ///     Frozen launches use their recorded trial home to avoid loading a
+    ///     `.env` from the user's home or a source checkout.
     ///   - dshHomeOverride: explicit `DSH_HOME` for the child's harness data
-    ///     (default `~/.dsh`). Test isolation only: supplied by the caller,
-    ///     used as-is, and never seeded with the user's existing data.
-    ///     `nil` passes the environment through untouched.
+    ///     (default `~/.dsh`). Source-linked builds only; test isolation only:
+    ///     supplied by the caller, used as-is, and never seeded with the
+    ///     user's existing data. `nil` passes the environment through
+    ///     untouched. A frozen build always uses the home recorded in its
+    ///     configuration instead.
+    ///   - integrityValidator: frozen-launch integrity check; injectable for tests.
+    ///   - environmentSource: the environment a frozen child is scrubbed from;
+    ///     `nil` means this process's current environment. Injectable for tests.
     ///   - terminationGrace: teardown grace before SIGKILL; injectable for tests.
     ///   - startupTimeout: diagnostic bound on unconfirmed startup; injectable for tests.
     ///   - onPhaseChange: called on the main actor after every phase change.
     public init(
+        mode: LaunchMode,
+        diagnosticLog: DiagnosticLog?,
+        probe: AuthenticatedProbe?,
+        workingDirectory: URL,
+        dshHomeOverride: URL? = nil,
+        integrityValidator: @escaping IntegrityValidator = { await RuntimeIntegrityValidator.validate(resourcesDirectory: $0) },
+        environmentSource: [String: String]? = nil,
+        terminationGrace: TimeInterval = BackendController.defaultTerminationGrace,
+        startupTimeout: TimeInterval = BackendController.defaultStartupTimeout,
+        onPhaseChange: @escaping (Phase) -> Void
+    ) {
+        self.mode = mode
+        self.integrityValidator = integrityValidator
+        self.diagnosticLog = diagnosticLog
+        self.probe = probe
+        self.workingDirectory = workingDirectory
+        self.dshHomeOverride = dshHomeOverride
+        self.environmentSource = environmentSource
+        self.terminationGrace = terminationGrace
+        self.startupTimeout = startupTimeout
+        self.onPhaseChange = onPhaseChange
+    }
+
+    /// Source-linked controller: runs the configured checkout's built CLI.
+    public convenience init(
         config: LauncherConfig,
         diagnosticLog: DiagnosticLog?,
         probe: AuthenticatedProbe?,
@@ -135,14 +185,41 @@ public final class BackendController {
         startupTimeout: TimeInterval = BackendController.defaultStartupTimeout,
         onPhaseChange: @escaping (Phase) -> Void
     ) {
-        self.config = config
-        self.diagnosticLog = diagnosticLog
-        self.probe = probe
-        self.workingDirectory = workingDirectory
-        self.dshHomeOverride = dshHomeOverride
-        self.terminationGrace = terminationGrace
-        self.startupTimeout = startupTimeout
-        self.onPhaseChange = onPhaseChange
+        self.init(
+            mode: .sourceLinked(config),
+            diagnosticLog: diagnosticLog,
+            probe: probe,
+            workingDirectory: workingDirectory,
+            dshHomeOverride: dshHomeOverride,
+            terminationGrace: terminationGrace,
+            startupTimeout: startupTimeout,
+            onPhaseChange: onPhaseChange)
+    }
+
+    /// Frozen controller: runs the bundle's materialized runtime after
+    /// validating its integrity.
+    public convenience init(
+        frozen: FrozenLauncherConfig.Resolved,
+        diagnosticLog: DiagnosticLog?,
+        probe: AuthenticatedProbe?,
+        workingDirectory: URL,
+        integrityValidator: @escaping IntegrityValidator = { await RuntimeIntegrityValidator.validate(resourcesDirectory: $0) },
+        environmentSource: [String: String]? = nil,
+        terminationGrace: TimeInterval = BackendController.defaultTerminationGrace,
+        startupTimeout: TimeInterval = BackendController.defaultStartupTimeout,
+        onPhaseChange: @escaping (Phase) -> Void
+    ) {
+        self.init(
+            mode: .frozen(frozen),
+            diagnosticLog: diagnosticLog,
+            probe: probe,
+            workingDirectory: workingDirectory,
+            dshHomeOverride: nil,
+            integrityValidator: integrityValidator,
+            environmentSource: environmentSource,
+            terminationGrace: terminationGrace,
+            startupTimeout: startupTimeout,
+            onPhaseChange: onPhaseChange)
     }
 
     /// Spawn the backend child. Reports a failure phase when the configuration
@@ -153,30 +230,66 @@ public final class BackendController {
             return
         }
         state = .starting
+        launchGeneration += 1
         droppedLineCount = 0
         recentLines = []
 
-        switch config.validate() {
-        case let .failure(error):
-            reportFailure(describe(error), exitCode: nil)
-            return
-        case .success:
-            break
+        switch mode {
+        case let .sourceLinked(config):
+            switch config.validate() {
+            case let .failure(error):
+                reportFailure(describe(error), exitCode: nil)
+                return
+            case .success:
+                break
+            }
+            // HOME stays the current user's home. DSH_HOME is the harness data
+            // home (upstream default ~/.dsh), not UNIX HOME: it is overridden
+            // only when an explicit test-isolation value was supplied. The
+            // launcher passes --no-open (packages/bundle/web-app startup flag)
+            // so only the launcher opens the browser, from the validated
+            // in-memory URL.
+            var environment = ProcessInfo.processInfo.environment
+            if let dshHomeOverride {
+                environment["DSH_HOME"] = dshHomeOverride.path
+            }
+            spawn(
+                executablePath: config.nodeExecutable,
+                arguments: [config.dshEntry, "web", "--no-open"],
+                environment: environment)
+        case let .frozen(launch):
+            switch launch.config.validate(resolved: launch) {
+            case let .failure(error):
+                reportFailure(LauncherCopy.frozenConfigInvalid(describeFrozenConfig(error)), exitCode: nil)
+                return
+            case .success:
+                break
+            }
+            // The bundled Node must never start before its payload validated.
+            // The integrity scan runs off the main actor; only the settle hop
+            // touches lifecycle state, and a stale result is discarded.
+            setPhase(.validating)
+            let generation = launchGeneration
+            let validator = integrityValidator
+            let resources = launch.resourcesDirectory
+            validationTask = Task { [weak self] in
+                let result = await validator(resources)
+                self?.validationSettled(result, generation: generation)
+            }
         }
+    }
 
+    /// Create and own the backend child process. Runs only after the mode's
+    /// configuration (and, for frozen builds, the integrity validation) passed.
+    private func spawn(executablePath: String, arguments: [String], environment: [String: String]) {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: config.nodeExecutable)
-        process.currentDirectoryURL = workingDirectory
-        process.arguments = [config.dshEntry, "web", "--no-open"]
-        // HOME stays the current user's home. DSH_HOME is the harness data home
-        // (upstream default ~/.dsh), not UNIX HOME: it is overridden only when
-        // an explicit test-isolation value was supplied. The launcher passes
-        // --no-open (packages/bundle/web-app startup flag) so only the launcher
-        // opens the browser, from the validated in-memory URL.
-        var environment = ProcessInfo.processInfo.environment
-        if let dshHomeOverride {
-            environment["DSH_HOME"] = dshHomeOverride.path
+        process.executableURL = URL(fileURLWithPath: executablePath)
+        if case let .frozen(launch) = mode {
+            process.currentDirectoryURL = launch.dshHomeURL
+        } else {
+            process.currentDirectoryURL = workingDirectory
         }
+        process.arguments = arguments
         process.environment = environment
         let outPipe = Pipe()
         let errPipe = Pipe()
@@ -215,6 +328,51 @@ public final class BackendController {
         armStartupDeadline()
         log("backend child started: pid \(process.processIdentifier)")
         setPhase(.starting)
+    }
+
+    /// Settle one integrity validation. A result is applied only when it is
+    /// still the current launch: a stop, restart, or teardown that happened
+    /// while the scan ran discards it.
+    private func validationSettled(
+        _ result: Result<Void, RuntimeIntegrityValidator.IntegrityError>,
+        generation: Int
+    ) {
+        validationTask = nil
+        guard generation == launchGeneration, case .starting = state, child == nil else {
+            log("discarding a stale integrity result (generation \(generation))")
+            return
+        }
+        switch result {
+        case let .failure(error):
+            reportFailure(LauncherCopy.integrityFailed(describe(error)), exitCode: nil)
+        case .success:
+            guard case let .frozen(launch) = mode else { return }
+            if case let .failure(error) = launch.config.validate(resolved: launch) {
+                reportFailure(LauncherCopy.frozenConfigInvalid(describeFrozenConfig(error)), exitCode: nil)
+                return
+            }
+            log("runtime integrity validated; starting the bundled backend")
+            spawn(
+                executablePath: launch.nodeURL.path,
+                arguments: Self.frozenLaunchArguments(
+                    dshEntryPath: launch.dshEntryURL.path,
+                    patchPath: launch.patchURL.path),
+                environment: FrozenEnvironment.childEnvironment(
+                    dshHome: launch.config.dshHome,
+                    source: environmentSource ?? ProcessInfo.processInfo.environment))
+        }
+    }
+
+    /// Arguments for a frozen launch: the normal `dsh web --no-open` startup
+    /// plus the bundled immutable overlay, passed through the ordinary dsh
+    /// launch arguments (never by editing the user's configuration).
+    static func frozenLaunchArguments(dshEntryPath: String, patchPath: String) -> [String] {
+        [dshEntryPath, "web", "--patch", patchPath, "--no-open"]
+    }
+
+    private func cancelValidation() {
+        validationTask?.cancel()
+        validationTask = nil
     }
 
     /// Whether the launcher still owes teardown of its owned child (the child
@@ -397,6 +555,7 @@ public final class BackendController {
         probeGeneration += 1
         startupDeadlineTask?.cancel()
         startupDeadlineTask = nil
+        cancelValidation()
         state = .stopping(pendingFailure: pendingFailure)
         setPhase(.stopping)
         stopStartedAt = Date()
@@ -404,8 +563,13 @@ public final class BackendController {
         if let child, child.isRunning {
             log("sending SIGTERM to own child pid \(child.processIdentifier)")
             child.terminate()
+            startPolling()
+        } else {
+            // Nothing owned is running (a frozen validation was still in
+            // flight); the cancelled scan owns no process, so teardown is
+            // already complete.
+            finishTeardown(pendingFailure: pendingFailure)
         }
-        startPolling()
     }
 
     private func startPolling() {
@@ -445,6 +609,7 @@ public final class BackendController {
         pollTask = nil
         startupDeadlineTask?.cancel()
         startupDeadlineTask = nil
+        cancelValidation()
         child = nil
         authenticatedURL = nil
         closeStreams()
@@ -470,6 +635,7 @@ public final class BackendController {
         probeGeneration += 1
         startupDeadlineTask?.cancel()
         startupDeadlineTask = nil
+        cancelValidation()
         child = nil
         authenticatedURL = nil
         closeStreams()
@@ -484,6 +650,7 @@ public final class BackendController {
             diagnostic += " 日志：\(diagnosticLog?.url.path ?? "（未启用磁盘日志）")"
         }
         state = .failed(diagnostic)
+        log("launch failed: \(diagnostic)")
         setPhase(.failed(diagnostic))
     }
 
@@ -519,6 +686,32 @@ public final class BackendController {
         case let .notAbsolute(path): return LauncherCopy.configNotAbsolute(Redaction.redact(path))
         case let .nodeNotExecutable(path): return LauncherCopy.configNodeNotExecutable(path)
         case let .entryNotReadable(path): return LauncherCopy.configEntryNotReadable(path)
+        }
+    }
+
+    private func describeFrozenConfig(_ error: FrozenLauncherConfig.ConfigError) -> String {
+        switch error {
+        case .missingResource: return LauncherCopy.frozenConfigMissing
+        case .malformed: return LauncherCopy.frozenConfigMalformed
+        case let .invalid(detail): return Redaction.redact(detail)
+        case let .pathEscapes(path): return LauncherCopy.frozenConfigPathEscapes(Redaction.redact(path))
+        }
+    }
+
+    private func describe(_ error: RuntimeIntegrityValidator.IntegrityError) -> String {
+        switch error {
+        case .inventoryMissing: return LauncherCopy.integrityInventoryMissing
+        case let .inventoryMalformed(detail): return LauncherCopy.integrityInventoryMalformed(Redaction.redact(detail))
+        case let .symlink(path): return LauncherCopy.integritySymlink(Redaction.redact(path))
+        case let .specialFile(path): return LauncherCopy.integritySpecialFile(Redaction.redact(path))
+        case let .hardlinked(path, nlink): return LauncherCopy.integrityHardlinked(Redaction.redact(path), Int(nlink))
+        case let .missingFile(path): return LauncherCopy.integrityMissingFile(Redaction.redact(path))
+        case let .extraFile(path): return LauncherCopy.integrityExtraFile(Redaction.redact(path))
+        case let .hashMismatch(path): return LauncherCopy.integrityHashMismatch(Redaction.redact(path))
+        case let .sizeMismatch(path): return LauncherCopy.integritySizeMismatch(Redaction.redact(path))
+        case let .modeMismatch(path): return LauncherCopy.integrityModeMismatch(Redaction.redact(path))
+        case let .unreadable(path): return LauncherCopy.integrityUnreadable(Redaction.redact(path))
+        case .cancelled: return LauncherCopy.integrityCancelled
         }
     }
 

@@ -65,33 +65,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             diagnosticLog = nil
         }
 
-        let config: LauncherConfig
-        switch LauncherConfig.load(from: Bundle.main.resourceURL ?? Bundle.main.bundleURL) {
-        case let .success(loaded): config = loaded
-        case let .failure(error):
-            showFailure(error == .missingResource ? LauncherCopy.missingConfig : LauncherCopy.configMalformed)
-            return
+        let resourcesURL = Bundle.main.resourceURL ?? Bundle.main.bundleURL
+        // Identity selects frozen mode even when its configuration is missing
+        // or unreadable; a damaged frozen bundle never falls back to source.
+        let frozenConfigPresent = Bundle.main.bundleIdentifier ==
+            "com.local.deepseek-harness-launcher.candidate.frozen"
+        let controller: BackendController
+        if frozenConfigPresent {
+            let launch: FrozenLauncherConfig.Resolved
+            switch FrozenLauncherConfig.load(from: resourcesURL) {
+            case let .success(resolved): launch = resolved
+            case let .failure(error):
+                showFailure(Self.frozenConfigFailureText(error))
+                return
+            }
+            controller = BackendController(
+                frozen: launch,
+                diagnosticLog: diagnosticLog,
+                probe: AuthenticatedProbe(),
+                workingDirectory: launch.dshHomeURL,
+                onPhaseChange: { [weak self] phase in self?.render(phase) })
+        } else {
+            let config: LauncherConfig
+            switch LauncherConfig.load(from: resourcesURL) {
+            case let .success(loaded): config = loaded
+            case let .failure(error):
+                showFailure(error == .missingResource ? LauncherCopy.missingConfig : LauncherCopy.configMalformed)
+                return
+            }
+            // The child keeps the current user's real HOME and inherits this
+            // environment untouched. A test-isolation DSH_HOME (the harness
+            // data home, never UNIX HOME) is supplied directly to
+            // BackendController by its owner; the shell never derives one and
+            // never copies existing harness data into it.
+            controller = BackendController(
+                config: config,
+                diagnosticLog: diagnosticLog,
+                probe: AuthenticatedProbe(),
+                workingDirectory: FileManager.default.homeDirectoryForCurrentUser,
+                onPhaseChange: { [weak self] phase in self?.render(phase) })
         }
 
-        // The child keeps the current user's real HOME and inherits this
-        // environment untouched. A test-isolation DSH_HOME (the harness data
-        // home, never UNIX HOME) is supplied directly to BackendController by
-        // its owner; the shell never derives one and never copies existing
-        // harness data into it.
-        let controller = BackendController(
-            config: config,
-            diagnosticLog: diagnosticLog,
-            probe: AuthenticatedProbe(),
-            workingDirectory: FileManager.default.homeDirectoryForCurrentUser,
-            onPhaseChange: { [weak self] phase in self?.render(phase) })
         self.controller = controller
         controller.start()
+    }
+
+    private static func frozenConfigFailureText(_ error: FrozenLauncherConfig.ConfigError) -> String {
+        switch error {
+        case .missingResource: return LauncherCopy.frozenConfigMissing
+        case .malformed: return LauncherCopy.frozenConfigMalformed
+        case let .invalid(detail): return LauncherCopy.frozenConfigInvalid(Redaction.redact(detail))
+        case let .pathEscapes(path): return LauncherCopy.frozenConfigPathEscapes(Redaction.redact(path))
+        }
     }
 
     private func render(_ phase: BackendController.Phase) {
         switch phase {
         case .starting:
             setStatus(LauncherCopy.statusStarting, color: .secondaryLabelColor)
+            openButton.isEnabled = false
+        case .validating:
+            setStatus(LauncherCopy.statusValidating, color: .secondaryLabelColor)
             openButton.isEnabled = false
         case .running:
             setStatus(LauncherCopy.statusRunning, color: .systemGreen)
@@ -197,7 +231,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         openButton.keyEquivalent = "\r"
         openButton.isEnabled = false
 
-        let note = NSTextField(wrappingLabelWithString: LauncherCopy.footerNote)
+        // The frozen candidate describes its own mode; the source-linked
+        // candidate keeps its note.
+        let frozenCandidate = (try? Data(contentsOf: (Bundle.main.resourceURL ?? Bundle.main.bundleURL)
+            .appendingPathComponent("frozen-launcher-config.json"))) != nil
+        let note = NSTextField(wrappingLabelWithString: frozenCandidate ? LauncherCopy.frozenFooterNote : LauncherCopy.footerNote)
         note.font = .systemFont(ofSize: 12)
         note.textColor = .tertiaryLabelColor
 

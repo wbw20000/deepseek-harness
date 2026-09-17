@@ -1,0 +1,12 @@
+# Bundled, inventory-sealed launch overlay for the frozen macOS candidate.
+# Passed to the backend as a normal `dsh web --patch` argument: the loopback
+# webserver binds an OS-assigned port (0) so the frozen candidate never reads
+# or rewrites the user's own configuration.
+- id: webserver
+  name: '@deepseek-ai/dsh-host-webserver'
+  config:
+    host: 127.0.0.1
+    port: 0
+    compression: gzip
+    compressionLevel: 1
+    compressionThresholdBytes: 1024

@@ -32,7 +32,7 @@ macOS 启动器需要可重复的候选包构建流程，让人与已安装 App 
 
 ## Existing decisions and supersession
 
-[One dsh launcher for application profiles](2026-08-22-single-dsh-application-launcher.zh.md) 拥有哪些入口可以启动 Node 应用；本候选包启动 `dsh web`，在该清单之内，该笔记保持其权威。没有活跃笔记被本决策取代。
+[One dsh launcher for application profiles](2026-08-22-single-dsh-application-launcher.zh.md) 拥有哪些入口可以启动 Node 应用；本候选包启动 `dsh web`，在该清单之内，该笔记保持其权威。没有活跃笔记被本决策取代。[冻结候选运行时](2026-09-17-frozen-mac-launcher.zh.md) 负责独立的、显式启用的副本模式；本文继续负责源码链接模式及共享的发布和生命周期行为。
 
 ## Alternatives considered
 
