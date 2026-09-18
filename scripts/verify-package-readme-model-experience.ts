@@ -210,7 +210,7 @@ const SENTENCE_MODEL_EXPERIENCE: Readonly<Record<string, SentenceContract>> = {
   'packages/web/web-fetch-http': { kind: 'indirect', reason: 'The provider backend delegates model rendering to dsh-tool-web.' },
   'packages/web/web-search-exa': { kind: 'indirect', reason: 'The provider backend delegates model rendering to dsh-tool-web.' },
   'packages/workflow/workflow': { kind: 'indirect', reason: 'The service delegates parent and child model rendering to its consumer and engine.' },
-  'packages/workflow/workflow-self-development-runner': { kind: 'none', reason: 'The package runs development attempts only inside an experiment worktree under human presence; it registers no model-facing tool, prompt, or event, and its evidence never claims unattended isolation.' },
+  'packages/workflow/workflow-self-development-runner': { kind: 'none', reason: 'The opt-in service registers no model-facing tool, prompt, or event; its separate executor helper explicitly launches a headless Agent and does not establish isolation.' },
 }
 
 interface Failure {
