@@ -2,11 +2,13 @@
  * REAL-composition coverage: a test-only cordis.yml booted through the
  * vendored Loader mounts the webserver and frontend-static rows, and every
  * assertion observes the served HTTP surface — asset serving, explicit index
- * entry points with index taps, 404 misses, traversal rejection, 405 on non-
+ * entry points with index taps, `/session/<id>` deep-link fallback through the
+ * authenticated index flow, 404 misses, traversal rejection, 405 on non-
  * GET/HEAD, and seat release on fiber disposal (HMR safety).
  */
 
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { request as httpRequest } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -93,6 +95,49 @@ async function request(port: number, path: string, init?: RequestInit): Promise<
   }
 }
 
+/** Request init carrying the persistent browser cookie. */
+function withCookie(cookie: string, init?: RequestInit): RequestInit {
+  const headers = new Headers(init?.headers)
+  headers.set('cookie', cookie)
+  return { ...init, headers }
+}
+
+/**
+ * Send one request with the target verbatim. fetch and the URL parser collapse
+ * dot segments before the request leaves the client, so `/session/.` and
+ * `/session/..` can only reach the server this way.
+ */
+function rawRequest(port: number, path: string, method: 'GET' | 'HEAD', headers?: Record<string, string>): Promise<{ status: number; type: string | null; body: string }> {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const exchange = httpRequest({ host: '127.0.0.1', port, path, method, headers }, (res) => {
+      const chunks: Buffer[] = []
+      res.on('data', (chunk: Buffer) => {
+        chunks.push(chunk)
+      })
+      res.on('end', () => {
+        resolvePromise({
+          status: res.statusCode ?? 0,
+          type: res.headers['content-type'] ?? null,
+          body: Buffer.concat(chunks).toString('utf8'),
+        })
+      })
+    })
+    exchange.on('error', rejectPromise)
+    exchange.end()
+  })
+}
+
+/** Exchange the launch token for the persistent browser cookie of the running server. */
+async function browserCookie(context: Context, port: number): Promise<string> {
+  const launchUrl = context.connection.authenticatedUrl(`http://127.0.0.1:${String(port)}`)
+  const exchange = await fetch(launchUrl, { redirect: 'manual' })
+  expect(exchange.status).toBe(303)
+  expect(exchange.headers.get('location')).toBe('/')
+  const setCookie = exchange.headers.get('set-cookie')
+  if (setCookie === null) throw new Error('authenticated frontend did not set a cookie')
+  return setCookie.split(';', 1)[0]!
+}
+
 describe('real Loader composition', () => {
   it('serves explicit index entries and files while preserving HTTP error semantics', { timeout: 60_000 }, async () => {
     const loaded = await loadComposition()
@@ -102,18 +147,7 @@ describe('real Loader composition', () => {
     expect(unloaded).toEqual([])
     const server = loaded.webServer
     const port = server.port
-    const launchUrl = loaded.connection.authenticatedUrl(`http://127.0.0.1:${String(port)}`)
-    const exchange = await fetch(launchUrl, { redirect: 'manual' })
-    expect(exchange.status).toBe(303)
-    expect(exchange.headers.get('location')).toBe('/')
-    const setCookie = exchange.headers.get('set-cookie')
-    if (setCookie === null) throw new Error('authenticated frontend did not set a cookie')
-    const cookie = setCookie.split(';', 1)[0]!
-    const authenticated = (init?: RequestInit): RequestInit => {
-      const headers = new Headers(init?.headers)
-      headers.set('cookie', cookie)
-      return { ...init, headers }
-    }
+    const cookie = await browserCookie(loaded, port)
 
     expect(await request(port, '/')).toMatchObject({
       status: 401,
@@ -142,26 +176,26 @@ describe('real Loader composition', () => {
     // Only the root and index path render index.html through registered taps.
     const untap = server.tapIndex(html => html.replace('<head>', '<head><script>window.__T__=1</script>'))
     for (const path of ['/', '/index.html', '/?view=test']) {
-      const got = await request(port, path, authenticated())
+      const got = await request(port, path, withCookie(cookie))
       expect(got.status).toBe(200)
       expect(got.type).toBe('text/html; charset=utf-8')
       expect(got.body).toContain('__T__')
       expect(got.body).toContain('shell')
     }
-    expect(await request(port, '/', authenticated({ method: 'HEAD' }))).toEqual({
+    expect(await request(port, '/', withCookie(cookie, { method: 'HEAD' }))).toEqual({
       status: 200,
       type: 'text/html; charset=utf-8',
       body: '',
     })
     untap()
-    expect((await request(port, '/', authenticated())).body).not.toContain('__T__')
+    expect((await request(port, '/', withCookie(cookie))).body).not.toContain('__T__')
 
     // A missing configured index follows the same empty-404 contract for both
     // of its public entry paths and for both supported methods.
     await rm(join(root!, 'dist', 'index.html'))
     for (const path of ['/', '/index.html']) {
-      const get = await request(port, path, authenticated())
-      const head = await request(port, path, authenticated({ method: 'HEAD' }))
+      const get = await request(port, path, withCookie(cookie))
+      const head = await request(port, path, withCookie(cookie, { method: 'HEAD' }))
       expect(get).toEqual({ status: 404, type: null, body: '' })
       expect(head).toEqual(get)
     }
@@ -183,7 +217,7 @@ describe('real Loader composition', () => {
       expect(get).toEqual({ status: 404, type: null, body: '' })
       expect(head).toEqual(get)
     }
-    expect(await request(port, '/api/no/such/route', authenticated())).toEqual({
+    expect(await request(port, '/api/no/such/route', withCookie(cookie))).toEqual({
       status: 404,
       type: 'text/plain;charset=UTF-8',
       body: 'not found',
@@ -202,5 +236,68 @@ describe('real Loader composition', () => {
     await frontendEntry!.fiber?.dispose()
     expect((await request(port, '/no/such/route')).status).toBe(404)
     expect(() => server.registerFallback(() => {})).not.toThrow()
+  })
+
+  it('serves /session/<id> deep links through the same authenticated index flow', { timeout: 60_000 }, async () => {
+    const loaded = await loadComposition()
+    const server = loaded.webServer
+    const port = server.port
+    const cookie = await browserCookie(loaded, port)
+    const untap = server.tapIndex(html => html.replace('<head>', '<head><script>window.__T__=1</script>'))
+
+    // Unauthenticated deep links receive the Connection-owned response `/`
+    // receives — the same 401 body, never the HTML shell.
+    const unauthenticatedRoot = await request(port, '/')
+    expect(unauthenticatedRoot.status).toBe(401)
+    expect(await request(port, '/session/abc-123')).toEqual(unauthenticatedRoot)
+
+    // A well-formed deep link renders the tapped index with the index MIME
+    // type, at the length bound and with a query string.
+    for (const path of [
+      '/session/abc-123',
+      `/session/${'a'.repeat(128)}`,
+      '/session/abc-123?view=test',
+    ]) {
+      const got = await request(port, path, withCookie(cookie))
+      expect(got.status).toBe(200)
+      expect(got.type).toBe('text/html; charset=utf-8')
+      expect(got.body).toContain('__T__')
+      expect(got.body).toContain('shell')
+    }
+    // HEAD answers like the index HEAD; non-GET/HEAD keeps the 405.
+    expect(await request(port, '/session/abc-123', withCookie(cookie, { method: 'HEAD' }))).toEqual({
+      status: 200,
+      type: 'text/html; charset=utf-8',
+      body: '',
+    })
+    expect(await request(port, '/session/abc-123', { method: 'POST' })).toEqual(
+      await request(port, '/', { method: 'POST' }),
+    )
+
+    // Ids outside the accepted form stay empty 404s for GET and HEAD: ids over
+    // the 128-character bound, ids carrying a further path segment, and ids
+    // with traversal components (percent-encoded so fetch cannot normalize
+    // them away).
+    const illegalIds = [
+      `/session/${'a'.repeat(129)}`,
+      '/session/abc-123/child',
+      '/session/abc-123/',
+      '/session/..%2fetc%2fpasswd',
+    ]
+    for (const path of illegalIds) {
+      const get = await request(port, path, withCookie(cookie))
+      const head = await request(port, path, withCookie(cookie, { method: 'HEAD' }))
+      expect(get).toEqual({ status: 404, type: null, body: '' })
+      expect(head).toEqual(get)
+    }
+    // Dot-only ids are filesystem-relative, not Session ids. They are sent raw
+    // because fetch collapses dot segments client-side.
+    for (const path of ['/session/.', '/session/..', '/session/../etc/passwd']) {
+      const get = await rawRequest(port, path, 'GET', { cookie })
+      const head = await rawRequest(port, path, 'HEAD', { cookie })
+      expect(get).toEqual({ status: 404, type: null, body: '' })
+      expect(head).toEqual(get)
+    }
+    untap()
   })
 })

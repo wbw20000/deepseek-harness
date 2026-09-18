@@ -5,6 +5,8 @@ import { RemoteError, TestRemote } from '@deepseek-ai/dsh-client-test-runtime'
 import { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
 import { apply, inject } from '@deepseek-ai/dsh-client-ui-workspace/client'
 import type { WorkspaceBrowserInjected, WorkspacePickerInjected } from '@deepseek-ai/dsh-client-ui-workspace/client'
+import type { BridgeWindow } from '../src/client/deep-link.ts'
+import { DeepLinkNotice, type DeepLinkNoticeInjected } from '../src/client/DeepLinkNotice.tsx'
 import { WorkspaceBrowser } from '../src/client/rows/WorkspaceBrowser.tsx'
 import { WorkspacePicker } from '../src/client/WorkspacePicker.tsx'
 import { apply as hostApply } from '../src/index.ts'
@@ -93,11 +95,13 @@ async function bench() {
   }
 }
 
-type HoleName = 'sidebar.workspaces' | 'conversation.hero.workspace' | 'conversation.empty.workspace'
+type HoleName = 'sidebar.workspaces' | 'conversation.hero.workspace' | 'conversation.empty.workspace' | 'shell.overlay'
 
 /** Declare any subset of the holes with a single root registration ('root' is a single slot). */
 function declare(slots: SlotRegistry, ...names: HoleName[]): () => void {
-  const children = Object.fromEntries(names.map(name => [name, { kind: 'single', scope: 'root' }]))
+  const children = Object.fromEntries(names.map(name => [
+    name, { kind: name === 'shell.overlay' ? 'list' : 'single', scope: 'root' },
+  ]))
   return slots.register({ name: 'root', children } as never, () => null)
 }
 
@@ -208,6 +212,24 @@ describe('ui-workspace apply', () => {
     const browser = (b.slots.entries('sidebar.workspaces')[0]!.inject as () => WorkspaceBrowserInjected)()
     await expect(browser.searchSessions('needle', new AbortController().signal))
       .rejects.toThrow('index unavailable')
+  })
+
+  it('registers the deep-link notice overlay driven by the bridge refusal path', async () => {
+    const b = await bench()
+    declare(b.slots, 'shell.overlay')
+    await b.ctx.plugin({ inject: [...inject], apply }).await()
+    const entry = b.slots.entries('shell.overlay')[0]!
+    expect(entry.component).toBe(DeepLinkNotice)
+    expect(entry.locale).toBe('workspace')
+    const injected = (entry.inject as unknown as () => DeepLinkNoticeInjected)()
+    expect(injected.hooks.notice.getSnapshot()).toEqual({})
+    // The uncatalogued bridge id refuses, warns, and publishes the notice.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await expect((globalThis as BridgeWindow).__DSH_BRIDGE__!.selectSession('ghost')).resolves.toBe(false)
+    expect(injected.hooks.notice.getSnapshot()).toEqual({ sessionId: 'ghost' })
+    injected.dismissNotice()
+    expect(injected.hooks.notice.getSnapshot()).toEqual({})
+    expect(warn).toHaveBeenCalled()
   })
 
   it('unregisters every entry on teardown', async () => {

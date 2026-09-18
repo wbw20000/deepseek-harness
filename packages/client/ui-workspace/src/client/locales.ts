@@ -70,6 +70,7 @@ export const zh = {
   'time.months': '{n}个月',
   'time.years': '{n}年',
   'time.ago': '{t}前',
+  'deepLink.unavailable': '无法打开深链指向的会话 {id}',
 } satisfies Record<string, string>
 
 /** The workspace namespace key union. */
@@ -141,4 +142,5 @@ export const en = {
   'time.months': '{n}mo',
   'time.years': '{n}y',
   'time.ago': '{t} ago',
+  'deepLink.unavailable': 'Could not open the session from the deep link: {id}',
 } satisfies Record<WorkspaceKey, string>

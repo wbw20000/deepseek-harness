@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-从配置的发布目录向浏览器提供已构建的 Web 壳。根路径与配置的 index 路径渲染包含启动信息的 index；已有资产直接提供，而缺失或非文件路径返回 404、路径遍历返回 403、不支持的方法返回 405。访问 index 需要有效的进程 token 或浏览器 cookie，但静态资产仍可公开访问。同一时间只能有一个实例处理未匹配的路由；第二个实例启动失败，卸载活动实例后，未匹配的请求返回 404。
+从配置的发布目录向浏览器提供已构建的 Web 壳。根路径、配置的 index 路径与 `/session/<id>` 深链渲染包含启动信息的 index；已有资产直接提供，而缺失或非文件路径返回 404、路径遍历返回 403、不支持的方法返回 405。访问 index 需要有效的进程 token 或浏览器 cookie，但静态资产仍可公开访问。同一时间只能有一个实例处理未匹配的路由；第二个实例启动失败，卸载活动实例后，未匹配的请求返回 404。
 
 ## 目录
 
@@ -39,7 +39,9 @@ kind: "package-reference"
 
 ### 服务器实施的约束
 
-请求从 dist 根目录（包含 `distIndex` 的目录）提供。dist 根目录与配置的 index 路径以 HTTP 200 渲染 `index.html`；任何其他已有文件按自身 MIME 类型直接提供，未知扩展名按 `application/octet-stream` 提供。解析到根目录之外的路径以 403 拒绝，因此精心构造的路径无法读取 dist 之上的文件。dist 根目录内不存在或不是文件的目标——文件缺失、目录或配置的 index 缺失——返回空 404。没有匹配具名路由的非 GET／HEAD 请求返回 405。每个成功的 index 响应都经 webserver 的 `renderIndex` 渲染，因此启动 manifest（元数据清单）会通过 `/` 与配置的 index 路径送达页面。
+请求从 dist 根目录（包含 `distIndex` 的目录）提供。dist 根目录、配置的 index 路径与会话深链以 HTTP 200 渲染 `index.html`；任何其他已有文件按自身 MIME 类型直接提供，未知扩展名按 `application/octet-stream` 提供。解析到根目录之外的路径以 403 拒绝，因此精心构造的路径无法读取 dist 之上的文件。dist 根目录内不存在或不是文件的目标——文件缺失、目录或配置的 index 缺失——返回空 404。没有匹配具名路由的非 GET／HEAD 请求返回 405。每个成功的 index 响应都经 webserver 的 `renderIndex` 渲染，因此启动 manifest（元数据清单）会通过 `/` 与配置的 index 路径送达页面。
+
+会话深链是唯一的 SPA 回退：pathname 为 `/session/<id>`（id 为 1–128 个字母、数字、点、`-`、`_` 字符）的 GET／HEAD 请求渲染同样的需认证 index，因此分享链接能启动壳，再由客户端解析该 id。响应经过与 `/` 相同的 `authorizeIndex` 流程；仅由点组成的 id（`/session/.`、`/session/..`）与其他所有未匹配路径仍是空 404。
 
 根路径与配置的 index 响应会在读取 HTML 前调用 `ctx.connection.authorizeIndex`。有效进程 token 会得到 303 重定向与持久浏览器 cookie；已有有效 cookie 时直接提供 index；其他 index 请求得到 Connection 所有的 401 响应。非 index 文件仍是公开静态资源。Token、cookie、过期时间与签名记录语义都归 Connection 所有。
 
@@ -102,7 +104,7 @@ kind: "package-reference"
 这些限制说明某个资产类别何时尚未被覆盖。它们是当前包约束，不是任务积压。
 
 - **初始 MIME 表很精简**：它覆盖 Vite 输出的资产集合及实际交付的 PWA manifest；其他扩展名在相应资产类别发布前都会回退到 `application/octet-stream`。
-- **Pathname 路由是显式声明**——当前客户端从根目录或配置的 index 路径进入，没有 History API pathname 路由。新增一条需要显式服务器规则与真实组合覆盖，而不是对每次未命中做宽泛回退。
+- **Pathname 路由保持显式声明**：唯一的 History API pathname 路由是 `/session/<id>` 深链，由固定的 id 形式匹配并有真实组合覆盖；其他 pathname 路由需要各自的显式服务器规则，而不是对每次未命中做宽泛回退。
 
 <a id="dev-note"></a>
 ### 开发备注

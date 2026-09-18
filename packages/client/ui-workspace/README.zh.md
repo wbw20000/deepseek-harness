@@ -57,6 +57,14 @@ Session 行渲染运行时的实时 `pendingInteraction` 分类：审批显示**
 
 对于 cold Session，该值有意采用尽力而为语义。身份匹配且可用的 projection-cache 行可以在不打开 Session 的情况下预热闹钟；cache 缺失或陈旧可能造成短暂漏显或残留。标识只表示当前列表值包含尚未 dispatch 或 delete 的 Schedule 记录，不表示 Schedule 运行时当前 live 或能够唤醒该 Session。
 
+### 会话深链
+
+深链以文档路径 `/session/<id>` 指向一个会话，其中 `<id>` 为 1–128 个字母、数字、点、下划线或连字符字符。页面在这种路径上启动时，本包等待 Session list 就绪后把该 Session 选为主视图，然后用 `history.replaceState` 把地址改回 `/`，因此 id 不会留在地址栏。这一流程只在已完成认证的文档内运行：不带浏览器 cookie 的 `/session/<id>` 请求会得到与 `/` 相同的认证响应，id 只从已加载的文档路径读取。启动深链只被消费一次；id 无法被采纳时，由常规启动选择（保存的或最近的 Workspace）补位。
+
+就绪的 Session list 中不存在的 id——未知、已被改名或本设备不可见——不会选中任何会话：shell overlay 显示一条本地化的临时横幅，拒绝被记录到控制台，且不抛出任何异常。
+
+原生壳可以不做 URL 导航，改为调用 bridge：`window.__DSH_BRIDGE__.selectSession(id)` 返回 `Promise<boolean>`，且是 bridge 对象暴露的唯一成员。它接受同一 id 形式，并在 Session list 尚未就绪、id 不符合接受形式、或就绪列表中不存在该 id 时以 `false` 应答且无副作用；只有选择成功后才应答 `true`。该全局对象在本插件 client half 初始化时出现，并随其释放而移除；原生壳应等待该全局对象出现，而不是在启动完成前探测。
+
 -----
 
 `ctx.uiWorkspace.openSession(target)` 会同步替换其拥有的 `mainView` reference，并让主区域返回 Conversation，而不等待 `reference.ready`，因此历史加载会显示在已经选中的 Session 视图内。目标可以是已知 Session id，也可以是持久的直接父子 subagent 地址；显式地址不要求预先加载 parent catalog。`openWorkspace(id, beforeOpen?)` 和 `forkSession(id)` 仅在请求未被后续导航替代时打开结果；新会话使用 `openWorkspace`。可选的同步准备回调在目标被 retain 后执行，并且仅对仍有效的 Workspace 请求执行，因此过期请求不会搬移 composer 草稿。后续导航或 owner 释放会阻止晚到的 UI 提交，但不取消底层 Session 创建。归档主 Session 会释放其 reference 并清除主选择。选择失败时保留当前全局面板。Session 行读取 `usePanelInfo`，在全局面板活跃时不显示 Session 选中样式；仅把焦点移到搜索框或目录选择器不会离开该面板。

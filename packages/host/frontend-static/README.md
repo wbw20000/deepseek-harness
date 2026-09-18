@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-Serve the built Web shell to browsers from its configured distribution directory. The root and configured index path render the bootstrapped index; existing assets are served directly, while missing or non-file paths return 404, traversal returns 403, and unsupported methods return 405. Index access requires a valid process token or browser cookie, but static assets remain public. Only one instance can handle unmatched routes at a time; a second activation fails, and unloading the active instance makes unmatched requests return 404.
+Serve the built Web shell to browsers from its configured distribution directory. The root, the configured index path, and `/session/<id>` deep links render the bootstrapped index; existing assets are served directly, while missing or non-file paths return 404, traversal returns 403, and unsupported methods return 405. Index access requires a valid process token or browser cookie, but static assets remain public. Only one instance can handle unmatched routes at a time; a second activation fails, and unloading the active instance makes unmatched requests return 404.
 
 ## Table of Contents
 
@@ -39,7 +39,9 @@ Compose this plugin in a browser-facing host that serves the built Web shell: it
 
 ### What the server enforces
 
-Requests are served from the dist root (the directory containing `distIndex`). The dist root and the configured index path render `index.html` with HTTP 200; any other existing file is served directly with its MIME type, and unknown extensions ship as `application/octet-stream`. A path that resolves outside the root is rejected with 403, so a crafted path cannot read files above the dist. An absent or non-file target inside the dist root — a missing file, a directory, or a missing configured index — returns an empty 404. Non-GET/HEAD requests without a matching named route are answered 405. Every successful index response is rendered through the webserver's `renderIndex`, so the boot manifest reaches the page on `/` and on the configured index path.
+Requests are served from the dist root (the directory containing `distIndex`). The dist root, the configured index path, and session deep links render `index.html` with HTTP 200; any other existing file is served directly with its MIME type, and unknown extensions ship as `application/octet-stream`. A path that resolves outside the root is rejected with 403, so a crafted path cannot read files above the dist. An absent or non-file target inside the dist root — a missing file, a directory, or a missing configured index — returns an empty 404. Non-GET/HEAD requests without a matching named route are answered 405. Every successful index response is rendered through the webserver's `renderIndex`, so the boot manifest reaches the page on `/` and on the configured index path.
+
+Session deep links are the one SPA fallback: a GET/HEAD whose pathname is `/session/<id>` with a 1–128 character id of letters, digits, dots, `-`, and `_` renders the same authenticated index, so a shared link boots the shell, which then resolves the id client-side. The response passes the same `authorizeIndex` flow as `/`; dot-only ids (`/session/.`, `/session/..`) and every other unmatched path stay empty 404s.
 
 Root and configured-index responses call `ctx.connection.authorizeIndex` before reading HTML. A valid process token receives a 303 redirect plus the persistent browser cookie; an existing valid cookie serves the index; every other index request receives the Connection-owned 401 response. Non-index files remain public static assets. Connection owns the token, cookie, expiry, and signing-record semantics.
 
@@ -102,7 +104,7 @@ None; this package neither assembles nor sends a provider request.
 These limits define when a served asset class is not yet covered. They are current package constraints, not a task backlog.
 
 - **The starter MIME table is minimal** — it covers the Vite-emitted asset set plus the shipped PWA manifest; other extensions fall back to `application/octet-stream` until an asset class ships.
-- **Pathname routing is explicit** — the current client enters through the root or configured index path and has no History API pathname routes. Adding one requires an explicit server rule and real-composition coverage rather than a broad fallback for every miss.
+- **Pathname routing stays explicit** — the one History API pathname route is the `/session/<id>` deep link, matched by a fixed id form and covered by real-composition tests; other pathname routes need their own explicit server rule rather than a broad fallback for every miss.
 
 <a id="dev-note"></a>
 ### Dev Note
