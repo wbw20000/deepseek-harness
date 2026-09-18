@@ -135,6 +135,42 @@ The top-level `dsh-tool-workflow` consumer projects display facts into its calli
 
 Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnpm run verify-cordis-catalog` in doc-sync; regenerate with `pnpm run gen-cordis-catalog`) — the language sides differ only in locale-specific paired document paths. Signature blocks use a `ts cordis-catalog` fence and keep the original source JSDoc; dispatch modes are defined in the [primer](../cordis-primer.md#dispatch-modes), and the framework-inherited `ctx` API lives in [cordis-api/inherited.md](../cordis-api/inherited.md).
 
+<a id="ctxselfdevelopmenttasks--selfdevelopmenttasks"></a>
+
+### `ctx.selfDevelopmentTasks` — `SelfDevelopmentTasks`
+
+Cordis service holding the per-task controllers.
+
+```ts cordis-catalog
+/**
+ * Open (or resume) one task's controller against its private journal.
+ * Repeated calls return the same controller.
+ * @param taskId - task identity naming the journal directory.
+ * @param clock - trusted clock observation source supplied by the host.
+ * @param capabilitySource - capability evidence source; absence rejects attempt launches.
+ * @returns the task controller.
+ * @throws SelfDevelopmentError with `SELF_DEV_JOURNAL_UNAVAILABLE` when the journal failed verification; the caller must expose handoff.
+ */
+open(taskId: string, clock: TrustedClock, capabilitySource?: CapabilitySource): Promise<SelfDevelopmentTaskController>
+
+/**
+ * Read a task's projection without the caller needing a controller.
+ * @param taskId - task identity.
+ * @param clock - trusted clock observation source supplied by the host.
+ * @returns the current projection.
+ */
+async state(taskId: string, clock: TrustedClock): Promise<TaskProjection>
+
+/**
+ * Classify a journal rejection for callers that surface handoff state.
+ * @param error - error thrown by {@link SelfDevelopmentTasks.open}.
+ * @returns true when the error means the task journal refused side effects.
+ */
+isJournalHandoff(error: unknown): boolean
+```
+
+Source: [`packages/workflow/workflow-self-development/src/index.ts`](../../packages/workflow/workflow-self-development/src/index.ts)
+
 <a id="ctxworkflowengine--workflowengine-abstract-seam"></a>
 
 ### `ctx.workflowEngine` — `WorkflowEngine` (abstract seam)

@@ -1475,6 +1475,32 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'selfDevelopmentTasks',
+    summary: 'Cordis service holding the per-task controllers.',
+    description: 'Cordis service holding the per-task controllers.',
+    methods: [
+      {
+        signature: 'open(taskId: string, clock: TrustedClock, capabilitySource?: CapabilitySource): Promise<SelfDevelopmentTaskController>',
+        description: 'Open (or resume) one task\'s controller against its private journal. Repeated calls return the same controller.',
+        parameters: [{ name: 'taskId', description: 'task identity naming the journal directory.' }, { name: 'clock', description: 'trusted clock observation source supplied by the host.' }, { name: 'capabilitySource', description: 'capability evidence source; absence rejects attempt launches.' }],
+        returns: 'the task controller.',
+        throws: ['SelfDevelopmentError with `SELF_DEV_JOURNAL_UNAVAILABLE` when the journal failed verification; the caller must expose handoff.'],
+      },
+      {
+        signature: 'async state(taskId: string, clock: TrustedClock): Promise<TaskProjection>',
+        description: 'Read a task\'s projection without the caller needing a controller.',
+        parameters: [{ name: 'taskId', description: 'task identity.' }, { name: 'clock', description: 'trusted clock observation source supplied by the host.' }],
+        returns: 'the current projection.',
+      },
+      {
+        signature: 'isJournalHandoff(error: unknown): boolean',
+        description: 'Classify a journal rejection for callers that surface handoff state.',
+        parameters: [{ name: 'error', description: 'error thrown by {@link SelfDevelopmentTasks.open}.' }],
+        returns: 'true when the error means the task journal refused side effects.',
+      },
+    ],
+  },
+  {
     key: 'sessionController',
     summary: 'Host service backing the generated `ctx.remote.session` namespace.',
     description: 'Host service backing the generated `ctx.remote.session` namespace.',
@@ -3824,6 +3850,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface ApprovalRequestEvent {\n    readonly agent: Agent;\n    readonly toolName: string;\n    readonly callId?: ToolCallId;\n    readonly reason?: string;\n    readonly signal?: AbortSignal;\n}',
   },
   {
+    name: 'ArtifactDigest',
+    declaration: 'export type ArtifactDigest = Branded<\'self-dev-artifact-digest\'>;',
+  },
+  {
     name: 'AskUserQuestionAnswer',
     declaration: 'export interface AskUserQuestionAnswer {\n    answers: AskUserQuestionAnswerItem[];\n}',
   },
@@ -3894,6 +3924,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'AttachmentId',
     declaration: 'export type AttachmentId = Branded<\'AttachmentId\'>;',
+  },
+  {
+    name: 'Attempt',
+    declaration: 'export interface Attempt {\n    readonly attemptId: SelfDevAttemptId;\n    readonly attemptNumber: number;\n    readonly startedAt: ClockObservation;\n    readonly testPlanDigest: TestPlanDigest;\n    readonly sourceDigest: SourceDigest;\n    readonly artifactDigest: ArtifactDigest;\n    readonly capabilityDigest: CapabilityDigest;\n}',
   },
   {
     name: 'AuthorizationEntry',
@@ -3972,8 +4006,32 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type BrowserUseProviderName = Branded<\'BrowserUseProviderName\'>;',
   },
   {
+    name: 'BudgetApproval',
+    declaration: 'export interface BudgetApproval {\n    readonly mode: BudgetMode;\n    readonly maxRounds?: number;\n    readonly durationMs?: number;\n    readonly phaseTimeoutMs?: number;\n    readonly maxStepsPerAttempt?: number;\n    readonly noProgressAttemptLimit?: number;\n    readonly testPlanVersion: TestPlanVersion;\n    readonly taskSpecVersion: TaskSpecVersion;\n    readonly approvedBy: string;\n}',
+  },
+  {
+    name: 'BudgetMode',
+    declaration: 'export type BudgetMode = \'rounds\' | \'time\' | \'both\';',
+  },
+  {
+    name: 'CapabilityDigest',
+    declaration: 'export type CapabilityDigest = Branded<\'self-dev-capability-digest\'>;',
+  },
+  {
+    name: 'CapabilityEvidence',
+    declaration: 'export interface CapabilityEvidence {\n    readonly capability: string;\n    readonly digest: CapabilityDigest;\n}',
+  },
+  {
+    name: 'CapabilitySource',
+    declaration: 'export interface CapabilitySource {\n    evidence(requiredCapabilities: readonly string[]): readonly CapabilityEvidence[];\n}',
+  },
+  {
     name: 'ClientArtifactBaseline',
     declaration: 'export interface ClientArtifactBaseline {\n    readonly path: string;\n    readonly mtimeMs: number;\n    readonly size: number;\n}',
+  },
+  {
+    name: 'ClockObservation',
+    declaration: 'export interface ClockObservation {\n    readonly bootId: string;\n    readonly monotonicMs: number;\n}',
   },
   {
     name: 'CollectedOutput',
@@ -4020,6 +4078,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type CommandSubmitAttachment = ({\n    readonly type: \'image\';\n} & EncodedImageAttachment) | {\n    readonly type: \'file\';\n    readonly receiptId: string;\n};',
   },
   {
+    name: 'CommittedOperation',
+    declaration: 'export interface CommittedOperation {\n    readonly id: SelfDevOperationId;\n    readonly expectedRevision: number;\n    readonly payloadDigest: string;\n}',
+  },
+  {
+    name: 'CommittedRecord',
+    declaration: 'export interface CommittedRecord {\n    readonly schemaVersion: number;\n    readonly seq: number;\n    readonly prevHash: string;\n    readonly hash: string;\n    readonly operation: CommittedOperation | undefined;\n    readonly event: TaskEvent;\n}',
+  },
+  {
     name: 'CompactionAgentContext',
     declaration: 'export interface CompactionAgentContext {\n    session: Session;\n    options: {\n        provider?: string;\n        model?: string;\n    };\n}',
   },
@@ -4050,6 +4116,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ConfinedSandboxMode',
     declaration: 'export type ConfinedSandboxMode = Exclude<SandboxMode, \'danger-full-access\'>;',
+  },
+  {
+    name: 'ConfirmedPlanInput',
+    declaration: 'export interface ConfirmedPlanInput {\n    readonly testPlanId: string;\n    readonly version: number;\n    readonly taskSpecVersion: number;\n    readonly requiredCases: readonly RequiredCase[];\n    readonly manualCases: readonly string[];\n}',
   },
   {
     name: 'ContentBlockMap',
@@ -4086,6 +4156,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ContinuableSubagentDescriptorData',
     declaration: 'export interface ContinuableSubagentDescriptorData extends SubagentDescriptorBase {\n    readonly mode: \'continuable\';\n    readonly label: string;\n    readonly agentProvider?: string;\n    readonly agentModel?: string;\n    readonly agentReasoningEffort?: ReasoningEffortId;\n    readonly persona?: string;\n    readonly toolFilter?: ToolRestriction;\n}',
+  },
+  {
+    name: 'ControllerRequests',
+    declaration: 'export interface ControllerRequests {\n    createTask: {\n        readonly spec: unknown;\n    };\n    authorizePlanning: {\n        readonly authorizedBy: string;\n    };\n    submitPlanDraft: {\n        readonly draft: unknown;\n    };\n    confirmPlan: {\n        readonly plan: unknown;\n    };\n    approveBudget: {\n        readonly approval: unknown;\n    };\n    startAttempt: {\n        readonly sourceDigest: string;\n        readonly artifactDigest: string;\n        readonly sideEffect: (attempt: Attempt, signal: AbortSignal) => Promise<unknown>;\n        readonly signal?: AbortSignal;\n    };\n    stop: {\n        readonly reason?: \'cancelled\';\n    };\n    recordTrialApproval: {\n        readonly approvedBy: string;\n    };\n}',
   },
   {
     name: 'CordisDynamicPackageId',
@@ -4384,6 +4458,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface FinishReasonMap {\n    \'stop\': {\n        kind: \'stop\';\n    };\n    \'tool-calls\': {\n        kind: \'tool-calls\';\n    };\n    \'max-tokens\': {\n        kind: \'max-tokens\';\n    };\n    \'aborted\': {\n        kind: \'aborted\';\n        failure: LlmFailure;\n    };\n    \'error\': {\n        kind: \'error\';\n        failure: LlmFailure;\n    };\n}',
   },
   {
+    name: 'FrozenTestPlan',
+    declaration: 'export interface FrozenTestPlan extends ConfirmedPlanInput {\n    readonly testPlanId: string;\n    readonly version: TestPlanVersion;\n    readonly taskSpecVersion: TaskSpecVersion;\n    readonly digest: TestPlanDigest;\n}',
+  },
+  {
     name: 'FsDirEntry',
     declaration: 'export interface FsDirEntry {\n    name: string;\n    type: \'file\' | \'directory\' | \'other\';\n    target: FsTarget;\n    version?: FsVersion;\n    size?: number;\n}',
   },
@@ -4598,6 +4676,18 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'JobStatus',
     declaration: 'export type JobStatus = \'running\' | \'stopping\' | \'completed\' | \'killed\' | \'failed\';',
+  },
+  {
+    name: 'JournalOptions',
+    declaration: 'export interface JournalOptions {\n    readonly maxRecordsPerSegment: number;\n    readonly checkpointInterval: number;\n}',
+  },
+  {
+    name: 'JournalReadResult',
+    declaration: 'export interface JournalReadResult {\n    readonly status: JournalReadStatus;\n    readonly records: readonly CommittedRecord[];\n    readonly detail: string | undefined;\n}',
+  },
+  {
+    name: 'JournalReadStatus',
+    declaration: 'export type JournalReadStatus = \'ok\' | \'incomplete-tail\' | \'corrupt\';',
   },
   {
     name: 'JsonSchemaNode',
@@ -4888,6 +4978,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface OneShotSubagentDescriptorData extends SubagentDescriptorBase {\n    readonly mode: \'one-shot\';\n    readonly label?: string;\n}',
   },
   {
+    name: 'OperationHeader',
+    declaration: 'export interface OperationHeader {\n    readonly taskId: SelfDevTaskId;\n    readonly expectedRevision: number;\n    readonly operationId: SelfDevOperationId;\n}',
+  },
+  {
     name: 'OptionalSessionSeq',
     declaration: 'export type OptionalSessionSeq = SessionSeq | null;',
   },
@@ -5100,6 +5194,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type RequestRunOutcome = \'approved\' | \'completed\' | \'rejected\' | \'cancelled\' | \'failed\';',
   },
   {
+    name: 'RequiredCase',
+    declaration: 'export interface RequiredCase {\n    readonly caseId: string;\n    readonly requirement: string;\n    readonly assertionIds: readonly string[];\n}',
+  },
+  {
     name: 'ResolvedAlwaysRetryPolicy',
     declaration: 'export interface ResolvedAlwaysRetryPolicy extends ResolvedRetryBackoff {\n    readonly mode: \'always\';\n}',
   },
@@ -5206,6 +5304,22 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SearchResultView',
     declaration: 'export type SearchResultView = SearchMatchesResultView | SearchPathsResultView;',
+  },
+  {
+    name: 'SelfDevAttemptId',
+    declaration: 'export type SelfDevAttemptId = Branded<\'self-dev-attempt-id\'>;',
+  },
+  {
+    name: 'SelfDevelopmentTaskController',
+    declaration: 'export class SelfDevelopmentTaskController {\n    static async open(params: {\n        taskId: string;\n        journal: TaskJournal;\n        clock: TrustedClock;\n        capabilitySource: CapabilitySource | undefined;\n    }): Promise<SelfDevelopmentTaskController>;\n    get projection(): TaskProjection;\n    get spec(): TaskSpec | undefined;\n    get plan(): FrozenTestPlan | undefined;\n    #enqueue<T>(body: () => Promise<T>): Promise<T>;\n    async #execute<T>(method: string, request: OperationHeader & object, body: (header: ParsedOperationHeader, payloadDigest: string) => Promise<T>): Promise<T>;\n    #assertJournalIntact(): void;\n    #assertNotHandoff(): void;\n    createTask(request: OperationHeader & ControllerRequests[\'createTask\']): Promise<TaskOperationResult>;\n    authorizePlanning(request: OperationHeader & ControllerRequests[\'authorizePlanning\']): Promise<TaskOperationResult>;\n    submitPlanDraft(request: OperationHeader & ControllerRequests[\'submitPlanDraft\']): Promise<TaskOperationResult>;\n    confirmPlan(request: OperationHeader & ControllerRequests[\'confirmPlan\']): Promise<TaskOperationResult>;\n    approveBudget(request: OperationHeader & ControllerRequests[\'approveBudget\']): Promise<TaskOperationResult>;\n    startAttempt(request: OperationHeader & ControllerRequests[\'startAttempt\']): Promise<TaskOperationResult>;\n    async #beginAttempt(header: ParsedOperationHeader, payloadDigest: string, externalSignal: AbortSignal | undefined, request: OperationHeader & ControllerRe /* …truncated — full shape in source */',
+  },
+  {
+    name: 'SelfDevOperationId',
+    declaration: 'export type SelfDevOperationId = Branded<\'self-dev-operation-id\'>;',
+  },
+  {
+    name: 'SelfDevTaskId',
+    declaration: 'export type SelfDevTaskId = Branded<\'self-dev-task-id\'>;',
   },
   {
     name: 'SendTeamMessageRequest',
@@ -5856,6 +5970,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface SkillViewOptions extends SkillLookupOptions {\n    readonly scope?: ScopeKey | undefined;\n}',
   },
   {
+    name: 'SourceDigest',
+    declaration: 'export type SourceDigest = Branded<\'self-dev-source-digest\'>;',
+  },
+  {
     name: 'SpawnTeammateRequest',
     declaration: 'export interface SpawnTeammateRequest {\n    readonly name: string;\n    readonly description: string;\n    readonly prompt: ContentBlock[];\n    readonly context: \'fresh\' | \'fork\';\n    readonly provider: string;\n    readonly signal: AbortSignal;\n}',
   },
@@ -6080,6 +6198,42 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type TableValueOf<S extends DomainSpec, N extends keyof S[\'tables\']> = S[\'tables\'][N] extends DomainTableSpec<string, infer V> ? V : never;',
   },
   {
+    name: 'TaskEvent',
+    declaration: 'export type TaskEvent = {\n    readonly type: \'task/created\';\n    readonly spec: TaskSpec;\n} | {\n    readonly type: \'task/planning-authorized\';\n    readonly authorizedBy: string;\n} | {\n    readonly type: \'plan/drafted\';\n    readonly draft: TestPlanDraft;\n} | {\n    readonly type: \'plan/confirmed\';\n    readonly plan: FrozenTestPlan;\n} | {\n    readonly type: \'budget/approved\';\n    readonly approval: BudgetApproval;\n} | {\n    readonly type: \'attempt/started\';\n    readonly attempt: Attempt;\n} | {\n    readonly type: \'attempt/failed\';\n    readonly attemptId: SelfDevAttemptId;\n    readonly reason: string;\n    readonly failureDigest: string;\n    readonly elapsedMs: number;\n    readonly timeAccounting: TimeAccounting;\n} | {\n    readonly type: \'task/passed\';\n    readonly attemptId: SelfDevAttemptId;\n    readonly resultDigest: string;\n    readonly elapsedMs: number;\n    readonly timeAccounting: TimeAccounting;\n} | {\n    readonly type: \'trial/approved\';\n    readonly approvedBy: string;\n    readonly resultDigest: string;\n} | {\n    readonly type: \'task/stopped\';\n    readonly reason: TaskStopReason;\n} | {\n    readonly type: \'handoff/raised\';\n    readonly reason: TaskHandoffReason;\n    readonly detail: string;\n};',
+  },
+  {
+    name: 'TaskHandoffReason',
+    declaration: 'export type TaskHandoffReason = \'journal-incomplete-tail\' | \'journal-corrupted\' | \'attempt-interrupted\' | \'clock-uncertain\';',
+  },
+  {
+    name: 'TaskJournal',
+    declaration: 'export class TaskJournal {\n    static async open(taskDir: string, options: JournalOptions): Promise<TaskJournal>;\n    async read(): Promise<JournalReadResult>;\n    async append(event: TaskEvent, operation: CommittedOperation | undefined): Promise<CommittedRecord>;\n    async writeProjection(state: unknown): Promise<void>;\n    async readProjection(): Promise<unknown>;\n}',
+  },
+  {
+    name: 'TaskOperationResult',
+    declaration: 'export interface TaskOperationResult {\n    readonly revision: number;\n    readonly replayed: boolean;\n}',
+  },
+  {
+    name: 'TaskProjection',
+    declaration: 'export interface TaskProjection {\n    readonly status: TaskStatus;\n    readonly spec: TaskSpec | undefined;\n    readonly plan: FrozenTestPlan | undefined;\n    readonly approval: BudgetApproval | undefined;\n    readonly planningAuthorized: boolean;\n    readonly consumedRounds: number;\n    readonly consumedTimeMs: number;\n    readonly timeBudgetFrozen: boolean;\n    readonly currentAttempt: Attempt | undefined;\n    readonly verifiedResultDigest: string | undefined;\n    readonly trialApproval: {\n        readonly approvedBy: string;\n        readonly resultDigest: string;\n    } | undefined;\n    readonly noProgressCount: number;\n    readonly stopReason: TaskStopReason | undefined;\n    readonly handoffReason: TaskHandoffReason | undefined;\n    readonly handoffDetail: string | undefined;\n    readonly revision: number;\n}',
+  },
+  {
+    name: 'TaskSpec',
+    declaration: 'export interface TaskSpec {\n    readonly taskId: SelfDevTaskId;\n    readonly version: TaskSpecVersion;\n    readonly requirement: string;\n    readonly allowedModificationScope: readonly string[];\n    readonly stableBaselineDigest: string;\n    readonly createdBy: string;\n}',
+  },
+  {
+    name: 'TaskSpecVersion',
+    declaration: 'export type TaskSpecVersion = BrandedNumber<\'self-dev-task-spec-version\'>;',
+  },
+  {
+    name: 'TaskStatus',
+    declaration: 'export type TaskStatus = \'draft\' | \'planning-authorized\' | \'awaiting-plan-confirmation\' | \'awaiting-development-approval\' | \'ready\' | \'attempting\' | \'awaiting-trial\' | \'stopped\' | \'handoff\';',
+  },
+  {
+    name: 'TaskStopReason',
+    declaration: 'export type TaskStopReason = \'cancelled\' | \'budget-exhausted\' | \'no-progress\';',
+  },
+  {
     name: 'TeamId',
     declaration: 'export type TeamId = Branded<\'TeamId\'>;',
   },
@@ -6224,6 +6378,22 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type TerminalWaitReason = \'stdin_read\' | \'inferred_idle\' | \'timeout\' | \'session_exit\';',
   },
   {
+    name: 'TestPlanDigest',
+    declaration: 'export type TestPlanDigest = Branded<\'self-dev-test-plan-digest\'>;',
+  },
+  {
+    name: 'TestPlanDraft',
+    declaration: 'export interface TestPlanDraft {\n    readonly requiredCases: readonly RequiredCase[];\n    readonly manualCases: readonly string[];\n}',
+  },
+  {
+    name: 'TestPlanVersion',
+    declaration: 'export type TestPlanVersion = BrandedNumber<\'self-dev-test-plan-version\'>;',
+  },
+  {
+    name: 'TimeAccounting',
+    declaration: 'export type TimeAccounting = \'measured\' | \'uncertain\';',
+  },
+  {
     name: 'TokenMeasurement',
     declaration: 'export interface TokenMeasurement {\n    readonly logRevision: SessionLogOffset;\n    readonly baseline: TokenMeasurementBaseline;\n    readonly surfaceDeltaTokens: number;\n    readonly totalTokens: number;\n    readonly surfaceTokens: number;\n    readonly nodes: readonly TokenSurfaceNode[];\n}',
   },
@@ -6346,6 +6516,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ToolSchema',
     declaration: 'export interface ToolSchema {\n    name: string;\n    description: string;\n    parameters: Record<string, unknown>;\n}',
+  },
+  {
+    name: 'TrustedClock',
+    declaration: 'export interface TrustedClock {\n    observe(): ClockObservation;\n}',
   },
   {
     name: 'TurnEndCancelCause',

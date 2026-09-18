@@ -497,6 +497,13 @@ const SERVICE_ROLES: ServiceRole[] = [
     note: 'Folds revisioned objective state from the session log and keeps live continuation activation process-local.',
   },
   {
+    key: 'selfDevelopmentTasks',
+    pkg: 'workflow-self-development',
+    title: 'Self-development task control',
+    mode: 'core',
+    note: 'Opt-in per-task lifecycle controller with a durable hash-chained journal; it registers no tool, prompt, or event, and no production supervisor, worker, or verifier consumes it yet.',
+  },
+  {
     key: 'ssh',
     pkg: 'ssh',
     title: 'POSIX SSH connection owner',

@@ -124,6 +124,7 @@ export const SERVICE_PAGE: Record<string, string> = {
   userQuestions: 'user-questions.md',
   web: 'web.md',
   workflowEngine: 'workflow.md',
+  selfDevelopmentTasks: 'workflow.md',
   webhookRuntime: 'webhook.md',
   workspaceRegistry: 'workspace.md',
   workspaceController: 'workspace.md',
@@ -800,6 +801,10 @@ export const TYPE_LINK_EXEMPTIONS: Readonly<Record<string, string>> = {
   TerminalAttachmentId: 'Browser terminal input ownership is owned by packages/api/terminal-controller/README.md',
   TerminalFrame: 'Browser terminal stream frames are owned by packages/api/terminal-controller/README.md',
   WebTerminalId: 'Browser terminal identity is owned by packages/api/terminal-controller/README.md',
+  CapabilitySource: 'per-call capability-evidence source is owned by packages/workflow/workflow-self-development/README.md',
+  SelfDevelopmentTaskController: 'task lifecycle controller is owned by packages/workflow/workflow-self-development/README.md',
+  TaskProjection: 'task state projection is owned by packages/workflow/workflow-self-development/README.md',
+  TrustedClock: 'per-call trusted-clock observation source is owned by packages/workflow/workflow-self-development/README.md',
 }
 
 /** Repository data policy consumed by the Cordis catalog projector. */

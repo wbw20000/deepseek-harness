@@ -3594,6 +3594,28 @@ export interface Config {
 
 来源： [`packages/workflow/workflow-ptc/src/index.ts:32`](../packages/workflow/workflow-ptc/src/index.ts)
 
+<a id="deepseek-aidsh-workflow-self-development"></a>
+
+## `@deepseek-ai/dsh-workflow-self-development`
+
+```ts config-catalog
+/** Deployment configuration for the task-control service. */
+export interface Config {
+  /**
+   * Private control directory this service owns, e.g. under the managed
+   * installation's `control/` directory. Task journals live in
+   * `<controlDirectory>/tasks/<taskId>/`.
+   */
+  controlDirectory: string
+  /** Journal records per segment file before rotation. */
+  maxRecordsPerSegment: number
+  /** Committed records between protected checkpoint rewrites. */
+  checkpointInterval: number
+}
+```
+
+来源： [`packages/workflow/workflow-self-development/src/index.ts:78`](../packages/workflow/workflow-self-development/src/index.ts)
+
 ## 无配置的可加载插件
 
 这些插件通过 `cordis.yml` 中不含 `config:` 块的条目加载；它们未声明任何配置接口。

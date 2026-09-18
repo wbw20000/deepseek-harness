@@ -3592,6 +3592,28 @@ export interface Config {
 
 Source: [`packages/workflow/workflow-ptc/src/index.ts:32`](../packages/workflow/workflow-ptc/src/index.ts)
 
+<a id="deepseek-aidsh-workflow-self-development"></a>
+
+## `@deepseek-ai/dsh-workflow-self-development`
+
+```ts config-catalog
+/** Deployment configuration for the task-control service. */
+export interface Config {
+  /**
+   * Private control directory this service owns, e.g. under the managed
+   * installation's `control/` directory. Task journals live in
+   * `<controlDirectory>/tasks/<taskId>/`.
+   */
+  controlDirectory: string
+  /** Journal records per segment file before rotation. */
+  maxRecordsPerSegment: number
+  /** Committed records between protected checkpoint rewrites. */
+  checkpointInterval: number
+}
+```
+
+Source: [`packages/workflow/workflow-self-development/src/index.ts:78`](../packages/workflow/workflow-self-development/src/index.ts)
+
 ## Loadable plugins with no config
 
 These load from a `cordis.yml` entry with no `config:` block; they declare no configuration API.
