@@ -549,6 +549,13 @@ const SERVICE_ROLES: ServiceRole[] = [
     note: 'Opt-in per-task lifecycle controller with a durable hash-chained journal; it registers no tool, prompt, or event, and no production supervisor, worker, or verifier consumes it yet.',
   },
   {
+    key: 'selfDevelopmentRunner',
+    pkg: 'workflow-self-development-runner',
+    title: 'Self-development supervised runner',
+    mode: 'core',
+    note: 'Opt-in supervised-mode runner: host clock, human-presence evidence, headless executor, and independent acceptor; it registers no tool, prompt, or event and enables no unattended execution.',
+  },
+  {
     key: 'ssh',
     pkg: 'ssh',
     title: 'POSIX SSH connection owner',

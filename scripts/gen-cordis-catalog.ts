@@ -130,6 +130,7 @@ export const SERVICE_PAGE: Record<string, string> = {
   web: 'web.md',
   workflowEngine: 'workflow.md',
   selfDevelopmentTasks: 'workflow.md',
+  selfDevelopmentRunner: 'workflow.md',
   webhookRuntime: 'webhook.md',
   workspaceRegistry: 'workspace.md',
   workspaceController: 'workspace.md',
@@ -845,6 +846,12 @@ export const TYPE_LINK_EXEMPTIONS: Readonly<Record<string, string>> = {
   SelfDevelopmentTaskController: 'task lifecycle controller is owned by packages/workflow/workflow-self-development/README.md',
   TaskProjection: 'task state projection is owned by packages/workflow/workflow-self-development/README.md',
   TrustedClock: 'per-call trusted-clock observation source is owned by packages/workflow/workflow-self-development/README.md',
+  HostClock: 'sysctl-derived boot-session clock is owned by packages/workflow/workflow-self-development-runner/README.md',
+  HumanPresenceCapabilitySource: 'human-presence capability evidence source is owned by packages/workflow/workflow-self-development-runner/README.md',
+  PresenceConfirmation: 'one human supervision confirmation is owned by packages/workflow/workflow-self-development-runner/README.md',
+  AcceptanceCase: 'stable-side acceptance case definition is owned by packages/workflow/workflow-self-development-runner/README.md',
+  ExecutorRun: 'headless executor run facts are owned by packages/workflow/workflow-self-development-runner/README.md',
+  AttemptEvidence: 'stable-side attempt evidence record is owned by packages/workflow/workflow-self-development-runner/README.md',
 }
 
 /** Repository data policy consumed by the Cordis catalog projector. */
