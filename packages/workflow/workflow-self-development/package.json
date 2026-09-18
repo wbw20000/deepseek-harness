@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-workflow-self-development",
   "description": "Opt-in self-development task-control foundation: versioned task specs, frozen test plans, human budget approvals, verified attempt results, and a durable JSONL task journal",
-  "version": "0.1.6-alpha.1",
+  "version": "0.1.6-alpha.2",
   "publishConfig": {
     "access": "public"
   },
