@@ -33,7 +33,16 @@ kind: "package-reference"
 <a id="service"></a>
 ## 服务
 
-`SelfDevelopmentRunner`（默认导出，Cordis 服务 `selfDevelopmentRunner`）在构造时校验部署配置。它不出现在任何默认 bundle 中，也没有可启动任务的服务方法；启动经由导出的 `runSupervisedAttempt` 完成，调用方把它指向核心任务控制包的 `SelfDevelopmentTaskController`，并传入为该启动捕获的人工确认。
+`SelfDevelopmentRunner`（默认导出，Cordis 服务 `selfDevelopmentRunner`）在构造时校验部署配置，并在 `ctx.selfDevelopmentRunner` 上暴露四个服务方法。它不出现在任何默认 bundle 中。
+
+| 方法 | 契约 |
+|---|---|
+| `clock()` | 返回 runner 的单例受信时钟：第一次调用创建一个 `HostClock`，之后的每次调用都返回同一实例，任务控制器与每次尝试共享同一个引导会话观察者。 |
+| `runAttempt(req)` | 在 runner 的时钟、配置与取消句柄下为 `req.taskId` 运行一次有人监督的尝试；调用方的 signal（如存在）会与 runner 自己的组合。同一任务在 runner 内已有进行中的尝试时，第二个 `runAttempt` 会在触碰核心之前抛出 `SELF_DEV_RUNNER_ATTEMPT_ACTIVE`。worktree、确认、启动记录与证据校验仍由 `runSupervisedAttempt` 负责。返回的 promise 会原样拒绝核心 `open` 或 `runSupervisedAttempt` 抛出的任何错误：日志交接不会被包装、重试，也不会在此记录为尝试结果。 |
+| `stop(req)` | 以固定顺序停止任务并完成 runner 自己的收尾：先对着单例时钟打开控制器并执行核心 stop——核心提交 `task/stopped` 并中止该尝试的启动信号；runner 随后中止自己的取消句柄，等待该尝试的 promise 结算——执行器与验收器进程组已退出、证据写入已完成——然后返回核心的 stop 结果。没有进行中的尝试时，只执行核心 stop。尝试的拒绝由 `runAttempt` 的调用方承接；stop 只要求收尾已经完成。 |
+| `activeTasks()` | 返回 runner 当前拥有的尝试的任务 id 的只读快照；之后的归属变化不再反映。 |
+
+卸载服务时会中止它拥有的每个尝试，然后等待全部收尾——执行器与验收器读完管道、杀掉组内剩余成员并等待进程组退出，证据写入完成——之后 dispose 才返回。任何情况下都不会按进程名扫描。
 
 | 配置字段 | 含义 |
 |---|---|
@@ -93,7 +102,7 @@ kind: "package-reference"
 
 [`attempt.ts`](src/attempt.ts) 按固定顺序运行一次有人监督的尝试：先判定任务状态与 revision，把确认绑定到解析出的 worktree、计划摘要、验收定义与产物集，写入或校验启动记录，然后让核心在任何进程启动之前提交 `attempt/started`。副作用随后运行开发、取摘要 A、在自己的期限下运行验收、取摘要 B、比对 A 与 B（不相等即判本次运行失败）、写入持久证据，并把结果交回核心校验与提交。核心重放绝不启动第二个执行器：重放操作直接返回已记录结果，不执行任何内容。证据写入失败使该轮失败；结果文件写入失败按尽力而为记录，绝不会遮蔽核心自己的决定。
 
-本服务不注册自己的 `stop`，也没有自己的 dispose。`stop` 是核心控制器操作：它在尝试仍执行时持久提交，并中止该尝试的取消句柄让副作用得以静默，因为副作用运行在控制器串行化区段之外；结算时再回到区段，被取消的尝试只能以取消失败结算。卸载等待同样的收尾：执行器与验收器读完管道、杀掉组内剩余成员并等待进程组退出后才返回。`SELF_DEV_RUNNER_ATTEMPT_ACTIVE` 在此边界为并发尝试拒绝而声明；当前没有任何代码路径抛出它。
+本服务拥有它启动的每次尝试。[stop](#service) 先提交核心 stop，并且只在被拥有的尝试结算之后才返回；被取消的尝试只能以取消失败结算，因为副作用运行在控制器串行化区段之外，结算时再回到区段。dispose 对每个被拥有的尝试执行同样的收尾：中止，然后等待执行器与验收器读完管道、杀掉组内剩余成员并等待进程组退出后才返回。
 
 <a id="error-codes"></a>
 ## 错误码
@@ -113,7 +122,7 @@ kind: "package-reference"
 | `SELF_DEV_RUNNER_PRESENCE_MISMATCH` | 人工确认未绑定启动的真实事实。 |
 | `SELF_DEV_RUNNER_BUDGET_INVALID` | 批准的预算缺失、畸形、不约束任何东西，或总量已经花完。 |
 | `SELF_DEV_RUNNER_LAUNCH_MISMATCH` | 已存在的启动记录与本次重试启动的内容或路径不一致。 |
-| `SELF_DEV_RUNNER_ATTEMPT_ACTIVE` | 为此边界的并发尝试拒绝保留；当前没有任何代码路径抛出它。 |
+| `SELF_DEV_RUNNER_ATTEMPT_ACTIVE` | 对 runner 内已有进行中尝试的任务再次调用 `runAttempt`，在触碰核心之前抛出。 |
 
 <a id="further-exploration"></a>
 ## 进一步探索

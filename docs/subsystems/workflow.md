@@ -145,6 +145,51 @@ Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnp
 
 Cordis service composing the supervised-mode attempt pipeline.
 
+```ts cordis-catalog
+/**
+ * The runner's trusted clock. The first call creates one `HostClock`; later
+ * calls return the same instance, so every task and attempt shares one
+ * boot-session observer.
+ * @returns the singleton trusted clock.
+ */
+clock(): HostClock
+
+/**
+ * Run one supervised attempt for a task. A second attempt for the same task
+ * while one is in flight in this runner is refused before the core is
+ * touched; worktree, confirmation, launch-record, and evidence validation
+ * are `runSupervisedAttempt`'s responsibility.
+ * @param req - the supervised attempt to run, keyed by task id.
+ * @returns the core operation result with the attempt id, evidence path, and
+ *   outcome write failure of this process's execution.
+ * @throws SelfDevelopmentRunnerError with `SELF_DEV_RUNNER_ATTEMPT_ACTIVE` when this runner
+ *   already owns an in-flight attempt for `req.taskId`.
+ * @throws whatever the core's `open` or `runSupervisedAttempt` rejects with,
+ *   verbatim: a journal handoff is a human decision and is never wrapped,
+ *   retried, or recorded as an attempt outcome here.
+ */
+runAttempt(req: SupervisedAttemptRequest): Promise<SupervisedAttemptOutcome>
+
+/**
+ * Stop a task and finish this runner's own work for it. The core commits
+ * `task/stopped` and aborts the attempt's launch signal first; this runner
+ * then aborts its own cancellation handle and waits until the attempt's
+ * promise has settled — the executor and acceptor process groups have exited
+ * and the evidence writes are done — before returning the core's result.
+ * Without an in-flight attempt, only the core stop runs.
+ * @param req - task, expected revision, and idempotency key of the stop.
+ * @returns the core's stop operation result.
+ * @throws whatever the core's `open` or `stop` rejects with, verbatim.
+ */
+async stop(req: { readonly taskId: string readonly expectedRevision: number readonly operationId: string }): Promise<TaskOperationResult>
+
+/**
+ * The task ids of the attempts this runner currently owns.
+ * @returns a read-only snapshot; later ownership changes are not reflected.
+ */
+activeTasks(): readonly string[]
+```
+
 Source: [`packages/workflow/workflow-self-development-runner/src/index.ts`](../../packages/workflow/workflow-self-development-runner/src/index.ts)
 
 <a id="ctxselfdevelopmenttasks--selfdevelopmenttasks"></a>

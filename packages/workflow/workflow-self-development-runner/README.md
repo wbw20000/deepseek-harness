@@ -33,7 +33,16 @@ Run one supervised self-development attempt end to end. The service composes the
 <a id="service"></a>
 ## Service
 
-`SelfDevelopmentRunner` (default export, Cordis service `selfDevelopmentRunner`) validates deployment configuration at construction. It ships in no default bundle and exposes no service method that launches a task; launching goes through the exported `runSupervisedAttempt`, which the caller points at a `SelfDevelopmentTaskController` from the core task-control package and at the human confirmation captured for that launch.
+`SelfDevelopmentRunner` (default export, Cordis service `selfDevelopmentRunner`) validates deployment configuration at construction and exposes four service methods on `ctx.selfDevelopmentRunner`. It ships in no default bundle.
+
+| Method | Contract |
+|---|---|
+| `clock()` | Returns the runner's singleton trusted clock: the first call creates one `HostClock`, every later call returns the same instance, and the task controllers and every attempt share one boot-session observer. |
+| `runAttempt(req)` | Runs one supervised attempt for `req.taskId` under the runner's clock, config, and cancellation handle; the caller's signal, when present, is composed with the runner's own. A second attempt for the same task while one is in flight in this runner throws `SELF_DEV_RUNNER_ATTEMPT_ACTIVE` before the core is touched. Worktree, confirmation, launch-record, and evidence validation stay inside `runSupervisedAttempt`. The returned promise rejects verbatim with whatever the core's `open` or `runSupervisedAttempt` rejects with: a journal handoff is never wrapped, retried, or recorded as an attempt outcome here. |
+| `stop(req)` | Stops a task and finishes the runner's own work for it in a fixed order: open the controller against the singleton clock and run the core stop, which commits `task/stopped` and aborts the attempt's launch signal; the runner then aborts its own cancellation handle, waits until the attempt's promise has settled — the executor and acceptor process groups have exited and the evidence writes are done — and returns the core's stop result. Without an in-flight attempt, only the core stop runs. The attempt's rejection stays with `runAttempt`'s caller; the stop only requires the wrap-up to have finished. |
+| `activeTasks()` | Returns a read-only snapshot of the task ids of the attempts this runner currently owns; later ownership changes are not reflected. |
+
+Unloading the service aborts every attempt it owns, then waits for all of their wrap-up — the executor and acceptor drain pipes, kill remaining group members, and wait for group exit, and the evidence writes finish — before disposal returns. Nothing is ever scanned by process name.
 
 | Config field | Meaning |
 |---|---|
@@ -93,7 +102,7 @@ Evidence without an outcome file is a diagnostic record only: it never asserts t
 
 [`attempt.ts`](src/attempt.ts) runs one supervised attempt in a fixed order: judge the task state and revision, bind the confirmation to the resolved worktree, plan digest, acceptance definition, and artifact set, write or verify the launch record, then let the core commit `attempt/started` before any process starts. The side effect then runs develop, takes digest A, runs acceptance under its own deadline, takes digest B, compares A and B (an unequal comparison fails the run), writes the durable evidence, and returns the result for the core to verify and commit. A core replay never starts a second executor: a replaying operation returns the recorded outcome without executing anything. An evidence write failure fails the round; a failed outcome write is recorded best-effort and never masks the core's own decision.
 
-The service registers no `stop` and no dispose of its own. `stop` is a core controller operation: it commits durably while an attempt is pending and aborts that attempt's cancellation handle so the side effect can quiesce, because the side effect runs outside the controller's serialized section; settlement re-enters it, and a cancelled attempt can only settle as a cancelled failure. Unloading waits for the same wrap-up: the executor and acceptor drain pipes, kill remaining group members, and wait for group exit before returning. `SELF_DEV_RUNNER_ATTEMPT_ACTIVE` is declared at this boundary for a concurrent-attempt rejection; no current code path throws it.
+The service owns every attempt it starts. [`stop`](#service) commits the core stop first and returns only after the owned attempt has settled; a cancelled attempt can only settle as a cancelled failure, because the side effect runs outside the controller's serialized section and settlement re-enters it. Disposal runs the same wrap-up for every owned attempt: abort, then wait for the executor and acceptor to drain pipes, kill remaining group members, and wait for group exit before returning.
 
 <a id="error-codes"></a>
 ## Error codes
@@ -113,7 +122,7 @@ The service registers no `stop` and no dispose of its own. `stop` is a core cont
 | `SELF_DEV_RUNNER_PRESENCE_MISMATCH` | The human confirmation does not bind the launch's real facts. |
 | `SELF_DEV_RUNNER_BUDGET_INVALID` | The approved budget is missing, malformed, bounds nothing, or its total is already spent. |
 | `SELF_DEV_RUNNER_LAUNCH_MISMATCH` | An existing launch record does not match the content or paths of the launch being retried. |
-| `SELF_DEV_RUNNER_ATTEMPT_ACTIVE` | Reserved for a concurrent-attempt rejection at this boundary; no current code path throws it. |
+| `SELF_DEV_RUNNER_ATTEMPT_ACTIVE` | A second `runAttempt` for a task that already has an in-flight attempt in this runner, thrown before the core is touched. |
 
 <a id="further-exploration"></a>
 ## Further Exploration
