@@ -378,6 +378,7 @@
       "@deepseek-ai/dsh-plugin-package-inventory-deepseek": ["./packages/llm/plugin-package-inventory-deepseek/src"],
       "@deepseek-ai/dsh-ptc-runtime": ["./packages/ptc-runtime/ptc-runtime/src"],
       "@deepseek-ai/dsh-ptc-runtime-node": ["./packages/ptc-runtime/ptc-runtime-node/src"],
+      "@deepseek-ai/dsh-push-registry": ["./packages/notify/push-registry/src"],
       "@deepseek-ai/dsh-pwsh-sandbox": ["./packages/shell/pwsh-sandbox/src"],
       "@deepseek-ai/dsh-remote-mock": ["./packages/test-support/remote-mock/src"],
       "@deepseek-ai/dsh-repeat-tool-reminder": ["./packages/guard/repeat-tool-reminder/src"],

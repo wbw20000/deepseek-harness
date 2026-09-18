@@ -1973,6 +1973,31 @@ export interface LaunchConfig {
 
 Source: [`packages/ptc-runtime/ptc-runtime-node/src/index.ts:26`](../packages/ptc-runtime/ptc-runtime-node/src/index.ts)
 
+<a id="deepseek-aidsh-push-registry"></a>
+
+## `@deepseek-ai/dsh-push-registry`
+
+```ts config-catalog
+/** Deployment configuration for the push-registry service. */
+export interface PushRegistryConfig {
+  /** Absolute directory holding the device-token registry and delivery log. */
+  readonly registryDirectory: string
+  /**
+   * Outbound command argv. `undefined` registers devices without ever
+   * spawning a delivery; the event JSON arrives on the command's stdin.
+   */
+  readonly outboundCommand?: readonly string[] | undefined
+  /** Per-attempt outbound deadline in milliseconds. */
+  readonly outboundTimeoutMs?: number | undefined
+  /** Window in which one session emits one notification per kind. */
+  readonly dedupeWindowMs?: number | undefined
+  /** Retry attempts after the first failure, with exponential backoff. */
+  readonly maxRetries?: number | undefined
+}
+```
+
+Source: [`packages/notify/push-registry/src/types.ts:27`](../packages/notify/push-registry/src/types.ts)
+
 <a id="deepseek-aidsh-pwsh-local"></a>
 
 ## `@deepseek-ai/dsh-pwsh-local`
