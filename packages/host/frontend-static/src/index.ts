@@ -1,8 +1,9 @@
 /**
  * @deepseek-ai/dsh-host-frontend-static — SPA dist server over the webserver
  * fallback seat: serves the built frontend directory with explicit index
- * entry points. A readable index renders at the dist root and configured index
- * path; missing paths return 404, traversal outside the dist root is 403,
+ * entry points. A readable index renders at the dist root, configured index
+ * path, and `/session/<id>` deep links; missing paths return 404, traversal
+ * outside the dist root is 403,
  * unknown extensions ship as octet-stream, and non-GET/HEAD is 405. Every
  * index response first passes Connection's browser authentication, then the
  * webserver's index render (structured injection rows, then raw taps).
@@ -59,6 +60,14 @@ const STATIC_MISS_CODES: ReadonlySet<string | undefined> = new Set([
 ])
 
 /**
+ * Session deep-link paths (`/session/<id>`); capture 1 is the Session id. The
+ * id form matches the client parser in `@deepseek-ai/dsh-client-ui-workspace`:
+ * 1–128 id characters. Ids made only of dots are filesystem-relative, not
+ * Session ids, and stay misses.
+ */
+const SESSION_DEEP_LINK = /^\/session\/([A-Za-z0-9._-]{1,128})$/
+
+/**
  * Serve one GET/HEAD static request from the dist root.
  * @param pathname - decoded URL pathname of the request.
  * @param res - the node:http response to write.
@@ -73,6 +82,12 @@ export async function serveStatic(
   authorizeIndex: () => boolean,
   renderIndex: () => Promise<string>,
 ): Promise<void> {
+  const sessionId = SESSION_DEEP_LINK.exec(pathname)?.[1]
+  if (sessionId === '.' || sessionId === '..') {
+    res.writeHead(404)
+    res.end()
+    return
+  }
   const target = resolve(normalize(join(distRoot, pathname)))
   // Traversal rejection: the target must be distRoot itself (`/`) or stay under
   // it. `sep`, not '/': resolve() emits backslash paths on Windows, where a '/'
@@ -85,7 +100,9 @@ export async function serveStatic(
   let body: string | Buffer
   let type: string
   try {
-    if (target === distRoot || target === distIndex) {
+    // A matched deep link serves the SPA shell through the same authenticated
+    // index flow as the root; the id reaches the page via the URL pathname.
+    if (sessionId !== undefined || target === distRoot || target === distIndex) {
       if (!authorizeIndex()) return
       body = await renderIndex()
       type = HTML_MIME
@@ -130,7 +147,7 @@ export function apply(ctx: Context, config: Config): void {
       return
     }
     /* v8 ignore next -- node:http always sets url on server requests */
-    const rawPath = new URL(req.url ?? '/', 'http://x').pathname
+    const rawPath = rawPathname(req.url ?? '/')
     await serveStatic(
       decodeURIComponent(rawPath),
       res,
@@ -140,4 +157,16 @@ export function apply(ctx: Context, config: Config): void {
       renderIndex,
     )
   }), 'frontend-static: fallback seat')
+}
+
+/**
+ * The request target's pathname without query or fragment. Unlike the URL
+ * constructor this preserves dot segments, so `/session/.` and `/session/..`
+ * reach the deep-link id check instead of collapsing into `/`.
+ * @param target - the raw request target (origin-form).
+ * @returns the pathname up to the first `?` or `#`.
+ */
+function rawPathname(target: string): string {
+  const split = target.search(/[?#]/)
+  return split === -1 ? target : target.slice(0, split)
 }

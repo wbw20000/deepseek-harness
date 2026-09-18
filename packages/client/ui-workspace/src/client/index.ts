@@ -12,6 +12,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { RemoteHostFacts } from '@deepseek-ai/dsh-api-remotes/client'
 import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { IWorkspaces, WorkspaceSnapshot } from '@deepseek-ai/dsh-api-workspace-controller/client'
+import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { HostObservable, SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only: pulls the Controller service merges.
 import type {} from '@deepseek-ai/dsh-api-session-controller/client'
@@ -24,6 +25,8 @@ import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 // Type-only: pulls the Session root standard-hook merge.
 import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type { WorkspaceBrowserInjected, WorkspacePickerInjected } from './contract/slots.ts'
+import { startSessionDeepLink, type DeepLinkNotice as DeepLinkNoticeState } from './deep-link.ts'
+import { DeepLinkNotice, type DeepLinkNoticeInjected } from './DeepLinkNotice.tsx'
 import { UiWorkspaceService } from './navigation.ts'
 import { createWorkspaceViewStore } from './stores.ts'
 import { WorkspaceBrowser } from './rows/WorkspaceBrowser.tsx'
@@ -83,6 +86,27 @@ export function apply(ctx: Context): void {
     ctx, ctx.remote.directoryPicker, workspaces, sessions)
   ctx.slots.provideRoot({ hooks: { workspaces: workspaces.list } })
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-workspace: dictionaries')
+
+  // Session deep links (the `/session/<id>` route and the native-shell
+  // bridge) report an unresolvable id through one shell overlay banner.
+  const deepLinkNotice = createSnapshotStore<DeepLinkNoticeState>({})
+  ctx.effect(() => startSessionDeepLink({
+    sessions,
+    openSession: (sessionId) => { uiWorkspace.openSession(sessionId) },
+    reportMissing: (sessionId) => { deepLinkNotice.set({ sessionId }) },
+  }), 'ui-workspace: session deep link')
+  ctx.effect(() => ctx.slots.inject('shell.overlay', () => ctx.slots.register(
+    {
+      name: 'shell.overlay',
+      id: '@deepseek-ai/dsh-client-ui-workspace',
+      locale: NS,
+      inject: (): DeepLinkNoticeInjected => ({
+        hooks: { notice: deepLinkNotice },
+        dismissNotice: () => { deepLinkNotice.set({}) },
+      }),
+    },
+    DeepLinkNotice,
+  )), 'ui-workspace: deep-link notice')
 
   const searchSessions: WorkspaceBrowserInjected['searchSessions'] = async (query, signal) => {
     const result = await sessions.search(query, signal)
