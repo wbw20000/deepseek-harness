@@ -69,6 +69,8 @@ Approved phase and step limits require corresponding observations in the report;
 
 `verifyAttemptResult` accepts only a complete run for the exact current task, attempt, source, artifact, and plan digest: exit code zero, no signal, no timeout, no cancellation, and every required assertion of every required case present and passing. Zero-case reports, skipped or missing assertions, timeouts, signals, cancellations, and non-zero exits never pass. A result completing at or after the time budget deadline is late and cannot move the task to `awaiting-trial`, and so is a report whose observed phase durations or step count overrun the approved `phaseTimeoutMs` or `maxStepsPerAttempt`. Rounds and time are first-bound-wins: whichever limit the budget exhausts first stops the task, and the other limit's remainder never grants continuation.
 
+Every capability evidence item names its source kind: `machine` when the trusted host derived the evidence itself, `human-presence` when a person confirmed the capability at launch. The attempt records the aggregate in its durable `attempt/started` journal record — `human-presence` when any item is human-presence evidence, otherwise `machine`. `human-presence` attests that a person was present; it never claims the isolation an unattended run would need. An item without a valid source kind rejects the launch with `SELF_DEV_CAPABILITY_MISSING`, and a journal written under schema version 1 fails verification and surfaces handoff.
+
 <a id="journal"></a>
 ## Journal
 
@@ -94,6 +96,7 @@ Read these pages when the package-level contract is not enough: the decision rec
 - **Per-phase and step limits are verified, not enforced** — the controller rejects reports that overrun `phaseTimeoutMs` or `maxStepsPerAttempt`, but enforcing those limits while an attempt runs is a host-supervisor obligation (kill at the deadline, cap steps, confirm child quiescence on cancellation, supply trusted clock observations). No such supervisor process exists yet; an `AbortSignal` is cooperative cancellation, not supervision.
 - **Snapshot coverage is absent** — a dsh/Loader composition smoke exists (the service boots from a test-only `cordis.yml`, drives one lifecycle, and disposes), but no recorded-session snapshot covers this package because it registers no model-visible surface.
 - **Handoff resolution is manual** — a refused journal stays refused; the human resolves the files and reopens the task. There is no repair or auto-resume path.
+- **Journal schema version 1 is refused** — the task journal schema version is 2; a journal the previous version wrote fails verification at open and surfaces handoff. There is no migration or read-down path for committed generations.
 
 <a id="dev-note"></a>
 ### Dev Note

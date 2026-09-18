@@ -153,11 +153,11 @@ export function resultWith(attempt: Attempt, patch: Record<string, unknown>): Re
 
 /** All capabilities covered, as the future evidence provider would report. */
 export const capabilityEvidence = [
-  { capability: 'supervisor', digest: CapabilityDigest('d'.repeat(64)) },
-  { capability: 'storage-quota', digest: CapabilityDigest('d'.repeat(64)) },
-  { capability: 'sandbox-coverage', digest: CapabilityDigest('d'.repeat(64)) },
-  { capability: 'external-verifier', digest: CapabilityDigest('d'.repeat(64)) },
-]
+  { capability: 'supervisor', source: 'machine', digest: CapabilityDigest('d'.repeat(64)) },
+  { capability: 'storage-quota', source: 'machine', digest: CapabilityDigest('d'.repeat(64)) },
+  { capability: 'sandbox-coverage', source: 'machine', digest: CapabilityDigest('d'.repeat(64)) },
+  { capability: 'external-verifier', source: 'machine', digest: CapabilityDigest('d'.repeat(64)) },
+] as const
 
 /** Capability source covering every required capability. */
 export const fullCapabilitySource: CapabilitySource = {

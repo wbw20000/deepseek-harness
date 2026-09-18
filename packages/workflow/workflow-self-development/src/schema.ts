@@ -7,7 +7,7 @@
  */
 
 import { z as zod } from 'zod'
-import { SelfDevelopmentError } from './runtime.ts'
+import { CAPABILITY_SOURCE_KINDS, SelfDevelopmentError } from './runtime.ts'
 
 /** hex sha-256 digest as it appears on the wire. */
 const digestSchema = zod.string().regex(/^[0-9a-f]{64}$/u, 'digest must be 64 lowercase hex characters')
@@ -109,6 +109,7 @@ export const taskEventSchema = zod.discriminatedUnion('type', [
     sourceDigest: digestSchema,
     artifactDigest: digestSchema,
     capabilityDigest: digestSchema,
+    capabilitySource: zod.enum(CAPABILITY_SOURCE_KINDS),
   }) }),
   zod.strictObject({ type: zod.literal('attempt/failed'), attemptId: nonEmpty, reason: nonEmpty,
     failureDigest: zod.string().regex(/^[0-9a-f]{64}$/u), elapsedMs: zod.number().nonnegative(),

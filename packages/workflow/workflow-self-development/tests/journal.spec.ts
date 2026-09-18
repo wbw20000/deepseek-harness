@@ -40,6 +40,7 @@ async function seedReadyJournal(journal: TaskJournal, startedAt: { bootId: strin
       attemptId: 'attempt-1' as never, attemptNumber: 1, startedAt,
       testPlanDigest: 'a'.repeat(64) as never, sourceDigest: SOURCE as never,
       artifactDigest: ARTIFACT as never, capabilityDigest: 'c'.repeat(64) as never,
+      capabilitySource: 'machine',
     },
   }, undefined)
 }

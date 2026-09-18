@@ -69,6 +69,8 @@ kind: "package-reference"
 
 `verifyAttemptResult` 只接受针对当前任务、尝试、源码、产物和计划摘要完全一致的完整运行：退出码为零、无信号、无超时、无取消，且每个必测用例的每条必测断言都执行并通过。零用例报告、跳过或缺失断言、超时、信号、取消和非零退出都不能通过。在时间截止时或之后完成的结果视为迟到，不能把任务移入 `awaiting-trial`；报告的阶段时长或步数超出批准的 `phaseTimeoutMs` 或 `maxStepsPerAttempt` 同样视为迟到。轮数与时间先到先停：预算先耗尽的限制触发停止，另一项的余量不构成继续许可。
 
+每条能力证据都声明其来源种类：`machine` 表示证据由受信宿主自行取得，`human-presence` 表示由到场的用户在启动时确认。尝试在其持久的 `attempt/started` 日志记录中写入聚合来源——任一条为 `human-presence` 即记为 `human-presence`，否则记为 `machine`。`human-presence` 只证明有人在场，不构成无人值守运行所需的隔离。来源无效的证据项以 `SELF_DEV_CAPABILITY_MISSING` 拒绝启动；schema 版本 1 写入的日志校验失败并进入 handoff。
+
 <a id="journal"></a>
 ## 日志
 
@@ -94,6 +96,7 @@ kind: "package-reference"
 - **阶段与步数上限只验证不执行** — 控制器拒绝超出 `phaseTimeoutMs` 或 `maxStepsPerAttempt` 的报告，但尝试运行期间的执行是宿主监督者的义务（按截止时间终止、限制步数、取消时确认子进程静默、提供受信时钟观察）。此类监督进程尚不存在；`AbortSignal` 是协作式取消，不是监督。
 - **快照覆盖缺席** — 已有 dsh/Loader 组合冒烟（服务从测试专用 `cordis.yml` 启动、驱动一个生命周期并释放），但没有录制会话快照覆盖本包，因为它不注册任何模型可见界面。
 - **handoff 处置为人工** — 被拒绝的日志保持拒绝状态；由人工处理文件后重新打开任务。不存在修复或自动续作路径。
+- **日志 schema 版本 1 被拒** — 任务日志 schema 版本为 2；旧版本写入的日志在打开时校验失败并进入 handoff。对已提交的历史代不存在迁移或向下读取路径。
 
 <a id="dev-note"></a>
 ### 开发备注

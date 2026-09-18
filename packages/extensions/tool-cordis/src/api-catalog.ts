@@ -1670,7 +1670,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     description: 'Cordis service holding the per-task controllers.',
     methods: [
       {
-        signature: 'open(taskId: string, clock: TrustedClock, capabilitySource?: CapabilitySource): Promise<SelfDevelopmentTaskController>',
+        signature: 'async open(taskId: string, clock: TrustedClock, capabilitySource?: CapabilitySource): Promise<SelfDevelopmentTaskController>',
         description: 'Open (or resume) one task\'s controller against its private journal. Repeated calls return the same controller.',
         parameters: [{ name: 'taskId', description: 'task identity naming the journal directory.' }, { name: 'clock', description: 'trusted clock observation source supplied by the host.' }, { name: 'capabilitySource', description: 'capability evidence source; absence rejects attempt launches.' }],
         returns: 'the task controller.',
@@ -4197,7 +4197,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'Attempt',
-    declaration: 'export interface Attempt {\n    readonly attemptId: SelfDevAttemptId;\n    readonly attemptNumber: number;\n    readonly startedAt: ClockObservation;\n    readonly testPlanDigest: TestPlanDigest;\n    readonly sourceDigest: SourceDigest;\n    readonly artifactDigest: ArtifactDigest;\n    readonly capabilityDigest: CapabilityDigest;\n}',
+    declaration: 'export interface Attempt {\n    readonly attemptId: SelfDevAttemptId;\n    readonly attemptNumber: number;\n    readonly startedAt: ClockObservation;\n    readonly testPlanDigest: TestPlanDigest;\n    readonly sourceDigest: SourceDigest;\n    readonly artifactDigest: ArtifactDigest;\n    readonly capabilityDigest: CapabilityDigest;\n    readonly capabilitySource: CapabilitySourceKind;\n}',
   },
   {
     name: 'AuthorizationEntry',
@@ -4297,11 +4297,15 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'CapabilityEvidence',
-    declaration: 'export interface CapabilityEvidence {\n    readonly capability: string;\n    readonly digest: CapabilityDigest;\n}',
+    declaration: 'export interface CapabilityEvidence {\n    readonly capability: string;\n    readonly source: CapabilitySourceKind;\n    readonly digest: CapabilityDigest;\n}',
   },
   {
     name: 'CapabilitySource',
     declaration: 'export interface CapabilitySource {\n    evidence(requiredCapabilities: readonly string[]): readonly CapabilityEvidence[];\n}',
+  },
+  {
+    name: 'CapabilitySourceKind',
+    declaration: 'export type CapabilitySourceKind = \'human-presence\' | \'machine\';',
   },
   {
     name: 'ChangeResult',

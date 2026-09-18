@@ -151,7 +151,7 @@ Cordis service holding the per-task controllers.
  * @returns the task controller.
  * @throws SelfDevelopmentError with `SELF_DEV_JOURNAL_UNAVAILABLE` when the journal failed verification; the caller must expose handoff.
  */
-open(taskId: string, clock: TrustedClock, capabilitySource?: CapabilitySource): Promise<SelfDevelopmentTaskController>
+async open(taskId: string, clock: TrustedClock, capabilitySource?: CapabilitySource): Promise<SelfDevelopmentTaskController>
 
 /**
  * Read a task's projection without the caller needing a controller.

@@ -12,6 +12,7 @@
 import { z as zod } from 'zod'
 import { deepFreeze } from '@deepseek-ai/dsh-util-values'
 import {
+  CAPABILITY_SOURCE_KINDS,
   REQUIRED_ATTEMPT_CAPABILITIES,
   SelfDevAttemptId,
   SelfDevOperationId,
@@ -43,6 +44,7 @@ import type {
   Attempt,
   BudgetApproval,
   CapabilitySource,
+  CapabilitySourceKind,
   CommittedRecord,
   FrozenTestPlan,
   OperationHeader,
@@ -533,7 +535,7 @@ export class SelfDevelopmentTaskController {
         'SELF_DEV_INVALID_STATE',
       )
     }
-    const capabilityDigest = this.#resolveCapabilityEvidence()
+    const capability = this.#resolveCapabilityEvidence()
     const budget = checkAttemptBudget(this.state)
     if (!budget.allowed) {
       throw new SelfDevelopmentError(`attempt launch refused: ${budget.reason}`, 'SELF_DEV_BUDGET_EXHAUSTED')
@@ -557,7 +559,8 @@ export class SelfDevelopmentTaskController {
       testPlanDigest: frozenPlan(this.state).digest,
       sourceDigest: parsed.sourceDigest as Attempt['sourceDigest'],
       artifactDigest: parsed.artifactDigest as Attempt['artifactDigest'],
-      capabilityDigest: capabilityDigest as Attempt['capabilityDigest'],
+      capabilityDigest: capability.digest as Attempt['capabilityDigest'],
+      capabilitySource: capability.source,
     })
     const operation = { id: header.operationId, expectedRevision: header.expectedRevision, payloadDigest }
     const abort = new AbortController()
@@ -654,8 +657,13 @@ export class SelfDevelopmentTaskController {
     }
   }
 
-  /** Digest the capability evidence and require every capability to be covered. */
-  #resolveCapabilityEvidence(): string {
+  /**
+   * Digest the capability evidence and require every capability to be covered
+   * by an item declaring a valid source kind. The attempt's aggregate source
+   * is `human-presence` when any item is human-presence evidence, otherwise
+   * `machine`.
+   */
+  #resolveCapabilityEvidence(): { digest: string; source: CapabilitySourceKind } {
     if (this.capabilitySource === undefined) {
       throw new SelfDevelopmentError(
         `no capability evidence source is configured; required capabilities: ${REQUIRED_ATTEMPT_CAPABILITIES.join(', ')}`,
@@ -671,7 +679,15 @@ export class SelfDevelopmentTaskController {
         'SELF_DEV_CAPABILITY_MISSING',
       )
     }
-    return digestJson(evidence)
+    const invalid = evidence.find(item => !CAPABILITY_SOURCE_KINDS.includes(item.source))
+    if (invalid !== undefined) {
+      throw new SelfDevelopmentError(
+        `capability evidence for ${invalid.capability} has no valid source`,
+        'SELF_DEV_CAPABILITY_MISSING',
+      )
+    }
+    const source = evidence.some(item => item.source === 'human-presence') ? 'human-presence' : 'machine'
+    return { digest: digestJson(evidence), source }
   }
 
   /** Verify and commit a completed attempt result. */

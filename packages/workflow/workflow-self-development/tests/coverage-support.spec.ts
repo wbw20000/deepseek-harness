@@ -128,6 +128,7 @@ function makeAttempt(testPlanDigest: TestPlanDigestBrand): Attempt {
     sourceDigest: SourceDigest('b'.repeat(64)),
     artifactDigest: ArtifactDigest('c'.repeat(64)),
     capabilityDigest: CapabilityDigest('d'.repeat(64)),
+    capabilitySource: 'machine',
   }
 }
 
@@ -439,7 +440,7 @@ describe('journal verification', () => {
   it('refuses a checkpoint outside the journal schema', async () => {
     const { dir } = await makeTaskDir()
     const journal = await TaskJournal.open(dir, journalOptions)
-    await writeFile(join(dir, 'checkpoint.json'), JSON.stringify({ schemaVersion: 2, seq: 1, hash: '0'.repeat(64), segment: 'events.00000001.jsonl' }))
+    await writeFile(join(dir, 'checkpoint.json'), JSON.stringify({ schemaVersion: TASK_JOURNAL_SCHEMA_VERSION + 1, seq: 1, hash: '0'.repeat(64), segment: 'events.00000001.jsonl' }))
     const read = await journal.read()
     expect(read.status).toBe('corrupt')
     expect(read.detail).toBe('Error: checkpoint does not satisfy the journal schema')
@@ -449,7 +450,7 @@ describe('journal verification', () => {
     const { dir } = await makeTaskDir()
     const journal = await TaskJournal.open(dir, journalOptions)
     await journal.append({ type: 'task/planning-authorized', authorizedBy: 'user' }, undefined)
-    await writeFile(join(dir, 'checkpoint.json'), JSON.stringify({ schemaVersion: 1, seq: 1, hash: 'f'.repeat(64), segment: 'events.00000001.jsonl' }, null, 2))
+    await writeFile(join(dir, 'checkpoint.json'), JSON.stringify({ schemaVersion: TASK_JOURNAL_SCHEMA_VERSION, seq: 1, hash: 'f'.repeat(64), segment: 'events.00000001.jsonl' }, null, 2))
     const read = await journal.read()
     expect(read.status).toBe('corrupt')
     expect(read.detail).toBe('checkpoint hash does not match record 1')
@@ -486,7 +487,7 @@ describe('journal verification', () => {
     const { dir } = await makeTaskDir()
     const journal = await TaskJournal.open(dir, journalOptions)
     await journal.append({ type: 'task/planning-authorized', authorizedBy: 'user' }, undefined)
-    await writeFile(join(dir, 'checkpoint.json'), JSON.stringify({ schemaVersion: 1, seq: 5, hash: '0'.repeat(64), segment: 'events.00000001.jsonl' }, null, 2))
+    await writeFile(join(dir, 'checkpoint.json'), JSON.stringify({ schemaVersion: TASK_JOURNAL_SCHEMA_VERSION, seq: 5, hash: '0'.repeat(64), segment: 'events.00000001.jsonl' }, null, 2))
     const read = await journal.read()
     expect(read.status).toBe('corrupt')
     expect(read.detail).toBe('checkpoint proves records through 5, journal ends at 1')
@@ -495,7 +496,7 @@ describe('journal verification', () => {
   it('refuses a checkpoint over an empty journal', async () => {
     const { dir } = await makeTaskDir()
     const journal = await TaskJournal.open(dir, journalOptions)
-    await writeFile(join(dir, 'checkpoint.json'), JSON.stringify({ schemaVersion: 1, seq: 1, hash: '0'.repeat(64), segment: 'events.00000001.jsonl' }, null, 2))
+    await writeFile(join(dir, 'checkpoint.json'), JSON.stringify({ schemaVersion: TASK_JOURNAL_SCHEMA_VERSION, seq: 1, hash: '0'.repeat(64), segment: 'events.00000001.jsonl' }, null, 2))
     const read = await journal.read()
     expect(read.status).toBe('corrupt')
     expect(read.detail).toBe('checkpoint proves records through 1, journal ends at 0')

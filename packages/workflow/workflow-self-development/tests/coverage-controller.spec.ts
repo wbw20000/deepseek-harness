@@ -11,7 +11,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { SelfDevelopmentTaskController } from '../src/controller.ts'
 import { TaskJournal } from '../src/journal.ts'
-import { digestJson, SelfDevTaskId, SelfDevelopmentError } from '../src/runtime.ts'
+import { digestJson, SelfDevTaskId, SelfDevelopmentError, TASK_JOURNAL_SCHEMA_VERSION } from '../src/runtime.ts'
 import {
   ARTIFACT,
   BUDGET_ONE_ROUND,
@@ -45,10 +45,11 @@ const ATTEMPT = {
   sourceDigest: SOURCE,
   artifactDigest: ARTIFACT,
   capabilityDigest: 'd'.repeat(64),
+  capabilitySource: 'machine',
 } as const
 
 /** Open a fresh controller on a real empty journal. */
-async function openEmptyController(capabilitySource: Parameters<typeof SelfDevelopmentTaskController.open>[0]['capabilitySource'] = undefined) {
+async function openEmptyController(capabilitySource?: Parameters<typeof SelfDevelopmentTaskController.open>[0]['capabilitySource']) {
   const { dir, clock } = await makeTaskDir()
   const journal = await TaskJournal.open(dir, { maxRecordsPerSegment: 64, checkpointInterval: 4 })
   const controller = await SelfDevelopmentTaskController.open({ taskId: TASK_ID, journal, clock, capabilitySource })
@@ -87,7 +88,7 @@ function stubJournal() {
     append: async (event: TaskEvent, operation: CommittedRecord['operation']) => {
       if (appendFails) throw new SelfDevelopmentError('synthetic append failure', 'SELF_DEV_JOURNAL_UNAVAILABLE')
       seq += 1
-      return { schemaVersion: 1, seq, prevHash: '', hash: digestJson({ seq }), operation, event } as CommittedRecord
+      return { schemaVersion: TASK_JOURNAL_SCHEMA_VERSION, seq, prevHash: '', hash: digestJson({ seq }), operation, event } as CommittedRecord
     },
     readProjection: async () => undefined,
     writeProjection: async () => {

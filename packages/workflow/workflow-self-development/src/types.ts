@@ -129,10 +129,20 @@ export interface BudgetApproval {
   readonly approvedBy: string
 }
 
+/**
+ * How one capability's evidence was produced. `human-presence` records a
+ * confirmation given by a person who was present at launch; it never claims
+ * the isolation an unattended run would need. `machine` records evidence the
+ * trusted host derived itself.
+ */
+export type CapabilitySourceKind = 'human-presence' | 'machine'
+
 /** Capability claim the controller accepts from its injected evidence source. */
 export interface CapabilityEvidence {
   /** Capability name, e.g. `supervisor` or `external-verifier`. */
   readonly capability: string
+  /** How this evidence was produced. */
+  readonly source: CapabilitySourceKind
   /** Digest over the evidence that proves the capability for this launch. */
   readonly digest: CapabilityDigest
 }
@@ -162,6 +172,11 @@ export interface Attempt {
   readonly artifactDigest: ArtifactDigest
   /** Digest over the capability evidence accepted at launch. */
   readonly capabilityDigest: CapabilityDigest
+  /**
+   * Aggregate source of the launch evidence: `human-presence` when any item
+   * was human-presence evidence, otherwise `machine`.
+   */
+  readonly capabilitySource: CapabilitySourceKind
 }
 
 /** Status of one executed case assertion. */

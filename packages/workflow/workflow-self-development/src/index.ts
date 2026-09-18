@@ -127,16 +127,16 @@ export class SelfDevelopmentTasks extends Service {
    * @returns the task controller.
    * @throws SelfDevelopmentError with `SELF_DEV_JOURNAL_UNAVAILABLE` when the journal failed verification; the caller must expose handoff.
    */
-  open(taskId: string, clock: TrustedClock, capabilitySource?: CapabilitySource): Promise<SelfDevelopmentTaskController> {
+  async open(taskId: string, clock: TrustedClock, capabilitySource?: CapabilitySource): Promise<SelfDevelopmentTaskController> {
     // The id becomes a path component; validate it before any join or mkdir.
-    // A rejected promise, not a synchronous throw, keeps every caller on the
-    // same await path.
+    // Rethrowing from the async method keeps every caller on the same await
+    // path.
     try {
       validateTaskId(taskId)
     } catch (error: unknown) {
       // validateTaskId only throws SelfDevelopmentError, so the rejection
       // forwards the boundary error type without re-wrapping.
-      return Promise.reject(error)
+      throw error
     }
     const existing = this.controllers.get(taskId)
     if (existing !== undefined) return existing

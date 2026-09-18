@@ -23,7 +23,10 @@ import type {
  * Schema version of the durable task journal and projection. Bumping it is a
  * format change: readers must refuse older journals instead of guessing.
  */
-export const TASK_JOURNAL_SCHEMA_VERSION = 1
+export const TASK_JOURNAL_SCHEMA_VERSION = 2
+
+/** The evidence source kinds every capability evidence item may declare. */
+export const CAPABILITY_SOURCE_KINDS = ['human-presence', 'machine'] as const
 
 /** Capabilities the trusted host must establish before an attempt may launch. */
 export const REQUIRED_ATTEMPT_CAPABILITIES = [
