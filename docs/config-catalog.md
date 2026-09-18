@@ -3770,6 +3770,32 @@ export interface Config {
 
 Source: [`packages/workflow/workflow-self-development/src/index.ts:78`](../packages/workflow/workflow-self-development/src/index.ts)
 
+<a id="deepseek-aidsh-workflow-self-development-runner"></a>
+
+## `@deepseek-ai/dsh-workflow-self-development-runner`
+
+Requires: `selfDevelopmentTasks`
+
+```ts config-catalog
+/** Deployment configuration for the supervised runner service. */
+export interface RunnerConfig {
+  /** Absolute path of the `node` binary the executor and acceptance commands run under. */
+  readonly nodeBinary: string
+  /** Absolute path of the harness CLI entry (`apps/cli/lib/bin.js`) the executor spawns. */
+  readonly dshBin: string
+  /** Absolute path of the experiment Agent's `DSH_HOME`; never the operating user's `~/.dsh`. */
+  readonly dshHome: string
+  /** Absolute path of the parent directory that holds every experiment worktree. */
+  readonly experimentsRoot: string
+  /** Absolute path of the stable-side evidence directory; must live outside `experimentsRoot`. */
+  readonly evidenceRoot: string
+  /** Milliseconds between `SIGTERM` and `SIGKILL` when the runner tears down a process group. */
+  readonly killGraceMs: number
+}
+```
+
+Source: [`packages/workflow/workflow-self-development-runner/src/types.ts:8`](../packages/workflow/workflow-self-development-runner/src/types.ts)
+
 <a id="deepseek-aidsh-workspace-changes"></a>
 
 ## `@deepseek-ai/dsh-workspace-changes`

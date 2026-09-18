@@ -1665,6 +1665,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'selfDevelopmentRunner',
+    summary: 'Cordis service composing the supervised-mode attempt pipeline.',
+    description: 'Cordis service composing the supervised-mode attempt pipeline.',
+    methods: [],
+  },
+  {
     key: 'selfDevelopmentTasks',
     summary: 'Cordis service holding the per-task controllers.',
     description: 'Cordis service holding the per-task controllers.',
@@ -4120,10 +4126,6 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface ApprovalRequestEvent {\n    readonly agent: Agent;\n    readonly toolName: string;\n    readonly callId?: ToolCallId;\n    readonly reason?: string;\n    readonly signal?: AbortSignal;\n}',
   },
   {
-    name: 'ArtifactDigest',
-    declaration: 'export type ArtifactDigest = Branded<\'self-dev-artifact-digest\'>;',
-  },
-  {
     name: 'AskUserQuestionAnswer',
     declaration: 'export interface AskUserQuestionAnswer {\n    answers: AskUserQuestionAnswerItem[];\n}',
   },
@@ -6422,10 +6424,6 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SkillViewOptions',
     declaration: 'export interface SkillViewOptions extends SkillLookupOptions {\n    readonly scope?: ScopeKey | undefined;\n}',
-  },
-  {
-    name: 'SourceDigest',
-    declaration: 'export type SourceDigest = Branded<\'self-dev-source-digest\'>;',
   },
   {
     name: 'SpawnTeammateRequest',
