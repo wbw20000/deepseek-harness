@@ -16,6 +16,8 @@ export type SelfDevAttemptId = Branded<'self-dev-attempt-id'>
 export type SourceDigest = Branded<'self-dev-source-digest'>
 /** sha-256 hex digest of the attempt's built artifact. */
 export type ArtifactDigest = Branded<'self-dev-artifact-digest'>
+/** sha-256 hex digest of the acceptance definition a trusted runner executed. */
+export type AcceptanceDefinitionDigest = Branded<'self-dev-acceptance-definition-digest'>
 /** sha-256 hex digest of one frozen test plan. */
 export type TestPlanDigest = Branded<'self-dev-test-plan-digest'>
 /** sha-256 hex digest of capability evidence accepted at attempt launch. */
@@ -166,9 +168,13 @@ export interface Attempt {
   readonly startedAt: ClockObservation
   /** Digest of the frozen plan the attempt runs against. */
   readonly testPlanDigest: TestPlanDigest
-  /** Digest of the source snapshot the attempt modifies. */
+  /**
+   * Digest of the source snapshot the attempt launches against. Launch-input
+   * identity: the digests the attempt commits never claim to describe the
+   * content development produced; {@link TestResult} carries that separately.
+   */
   readonly sourceDigest: SourceDigest
-  /** Digest of the artifact the attempt builds. */
+  /** Digest of the artifact the attempt is launched against; launch-input identity like {@link Attempt.sourceDigest}. */
   readonly artifactDigest: ArtifactDigest
   /** Digest over the capability evidence accepted at launch. */
   readonly capabilityDigest: CapabilityDigest
@@ -211,10 +217,33 @@ export interface TestResult {
   readonly taskId: SelfDevTaskId
   /** Attempt the report claims to answer. */
   readonly attemptId: SelfDevAttemptId
-  /** Source digest the report claims to have tested. */
+  /**
+   * Digest of the source snapshot the attempt launched from. Launch-input
+   * identity only: it never claims these bytes are what the runner tested.
+   */
   readonly sourceDigest: SourceDigest
-  /** Artifact digest the report claims to have tested. */
+  /**
+   * Digest of the artifact the attempt was launched against. Launch-input
+   * identity only: it never claims these bytes are what the runner tested.
+   */
   readonly artifactDigest: ArtifactDigest
+  /**
+   * Digest of the post-development source the trusted runner reports having
+   * tested. The runner computes it and rechecks it against the worktree; this
+   * package never reads the worktree and cannot confirm the digest's truth.
+   */
+  readonly testedSourceDigest: SourceDigest
+  /**
+   * Digest of the post-development artifact the trusted runner reports having
+   * tested, computed and rechecked by the runner under the same limits.
+   */
+  readonly testedArtifactDigest: ArtifactDigest
+  /**
+   * Digest of the acceptance definition the trusted runner executed. It is
+   * recorded inside the bound result digest, but this package never sees the
+   * definition itself and cannot approve its content.
+   */
+  readonly acceptanceDefinitionDigest: AcceptanceDefinitionDigest
   /** Frozen plan digest the report claims to have executed. */
   readonly testPlanDigest: TestPlanDigest
   /** Process exit code; `null` when the process never exited normally. */

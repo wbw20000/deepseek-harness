@@ -24,6 +24,7 @@ import { TaskJournal } from '../src/journal.ts'
 import SelfDevelopmentTasks from '../src/index.ts'
 import { parseInput } from '../src/schema.ts'
 import {
+  AcceptanceDefinitionDigest,
   ArtifactDigest,
   CapabilityDigest,
   SelfDevAttemptId,
@@ -146,10 +147,11 @@ function recordLine(patch: Record<string, unknown>): string {
 }
 
 describe('runtime digest branding', () => {
-  it('brands source and artifact digests without changing the value', () => {
+  it('brands source, artifact, and acceptance-definition digests without changing the value', () => {
     const raw = 'e'.repeat(64)
     expect(SourceDigest(raw)).toBe(raw)
     expect(ArtifactDigest(raw)).toBe(raw)
+    expect(AcceptanceDefinitionDigest(raw)).toBe(raw)
   })
 })
 

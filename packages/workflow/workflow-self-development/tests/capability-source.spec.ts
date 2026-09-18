@@ -1,7 +1,7 @@
 /**
  * Capability evidence source tests: the two named source kinds, the bumped
  * journal schema, per-item source validation, the attempt's recorded
- * aggregate source, and refusal of older journal schema versions.
+ * aggregate source, and refusal of journals written by older schema versions.
  * @module capability-source
  */
 
@@ -34,7 +34,7 @@ const unknownSourceEvidence: CapabilitySource = {
 describe('capability source kinds', () => {
   it('names exactly the two kinds and bumps the journal schema', () => {
     expect([...CAPABILITY_SOURCE_KINDS]).toEqual(['human-presence', 'machine'])
-    expect(TASK_JOURNAL_SCHEMA_VERSION).toBe(2)
+    expect(TASK_JOURNAL_SCHEMA_VERSION).toBe(3)
   })
 
   it('refuses evidence that declares no valid source', async () => {
@@ -116,6 +116,20 @@ describe('capability source kinds', () => {
     const marker = `"schemaVersion":${TASK_JOURNAL_SCHEMA_VERSION}`
     expect(stale).toContain(marker)
     await writeFile(join(dir, 'events.00000001.jsonl'), stale.replace(marker, '"schemaVersion":1'))
+    const options = { maxRecordsPerSegment: 64, checkpointInterval: 4 }
+    const rejection = await TaskJournal.open(dir, options).then(() => null, (error: unknown) => error)
+    expect((rejection as { code?: string }).code).toBe('SELF_DEV_JOURNAL_UNAVAILABLE')
+    expect((rejection as { message?: string }).message).toMatch(/carries unknown schemaVersion/u)
+  })
+
+  it('refuses a journal written under schemaVersion 2, whose passing results bind only launch-input digests', async () => {
+    const { dir } = await makeTaskDir()
+    const journal = await TaskJournal.open(dir, { maxRecordsPerSegment: 64, checkpointInterval: 4 })
+    await journal.append({ type: 'task/planning-authorized', authorizedBy: 'user' }, undefined)
+    const stale = await readFile(join(dir, 'events.00000001.jsonl'), 'utf8')
+    const marker = `"schemaVersion":${TASK_JOURNAL_SCHEMA_VERSION}`
+    expect(stale).toContain(marker)
+    await writeFile(join(dir, 'events.00000001.jsonl'), stale.replace(marker, '"schemaVersion":2'))
     const options = { maxRecordsPerSegment: 64, checkpointInterval: 4 }
     const rejection = await TaskJournal.open(dir, options).then(() => null, (error: unknown) => error)
     expect((rejection as { code?: string }).code).toBe('SELF_DEV_JOURNAL_UNAVAILABLE')

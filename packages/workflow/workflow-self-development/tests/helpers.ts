@@ -20,6 +20,12 @@ export const BASELINE = 'a'.repeat(64)
 export const SOURCE = 'b'.repeat(64)
 /** Fixed 64-hex digest used as the attempt artifact. */
 export const ARTIFACT = 'c'.repeat(64)
+/** Fixed 64-hex digest for the post-development source a report claims to have tested. */
+export const TESTED_SOURCE = 'e'.repeat(64)
+/** Fixed 64-hex digest for the post-development artifact a report claims to have tested. */
+export const TESTED_ARTIFACT = 'f'.repeat(64)
+/** Fixed 64-hex digest for the acceptance definition the runner executed. */
+export const ACCEPTANCE_DEFINITION = '9'.repeat(64)
 /** The one task id every fixture uses. */
 export const TASK_ID = SelfDevTaskId('task-1')
 /** Standard TaskSpec wire form. */
@@ -128,13 +134,16 @@ export async function openReadyTask(
   return { controller, revision }
 }
 
-/** Build a fully passing result for the given attempt. */
+/** Build a fully passing result for the given attempt: launch-input digests plus different tested-content digests. */
 export function passingResult(attempt: Attempt): Record<string, unknown> {
   return {
     taskId: TASK_ID,
     attemptId: attempt.attemptId,
     sourceDigest: attempt.sourceDigest,
     artifactDigest: attempt.artifactDigest,
+    testedSourceDigest: TESTED_SOURCE,
+    testedArtifactDigest: TESTED_ARTIFACT,
+    acceptanceDefinitionDigest: ACCEPTANCE_DEFINITION,
     testPlanDigest: attempt.testPlanDigest,
     exitCode: 0,
     signal: null,

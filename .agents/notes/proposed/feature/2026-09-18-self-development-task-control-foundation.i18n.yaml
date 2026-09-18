@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/proposed/feature/2026-09-18-self-development-task-control-foundation.md
-2026-09-18-self-development-task-control-foundation.md: 3744783b622069ea69074f29b94c3cbd397c5c22
-2026-09-18-self-development-task-control-foundation.zh.md: fb874e87376dd84bc78c6da2329be4a609c8ad3a
+2026-09-18-self-development-task-control-foundation.md: 5e2ba626b03e800f21bbb18eb4446c051b48612b
+2026-09-18-self-development-task-control-foundation.zh.md: 01a7eb062f7b180ac8e4874f41074d5c898da037

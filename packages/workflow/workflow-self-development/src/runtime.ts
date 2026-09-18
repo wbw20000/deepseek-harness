@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto'
 import { brandNumber, brandString } from '@deepseek-ai/dsh-brand'
 import { HarnessError } from '@deepseek-ai/dsh-llm'
 import type {
+  AcceptanceDefinitionDigest,
   ArtifactDigest,
   CapabilityDigest,
   SelfDevAttemptId,
@@ -22,8 +23,11 @@ import type {
 /**
  * Schema version of the durable task journal and projection. Bumping it is a
  * format change: readers must refuse older journals instead of guessing.
+ * Version 3 requires tested-content digests and the acceptance-definition
+ * digest on every verified result, so version-2 journals — whose passing
+ * results bind only launch-input digests — are refused, not upgraded.
  */
-export const TASK_JOURNAL_SCHEMA_VERSION = 2
+export const TASK_JOURNAL_SCHEMA_VERSION = 3
 
 /** The evidence source kinds every capability evidence item may declare. */
 export const CAPABILITY_SOURCE_KINDS = ['human-presence', 'machine'] as const
@@ -114,6 +118,15 @@ export function SourceDigest(digest: string): SourceDigest {
  */
 export function ArtifactDigest(digest: string): ArtifactDigest {
   return brandString<ArtifactDigest>(digest)
+}
+
+/**
+ * Brand a raw digest string as an acceptance-definition digest.
+ * @param digest - raw sha-256 hex digest.
+ * @returns the same string with the compile-time brand.
+ */
+export function AcceptanceDefinitionDigest(digest: string): AcceptanceDefinitionDigest {
+  return brandString<AcceptanceDefinitionDigest>(digest)
 }
 
 /**

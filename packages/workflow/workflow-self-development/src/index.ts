@@ -18,6 +18,7 @@ import type { CapabilitySource, TaskProjection, TrustedClock } from './types.ts'
 export { SelfDevelopmentTaskController } from './controller.ts'
 export { TaskJournal } from './journal.ts'
 export {
+  AcceptanceDefinitionDigest,
   ArtifactDigest,
   CapabilityDigest,
   SelfDevAttemptId,

@@ -3770,7 +3770,7 @@ export interface Config {
 }
 ```
 
-来源： [`packages/workflow/workflow-self-development/src/index.ts:78`](../packages/workflow/workflow-self-development/src/index.ts)
+来源： [`packages/workflow/workflow-self-development/src/index.ts:79`](../packages/workflow/workflow-self-development/src/index.ts)
 
 <a id="deepseek-aidsh-workflow-self-development-runner"></a>
 
