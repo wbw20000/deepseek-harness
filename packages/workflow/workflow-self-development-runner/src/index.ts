@@ -25,6 +25,17 @@ export type { PresenceConfirmation } from './presence.ts'
 export type { ExecutorRequest, ExecutorRun } from './executor.ts'
 export type { AcceptanceAssertion, AcceptanceCase, AcceptanceRun } from './acceptor.ts'
 export type { RunnerConfig } from './types.ts'
+export { planAttemptBudget, phaseLimitMs, armDeadline } from './budget.ts'
+export type { ArmedDeadline } from './budget.ts'
+export { assertConfirmationBinds, resolveExperimentWorktree } from './binding.ts'
+export type { LaunchFacts } from './binding.ts'
+export { readLaunchRecord, writeLaunchRecord, launchRecordPath } from './launch-record.ts'
+export type { LaunchRecord } from './launch-record.ts'
+export { writeAttemptEvidence, writeAttemptOutcome, readAttemptEvidence, attemptEvidencePath } from './evidence.ts'
+export type { AttemptEvidence, AttemptOutcome, DigestPair } from './evidence.ts'
+export { writeDurableJson, readDurableJson } from './durable-json.ts'
+export { runSupervisedAttempt } from './attempt.ts'
+export type { SupervisedAttemptRequest, SupervisedAttemptOutcome } from './attempt.ts'
 
 /** Cordis service composing the supervised-mode attempt pipeline. */
 export class SelfDevelopmentRunner extends Service {

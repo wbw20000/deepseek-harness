@@ -7,6 +7,7 @@
  * Behaviors:
  *   exit <code>            exit with the given code
  *   echo <text...>         write the text plus a newline to stdout, exit 0
+ *   read <path>            write the file's text to stdout, exit 0
  *   write <relpath> <text> write the text to relpath (relative to cwd), exit 0
  *   sleep <ms>             stay alive for ms, then exit 0
  *   hang <ms>              stay alive for ms while ignoring SIGTERM
@@ -16,7 +17,7 @@
  *                          stdout, then a trailing "truncation-marker" line
  */
 
-import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 
 const [behavior, ...args] = process.argv.slice(2)
@@ -27,6 +28,9 @@ switch (behavior) {
     break
   case 'echo':
     process.stdout.write(`${args.join(' ')}\n`)
+    break
+  case 'read':
+    process.stdout.write(readFileSync(args[0], 'utf8'))
     break
   case 'write':
     mkdirSync(dirname(args[0]), { recursive: true })
