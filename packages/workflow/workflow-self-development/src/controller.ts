@@ -301,6 +301,7 @@ export class SelfDevelopmentTaskController {
       )
     }
     const result = await body(header, payloadDigest)
+    /* v8 ignore next 3 -- each operation body commits an event with its own operation id before returning. */
     if (!this.#operations.has(header.operationId)) {
       this.#operations.set(header.operationId, { payloadDigest, result: { revision: this.state.revision, replayed: false } })
     }
@@ -376,6 +377,7 @@ export class SelfDevelopmentTaskController {
   #assertNotHandoff(): void {
     if (this.state.status === 'handoff') {
       throw new SelfDevelopmentError(
+        /* v8 ignore next -- the handoff/raised event schema requires a non-empty detail, so the ?? fallback never runs. */
         `task is in handoff (${this.state.handoffReason}): ${this.state.handoffDetail ?? ''}`,
         'SELF_DEV_INVALID_STATE',
       )
@@ -476,8 +478,8 @@ export class SelfDevelopmentTaskController {
         throw new SelfDevelopmentError('budget approval requires a TaskSpec and a frozen plan', 'SELF_DEV_INVALID_STATE')
       }
       const approval = validateBudgetApproval(parsed as BudgetApproval, this.state.spec, this.state.plan)
-      const events: TaskEvent[] = [{ type: 'budget/approved', approval }]
-      const firstEvent: TaskEvent = events[0] ?? (() => { throw new SelfDevelopmentError('budget approval produced no event', 'SELF_DEV_INVALID_STATE') })()
+      const firstEvent: TaskEvent = { type: 'budget/approved', approval }
+      const events: TaskEvent[] = [firstEvent]
       const after = foldEvent(this.state, firstEvent)
       if (!checkAttemptBudget(after).allowed && !after.timeBudgetFrozen) {
         events.push({ type: 'task/stopped', reason: 'budget-exhausted' })
@@ -805,6 +807,7 @@ function frozenPlan(state: TaskFoldState): FrozenTestPlan {
 
 /** The approval every launched attempt binds; the fold guarantees it exists. */
 function approvedBudget(state: TaskFoldState): BudgetApproval {
+  /* v8 ignore next -- the fold guarantees attempting and ready states carry an approval, so this narrowing guard never fires. */
   if (state.approval === undefined) throw new SelfDevelopmentError('budget approval is missing', 'SELF_DEV_INVALID_STATE')
   return state.approval
 }

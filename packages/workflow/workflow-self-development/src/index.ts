@@ -134,9 +134,9 @@ export class SelfDevelopmentTasks extends Service {
     try {
       validateTaskId(taskId)
     } catch (error: unknown) {
-      return Promise.reject(error instanceof Error
-        ? error
-        : new SelfDevelopmentError(String(error), 'SELF_DEV_INVALID_OPERATION'))
+      // validateTaskId only throws SelfDevelopmentError, so the rejection
+      // forwards the boundary error type without re-wrapping.
+      return Promise.reject(error)
     }
     const existing = this.controllers.get(taskId)
     if (existing !== undefined) return existing

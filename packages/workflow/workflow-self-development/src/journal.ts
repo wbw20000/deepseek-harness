@@ -269,7 +269,10 @@ export class TaskJournal {
       if (records[checkpoint.seq - 1]?.hash !== checkpoint.hash) {
         return { status: 'corrupt', records, detail: `checkpoint hash does not match record ${checkpoint.seq}` }
       }
-    } else if (records.length > 0) {
+    } else {
+      // Every listed segment either rejected above or committed at least one
+      // record, so reaching this arm with no checkpoint means the log holds
+      // committed records whose protection is missing.
       return {
         status: 'corrupt',
         records,
