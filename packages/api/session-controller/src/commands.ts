@@ -47,6 +47,8 @@ import type {
   SessionRenameValue,
   SessionSelectModelRequest,
   SessionSelectModelValue,
+  SessionStopAllRequest,
+  SessionStopAllValue,
   SessionUpdateQueueRequest,
   SessionUpdateQueueValue,
   SessionRequestId,
@@ -510,6 +512,29 @@ export class SessionCommandController {
     }
     agent.cancel({ kind: 'user' }, { keepInbox: true })
     return { accepted: true }
+  }
+
+  /**
+   * Stop one ordinary Session completely: cancel the active turn, discard
+   * every pending inbox occurrence, and arm the full-stop flag that blocks
+   * automatic continuations until the next explicit user message.
+   * @param request - Session to stop completely.
+   * @returns acknowledgement plus the discarded pending identities.
+   */
+  async stopAll(request: SessionStopAllRequest): Promise<SessionStopAllValue> {
+    const agent = await this.resolveAgent(request.sessionId)
+    if (hasApiSessionSubagentOwner(this.ctx, agent.session, agent)) {
+      throw apiSessionSubagentOwnershipError(request.sessionId)
+    }
+    // Inbox clears next-step before next-turn; the receipt follows that order.
+    const discardedItemIds = [...agent.inbox.nextStep, ...agent.inbox.nextTurn]
+      .map(message => message.id)
+    this.agents.stopAllGate.arm(agent.session)
+    this.agents.stopAllGate.installGate(agent, agent.ctx)
+    // Clearing the inbox also withdraws the driver's queued wake, so the
+    // aborted turn cannot replay into the next queued item.
+    agent.cancel({ kind: 'user' }, { keepInbox: false })
+    return { accepted: true, discardedItemIds }
   }
 
   private async resolveAgent(sessionId: SessionId): Promise<Agent> {

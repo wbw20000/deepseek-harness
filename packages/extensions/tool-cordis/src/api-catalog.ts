@@ -1826,6 +1826,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'acknowledgement that cancellation was requested.',
       },
       {
+        signature: '@Remote(\'stopAll\') stopAll(request: SessionStopAllRequest): Promise<SessionStopAllValue>',
+        description: 'Stop one Session completely after explicitly resuming it: cancel the active turn, discard the pending queue, and block automatic continuations until the next explicit user message.',
+        parameters: [{ name: 'request', description: 'Session to stop completely.' }],
+        returns: 'acknowledgement plus the discarded pending identities.',
+      },
+      {
         signature: '@Remote(\'page\') page(request: SessionPageRequest, signal: AbortSignal): Promise<SessionPage>',
         description: 'Read one cold-safe, message-aligned Session history page.',
         parameters: [{ name: 'request', description: 'durable address, backward cursor, and page budget.' }, { name: 'signal', description: 'cancellation for persistence reads.' }],
@@ -6239,6 +6245,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SessionStartSource',
     declaration: 'export type SessionStartSource = \'startup\' | \'resume\' | \'clear\' | \'compact\';',
+  },
+  {
+    name: 'SessionStopAllRequest',
+    declaration: 'export interface SessionStopAllRequest {\n    readonly sessionId: SessionId;\n}',
+  },
+  {
+    name: 'SessionStopAllValue',
+    declaration: 'export interface SessionStopAllValue {\n    readonly accepted: true;\n    readonly discardedItemIds: readonly MessageId[];\n}',
   },
   {
     name: 'SessionStorageMetadata',

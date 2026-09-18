@@ -9,12 +9,16 @@ import type {
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-agent-presets'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
-import type { Session, SessionId } from '@deepseek-ai/dsh-session'
+import type { Session, SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionInspection } from '@deepseek-ai/dsh-session-persistence'
+import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
 import { SessionQueryError, type SessionObservation } from '@deepseek-ai/dsh-session-query'
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 import type {} from '@deepseek-ai/dsh-typert-registry'
-import type { ModelSelection } from './types.ts'
+import { z } from 'zod'
+import type {
+  ModelSelection, SessionStopAllProjection, SessionStopAllProjectionState,
+} from './types.ts'
 
 /** Cold Session identity absent from persistence. */
 export class ApiSessionNotFound extends Error {}
@@ -136,6 +140,119 @@ export async function inspectApiSession(
   }
 }
 
+/** Host fold state schema of the durable full-stop flag. */
+const stopAllStateSchema = z.object({
+  sessionId: z.string().min(1),
+  stopped: z.boolean(),
+  stoppedAtSeq: z.number().int(),
+}) as unknown as z.ZodType<SessionStopAllProjectionState>
+
+/** Client view schema of the durable full-stop flag. */
+const stopAllViewSchema = z.object({
+  stopped: z.boolean(),
+}) as unknown as z.ZodType<SessionStopAllProjection>
+
+/**
+ * Owns the full-stop flag of `stopAll`: the live arm cut, the Agent pre-step
+ * gate that rejects automatic continuations while the flag reads stopped, and
+ * the Session projection that carries the flag to clients.
+ *
+ * The arm is a Host-live channel (the command cannot append Session events),
+ * so the fold consumes it at the first Session event committed after the arm:
+ * the arm cut records the Session seq at arm time, events before it never see
+ * the arm, and the first event after it flips the durable flag. An explicit
+ * user message (`user/message` with a `user` source) clears the flag and
+ * retires the arm entry; because that transition records the event seq in the
+ * state, replaying the log reproduces the same flag without the live entry.
+ */
+export class SessionStopAllGate {
+  /** Arm cut per Session id: the Session seq the arm takes effect after. */
+  private readonly armed = new Map<string, number>()
+  private readonly gated = new WeakSet<Agent>()
+
+  /** @param ctx - Host context carrying the Session projection registry. */
+  constructor(private readonly ctx: Context) {
+    ctx.on('session/disposed', (session) => {
+      this.armed.delete(session.id)
+    })
+  }
+
+  /** Register the durable `stopAll` projection with the Session projection registry. */
+  registerProjection(): void {
+    this.ctx.sessionProjections.register<'stopAll', SessionStopAllProjectionState>({
+      key: 'stopAll',
+      stateSchema: stopAllStateSchema,
+      init: header => ({ sessionId: header.id, stopped: false, stoppedAtSeq: -1 }),
+      apply: (state, event) => this.apply(state, event),
+      wire: {
+        viewSchema: stopAllViewSchema,
+        view: state => ({ stopped: state.stopped }),
+      },
+      stateVersion: 1,
+    } satisfies ProjectionDefinition<'stopAll', SessionStopAllProjectionState>)
+  }
+
+  /**
+   * Arm the full-stop flag for one Session, effective after the event cut the
+   * Session has already committed. Arming an already-armed Session keeps the
+   * earlier cut so replay stays reproducible.
+   * @param session - live Session the command stopped completely.
+   */
+  arm(session: Session): void {
+    if (!this.armed.has(session.id)) this.armed.set(session.id, session.seq)
+  }
+
+  /**
+   * Install the pre-step gate on one Agent, once per Agent lifetime. The gate
+   * rejects every proposed step that carries no explicit user message while
+   * the durable flag reads stopped, so queued consumption, hook steering, and
+   * similar automatic continuations cannot enter a model step; an explicit
+   * user message passes and its own committed event clears the flag.
+   * @param agent - Agent whose automatic continuations are gated.
+   * @param agentCtx - Agent-scoped context that owns the listener registration.
+   */
+  installGate(agent: Agent, agentCtx: Agent['ctx']): void {
+    if (this.gated.has(agent)) return
+    this.gated.add(agent)
+    agentCtx.on('agent/pre-step', async ({ agent: subject, messages }, next) => {
+      const decision = await next()
+      if (decision.kind === 'reject' || !this.stopped(subject.session)) return decision
+      if (messages.some(message => message.source.kind === 'user')) return decision
+      return { kind: 'reject' }
+    })
+  }
+
+  /** Read whether the durable flag currently stops one Session. */
+  private stopped(session: Session): boolean {
+    return this.ctx.sessionProjections.stateOf(session, 'stopAll')?.stopped === true
+  }
+
+  /**
+   * Advance the durable flag by one committed event.
+   * @param state - flag state covering all prior events.
+   * @param event - next committed Session event.
+   * @returns the original or advanced flag state.
+   */
+  private apply(
+    state: SessionStopAllProjectionState,
+    event: SessionEvent,
+  ): SessionStopAllProjectionState {
+    const cut = this.armed.get(state.sessionId)
+    if (cut !== undefined && event.seq < cut) return state
+    if (state.stopped
+      && event.type === 'user/message'
+      && event.data.source.kind === 'user'
+      && event.seq > state.stoppedAtSeq) {
+      this.armed.delete(state.sessionId)
+      return { ...state, stopped: false, stoppedAtSeq: -1 }
+    }
+    if (cut !== undefined && !state.stopped) {
+      return { ...state, stopped: true, stoppedAtSeq: event.seq }
+    }
+    return state
+  }
+}
+
 /** Owns every operation that may create, resume, or configure a Web Agent. */
 export class ApiSessionAgentController {
   private readonly resumes = new Map<SessionId, Promise<Agent>>()
@@ -143,8 +260,16 @@ export class ApiSessionAgentController {
   private readonly selections = new WeakMap<Agent, InstalledSelection>()
   private readonly imageAdmissionChains = new WeakMap<Agent, Promise<void>>()
 
+  /**
+   * Full-stop gate shared with the Session commands and the `stopAll`
+   * projection; its pre-step listener joins every Agent setup this
+   * controller composes.
+   */
+  readonly stopAllGate: SessionStopAllGate
+
   /** @param ctx - Host context carrying Agent, model, persistence, and Typert services. */
   constructor(private readonly ctx: Context) {
+    this.stopAllGate = new SessionStopAllGate(ctx)
     ctx.typert.lookups.configure('agent', async (sessionId: SessionId) => {
       const found = await this.resolveAgent(sessionId)
       if ('error' in found) throw found.error
@@ -384,16 +509,22 @@ export class ApiSessionAgentController {
   }> {
     const presets = this.ctx.get('agentPresets')
     if (presets === undefined) {
-      return { setup: (_agentCtx, agent) => { this.installSelection(agent) } }
+      return { setup: (_agentCtx, agent) => { this.installComposition(agent) } }
     }
     const resolvedId = (await presets.resolve(presetId)).id
     return {
       agentPreset: resolvedId,
       setup: async (agentCtx, agent) => {
-        this.installSelection(agent)
+        this.installComposition(agent)
         await presets.mount(agentCtx, resolvedId)
       },
     }
+  }
+
+  /** Install the selection reference and the full-stop gate on one composed Agent. */
+  private installComposition(agent: Agent): void {
+    this.installSelection(agent)
+    this.stopAllGate.installGate(agent, agent.ctx)
   }
 
   private liveAgent(sessionId: SessionId): ApiSessionAgentResult | undefined {
