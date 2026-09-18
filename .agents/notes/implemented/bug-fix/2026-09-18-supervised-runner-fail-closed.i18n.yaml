@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-09-18-supervised-runner-fail-closed.md
+2026-09-18-supervised-runner-fail-closed.md: e11f712464f449dbf29f1106e3ea54c7212b8b12
+2026-09-18-supervised-runner-fail-closed.zh.md: e0dae2e293add0c154a16d68a5018341964d8783

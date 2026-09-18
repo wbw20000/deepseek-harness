@@ -52,11 +52,17 @@ export function parseKernBoottime(text: string): BootTime {
 /**
  * Read the boot record by shelling out to `sysctl`.
  * @returns the parsed boot time.
- * @throws SelfDevelopmentRunnerError with `SELF_DEV_RUNNER_CLOCK_UNAVAILABLE` when sysctl exits
- *   non-zero or its output is unparseable.
+ * @throws SelfDevelopmentRunnerError with `SELF_DEV_RUNNER_CLOCK_UNAVAILABLE` when sysctl cannot
+ *   start, times out, exits non-zero, or its output is unparseable.
  */
 export function readBootTimeSysctl(): BootTime {
   const result = spawnSync('sysctl', ['-n', 'kern.boottime'], { timeout: 2000 })
+  if (result.error !== undefined || result.status === null) {
+    throw new SelfDevelopmentRunnerError(
+      `sysctl -n kern.boottime timed out or could not start${result.error === undefined ? '' : `: ${result.error.message}`}`,
+      'SELF_DEV_RUNNER_CLOCK_UNAVAILABLE',
+    )
+  }
   if (result.status !== 0) {
     throw new SelfDevelopmentRunnerError(
       `sysctl -n kern.boottime exited with ${String(result.status)}: ${result.stderr.toString('utf8').trim()}`,
@@ -86,13 +92,15 @@ export class HostClock implements TrustedClock {
    * Read one trusted observation from the current boot session.
    * @returns the boot id and wall-clock-derived monotonic milliseconds.
    * @throws SelfDevelopmentRunnerError with `SELF_DEV_RUNNER_CLOCK_UNAVAILABLE` when the reader
-   *   throws, so callers can refuse to launch an attempt instead of guessing time.
+   *   throws, so callers can refuse to launch an attempt instead of guessing time. An error that
+   *   already carries a runner code is rethrown as-is instead of being wrapped again.
    */
   observe(): ClockObservation {
     let bootTime: BootTime
     try {
       bootTime = this.read()
     } catch (error: unknown) {
+      if (error instanceof SelfDevelopmentRunnerError) throw error
       throw new SelfDevelopmentRunnerError(
         `trusted clock is unavailable: ${error instanceof Error ? error.message : String(error)}`,
         'SELF_DEV_RUNNER_CLOCK_UNAVAILABLE',

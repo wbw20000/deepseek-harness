@@ -3789,7 +3789,7 @@ export interface RunnerConfig {
   readonly experimentsRoot: string
   /** Absolute path of the stable-side evidence directory; must live outside `experimentsRoot`. */
   readonly evidenceRoot: string
-  /** Milliseconds between `SIGTERM` and `SIGKILL` when the runner tears down a process group. */
+  /** Milliseconds before SIGKILL escalation and the separate final group-exit confirmation limit. */
   readonly killGraceMs: number
 }
 ```

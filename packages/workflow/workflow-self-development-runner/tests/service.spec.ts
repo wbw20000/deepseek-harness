@@ -54,15 +54,52 @@ describe('boot-time config validation', () => {
     expect(rejected).toThrow(expect.objectContaining({ code: 'SELF_DEV_RUNNER_CONFIG_INVALID' }))
   })
 
-  it('refuses an evidenceRoot inside experimentsRoot', async () => {
-    const base = await mkdtemp(join(tmpdir(), 'self-dev-runner-'))
-    root = base
-    const config = await makeConfig({
-      experimentsRoot: join(base, 'experiments'),
-      evidenceRoot: join(base, 'experiments', 'evidence'),
-    })
+  it.each([
+    ['nodeBinary'],
+    ['dshBin'],
+    ['dshHome'],
+    ['experimentsRoot'],
+    ['evidenceRoot'],
+  ] as const)('refuses an empty %s at construction', async (field) => {
+    const config = await makeConfig({ [field]: '' })
     const rejected = () => new SelfDevelopmentRunner(new Context(), config)
+    expect(rejected).toThrow(/must be an absolute path/)
+    expect(rejected).toThrow(expect.objectContaining({ code: 'SELF_DEV_RUNNER_CONFIG_INVALID' }))
+  })
+
+  it.each([
+    ['nodeBinary'],
+    ['dshBin'],
+    ['dshHome'],
+    ['experimentsRoot'],
+    ['evidenceRoot'],
+    ['killGraceMs'],
+  ] as const)('refuses a missing %s at construction', async (field) => {
+    // Bypass the Config schema the way a hand-built config object would.
+    const full = await makeConfig()
+    const partial = Object.fromEntries(Object.entries(full).filter(([key]) => key !== field))
+    const config = partial as unknown as RunnerConfig
+    const rejected = () => new SelfDevelopmentRunner(new Context(), config)
+    expect(rejected).toThrow(expect.objectContaining({ code: 'SELF_DEV_RUNNER_CONFIG_INVALID' }))
+  })
+
+  it('refuses an evidenceRoot equal to experimentsRoot', async () => {
+    const config = await makeConfig()
+    const rejected = () => new SelfDevelopmentRunner(new Context(), { ...config, evidenceRoot: config.experimentsRoot })
     expect(rejected).toThrow(/evidenceRoot/)
+    expect(rejected).toThrow(expect.objectContaining({ code: 'SELF_DEV_RUNNER_CONFIG_INVALID' }))
+  })
+
+  it('refuses an evidenceRoot inside experimentsRoot', async () => {
+    const config = await makeConfig()
+    const rejected = () => new SelfDevelopmentRunner(new Context(), { ...config, evidenceRoot: join(config.experimentsRoot, 'evidence') })
+    expect(rejected).toThrow(/evidenceRoot/)
+    expect(rejected).toThrow(expect.objectContaining({ code: 'SELF_DEV_RUNNER_CONFIG_INVALID' }))
+  })
+
+  it('refuses an evidence directory inside a two-dot-prefixed child name', async () => {
+    const config = await makeConfig()
+    const rejected = () => new SelfDevelopmentRunner(new Context(), { ...config, evidenceRoot: join(config.experimentsRoot, '..records') })
     expect(rejected).toThrow(expect.objectContaining({ code: 'SELF_DEV_RUNNER_CONFIG_INVALID' }))
   })
 

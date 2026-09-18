@@ -70,6 +70,29 @@ describe('readBootTimeSysctl', () => {
     } as ReturnType<typeof spawnSync>)
     expect(() => readBootTimeSysctl()).toThrow(SelfDevelopmentRunnerError)
   })
+
+  it('classifies a sysctl call that times out as clock unavailable', () => {
+    vi.mocked(spawnSync).mockReturnValue({
+      status: null,
+      signal: 'SIGTERM',
+      stdout: Buffer.from(''),
+      stderr: Buffer.from(''),
+    } as unknown as ReturnType<typeof spawnSync>)
+    expect(() => readBootTimeSysctl()).toThrow(/timed out or could not start/)
+    expect(() => readBootTimeSysctl()).toThrow(expect.objectContaining({ code: 'SELF_DEV_RUNNER_CLOCK_UNAVAILABLE' }))
+  })
+
+  it('classifies a sysctl binary that cannot start as clock unavailable', () => {
+    vi.mocked(spawnSync).mockReturnValue({
+      status: null,
+      signal: null,
+      error: Object.assign(new Error('spawn sysctl ENOENT'), { code: 'ENOENT' }),
+      stdout: Buffer.from(''),
+      stderr: Buffer.from(''),
+    } as unknown as ReturnType<typeof spawnSync>)
+    expect(() => readBootTimeSysctl()).toThrow(/timed out or could not start: .*ENOENT/)
+    expect(() => readBootTimeSysctl()).toThrow(expect.objectContaining({ code: 'SELF_DEV_RUNNER_CLOCK_UNAVAILABLE' }))
+  })
 })
 
 describe('HostClock', () => {
@@ -87,6 +110,22 @@ describe('HostClock', () => {
     expect(() => new HostClock(() => {
       throw 'sysctl crashed'
     }).observe()).toThrow(SelfDevelopmentRunnerError)
+  })
+
+  it('rethrows an existing SelfDevelopmentRunnerError without wrapping it again', () => {
+    const original = new SelfDevelopmentRunnerError(
+      'sysctl -n kern.boottime exited with 1: unknown oid',
+      'SELF_DEV_RUNNER_CLOCK_UNAVAILABLE',
+    )
+    let caught: unknown
+    try {
+      new HostClock(() => {
+        throw original
+      }).observe()
+    } catch (error: unknown) {
+      caught = error
+    }
+    expect(caught).toBe(original)
   })
 
   it('re-reads the boot time on every observation', () => {

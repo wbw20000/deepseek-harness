@@ -7,16 +7,23 @@
  * @module @deepseek-ai/dsh-workflow-self-development-runner
  */
 
-import { isAbsolute, relative, resolve } from 'node:path'
+import { isAbsolute, resolve } from 'node:path'
 import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { SelfDevelopmentRunnerError } from './runtime.ts'
+import { isInsideReal } from './path-containment.ts'
 import type { RunnerConfig } from './types.ts'
 
 export { HostClock, parseKernBoottime, readBootTimeSysctl } from './clock.ts'
+export { HumanPresenceCapabilitySource } from './presence.ts'
 export { artifactDigestOf, sourceDigestOf } from './digests.ts'
 export { SelfDevelopmentRunnerError, SelfDevelopmentRunnerErrorCode } from './runtime.ts'
+export { runHeadlessExecutor } from './executor.ts'
+export { checkAcceptanceCoversPlan, loadAcceptance, runAcceptance } from './acceptor.ts'
 export type { BootTime, BootTimeReader } from './clock.ts'
+export type { PresenceConfirmation } from './presence.ts'
+export type { ExecutorRequest, ExecutorRun } from './executor.ts'
+export type { AcceptanceAssertion, AcceptanceCase, AcceptanceRun } from './acceptor.ts'
 export type { RunnerConfig } from './types.ts'
 
 /** Cordis service composing the supervised-mode attempt pipeline. */
@@ -39,9 +46,9 @@ export class SelfDevelopmentRunner extends Service {
   /**
    * @param ctx - owning Cordis context.
    * @param config - deployment configuration for the runner's binaries, homes, and process teardown.
-   * @throws SelfDevelopmentRunnerError with `SELF_DEV_RUNNER_CONFIG_INVALID` when a path is not
-   *   absolute, `evidenceRoot` sits inside `experimentsRoot`, or `killGraceMs` is not a positive
-   *   finite integer. Misconfiguration fails at load.
+   * @throws SelfDevelopmentRunnerError with `SELF_DEV_RUNNER_CONFIG_INVALID` when a path field is
+   *   missing, empty, or not absolute, `evidenceRoot` sits inside or equals `experimentsRoot`, or
+   *   `killGraceMs` is not a positive finite integer. Misconfiguration fails at load.
    */
   constructor(ctx: Context, config: RunnerConfig) {
     super(ctx, 'selfDevelopmentRunner')
@@ -66,21 +73,20 @@ const ABSOLUTE_FIELDS = ['nodeBinary', 'dshBin', 'dshHome', 'experimentsRoot', '
  * Validate the deployment configuration at construction time.
  * @param config - configuration as parsed from cordis.yml.
  * @returns the same configuration once every field is proven usable.
- * @throws SelfDevelopmentRunnerError with `SELF_DEV_RUNNER_CONFIG_INVALID` when a path is not
- *   absolute, `evidenceRoot` sits inside `experimentsRoot`, or `killGraceMs` is not a positive
- *   finite integer.
+ * @throws SelfDevelopmentRunnerError with `SELF_DEV_RUNNER_CONFIG_INVALID` when a path field is
+ *   missing, empty, or not absolute, `evidenceRoot` sits inside or equals `experimentsRoot`, or
+ *   `killGraceMs` is not a positive finite integer.
  */
 function validateConfig(config: RunnerConfig): RunnerConfig {
   const invalid = (detail: string): SelfDevelopmentRunnerError =>
     new SelfDevelopmentRunnerError(`self-development runner config is invalid: ${detail}`, 'SELF_DEV_RUNNER_CONFIG_INVALID')
   for (const field of ABSOLUTE_FIELDS) {
     const value = config[field]
-    if (value.length === 0 || !isAbsolute(value)) {
+    if (typeof value !== 'string' || value.length === 0 || !isAbsolute(value)) {
       throw invalid(`${field} ${JSON.stringify(value)} must be an absolute path`)
     }
   }
-  const inner = relative(config.experimentsRoot, resolve(config.evidenceRoot))
-  if (inner === '' || (!inner.startsWith('..') && !isAbsolute(inner))) {
+  if (isInsideReal(resolve(config.experimentsRoot), resolve(config.evidenceRoot))) {
     throw invalid(`evidenceRoot ${JSON.stringify(config.evidenceRoot)} must live outside experimentsRoot ${JSON.stringify(config.experimentsRoot)}`)
   }
   if (!Number.isInteger(config.killGraceMs) || config.killGraceMs < 1 || !Number.isFinite(config.killGraceMs)) {
