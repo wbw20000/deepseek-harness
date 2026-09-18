@@ -13,12 +13,19 @@ import { SelfDevelopmentRunnerError } from '../src/runtime.ts'
 
 const BOOT_ID = 'a'.repeat(64)
 
+const PLAN_DIGEST = 'b'.repeat(64)
+const ACCEPTANCE_DIGEST = 'c'.repeat(64)
+
 const confirmation: PresenceConfirmation = {
   confirmedBy: 'operator-1',
   confirmedAt: { bootId: BOOT_ID, monotonicMs: 1234 },
   worktree: '/experiments/wt-1',
   loopbackAllowlist: [4173, 8080],
   acknowledgement: 'supervised-not-unattended',
+  taskId: 'task-1',
+  testPlanDigest: PLAN_DIGEST,
+  acceptanceDefinitionDigest: ACCEPTANCE_DIGEST,
+  artifactPaths: ['dist/cli.js', 'lib'],
 }
 
 describe('HumanPresenceCapabilitySource', () => {
@@ -53,6 +60,25 @@ describe('HumanPresenceCapabilitySource', () => {
     input.confirmedAt.monotonicMs += 1
     input.loopbackAllowlist.push(8080)
     expect(source.evidence(['supervisor'])).toEqual(before)
+  })
+
+  it('keeps the artifact path set as a unique ascending list, so order and repeats never change the digest', () => {
+    const unordered = { ...confirmation, artifactPaths: ['lib', 'dist/cli.js', 'lib'] }
+    const evidence = new HumanPresenceCapabilitySource(unordered).evidence(['supervisor'])
+    expect(evidence[0]?.digest).toBe(digestJson({ capability: 'supervisor', source: 'human-presence', confirmation }))
+  })
+
+  it('changes the digest when the bound launch facts change', () => {
+    const base = new HumanPresenceCapabilitySource(confirmation).evidence(['supervisor'])[0]?.digest
+    const variants: PresenceConfirmation[] = [
+      { ...confirmation, taskId: 'task-2' },
+      { ...confirmation, testPlanDigest: 'd'.repeat(64) },
+      { ...confirmation, acceptanceDefinitionDigest: 'e'.repeat(64) },
+      { ...confirmation, artifactPaths: ['lib'] },
+    ]
+    for (const variant of variants) {
+      expect(new HumanPresenceCapabilitySource(variant).evidence(['supervisor'])[0]?.digest).not.toBe(base)
+    }
   })
 
   it('produces different digests for different confirmations and capabilities', () => {
@@ -94,6 +120,21 @@ describe('HumanPresenceCapabilitySource', () => {
     ['missing acknowledgement', { ...confirmation, acknowledgement: undefined }],
     ['non-string acknowledgement', { ...confirmation, acknowledgement: 42 }],
     ['wrong acknowledgement', { ...confirmation, acknowledgement: 'unattended' }],
+    ['missing taskId', { ...confirmation, taskId: undefined }],
+    ['non-string taskId', { ...confirmation, taskId: 42 }],
+    ['path-like taskId', { ...confirmation, taskId: '../escape' }],
+    ['non-string testPlanDigest', { ...confirmation, testPlanDigest: 42 }],
+    ['non-hex testPlanDigest', { ...confirmation, testPlanDigest: 'Z'.repeat(64) }],
+    ['missing acceptanceDefinitionDigest', { ...confirmation, acceptanceDefinitionDigest: undefined }],
+    ['short acceptanceDefinitionDigest', { ...confirmation, acceptanceDefinitionDigest: 'ab' }],
+    ['missing artifactPaths', { ...confirmation, artifactPaths: undefined }],
+    ['non-array artifactPaths', { ...confirmation, artifactPaths: 'lib' }],
+    ['non-string artifact path', { ...confirmation, artifactPaths: [42] }],
+    ['empty artifact path', { ...confirmation, artifactPaths: [''] }],
+    ['absolute artifact path', { ...confirmation, artifactPaths: ['/etc/passwd'] }],
+    ['dot-dot artifact path', { ...confirmation, artifactPaths: ['lib/../../secret'] }],
+    ['dot artifact path', { ...confirmation, artifactPaths: ['./lib'] }],
+    ['empty-segment artifact path', { ...confirmation, artifactPaths: ['lib//x'] }],
   ]
   it.each(invalidConfirmations)('refuses %s with SELF_DEV_RUNNER_CONFIG_INVALID', (_name, malformed) => {
     const bad = malformed as PresenceConfirmation

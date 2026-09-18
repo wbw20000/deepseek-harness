@@ -32,3 +32,18 @@ export type SourceDigest = import('@deepseek-ai/dsh-brand').Branded<'self-dev-so
  * core task-control package's `ArtifactDigest` brand (same brand id).
  */
 export type ArtifactDigest = import('@deepseek-ai/dsh-brand').Branded<'self-dev-artifact-digest'>
+
+/**
+ * Finite limits one attempt runs under, derived from the approved budget and
+ * the task's already consumed run time. Every phase deadline is computed from
+ * these while the attempt runs; a budget that bounds neither a phase nor the
+ * total is refused before anything launches.
+ */
+export interface AttemptBudget {
+  /** Approved milliseconds one phase may run, or `undefined` when the approval carries no phase limit. */
+  readonly phaseMs: number | undefined
+  /** Milliseconds left of the approved total run time, or `undefined` when the approval carries no time limit. */
+  readonly totalRemainingMs: number | undefined
+  /** Approved model/tool step cap inside one attempt, or `undefined` when the approval carries none. */
+  readonly maxSteps: number | undefined
+}

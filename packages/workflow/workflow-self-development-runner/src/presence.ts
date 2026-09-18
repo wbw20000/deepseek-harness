@@ -18,11 +18,20 @@ const SUPERVISED_ACKNOWLEDGEMENT = 'supervised-not-unattended'
 /** Matches the boot ids `HostClock` derives (lowercase sha-256 hex). */
 const BOOT_ID_PATTERN = /^[0-9a-f]{64}$/
 
+/** Matches the task-control package's task id grammar: one plain path component of 1–64 characters. */
+const TASK_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u
+
+/** Matches the sha-256 hex digests the task-control package brands. */
+const DIGEST_PATTERN = /^[0-9a-f]{64}$/
+
 /**
  * One concrete human confirmation captured at attempt launch. It records who
  * confirmed, when (one trusted clock observation), which experiment worktree
  * the attempt runs in, which loopback ports the session may use, and that the
- * confirmation asserts supervision — not unattended isolation.
+ * confirmation asserts supervision — not unattended isolation. It also binds
+ * the launch facts the person reviewed: the task, the frozen plan, the
+ * acceptance definition bytes, and the artifact path set, so a confirmation
+ * given for one launch cannot be replayed against different content.
  */
 export interface PresenceConfirmation {
   /** Non-empty name of the person who gave the confirmation. */
@@ -35,6 +44,14 @@ export interface PresenceConfirmation {
   readonly loopbackAllowlist: readonly number[]
   /** Literal acknowledgement that this launch is supervised, not unattended. */
   readonly acknowledgement: 'supervised-not-unattended'
+  /** Task the confirmation covers; a launch must address the same task id. */
+  readonly taskId: string
+  /** Frozen test plan digest the person confirmed the launch runs against. */
+  readonly testPlanDigest: string
+  /** sha-256 hex digest of the stable-side acceptance definition bytes the person reviewed. */
+  readonly acceptanceDefinitionDigest: string
+  /** Worktree-relative artifact paths the acceptance covers, kept as a unique ascending list. */
+  readonly artifactPaths: readonly string[]
 }
 
 /**
@@ -45,7 +62,9 @@ export interface PresenceConfirmation {
  * @throws SelfDevelopmentRunnerError with `SELF_DEV_RUNNER_CONFIG_INVALID` when the confirmer is
  *   not a non-empty string, the clock observation is not a trusted shape, the
  *   worktree is not absolute, the loopback allowlist is not a port list within
- *   0–65535, or the acknowledgement does not state supervision.
+ *   0–65535, the acknowledgement does not state supervision, the task id is not
+ *   a plain path component, a digest is not lowercase sha-256 hex, or an
+ *   artifact path is absolute or carries an empty, dot, or dot-dot segment.
  */
 function validateConfirmation(value: unknown): PresenceConfirmation {
   const invalid = (detail: string): SelfDevelopmentRunnerError =>
@@ -77,13 +96,51 @@ function validateConfirmation(value: unknown): PresenceConfirmation {
   if (confirmation.acknowledgement !== SUPERVISED_ACKNOWLEDGEMENT) {
     throw invalid(`acknowledgement must be the literal ${JSON.stringify(SUPERVISED_ACKNOWLEDGEMENT)}`)
   }
+  if (typeof confirmation.taskId !== 'string' || !TASK_ID_PATTERN.test(confirmation.taskId)) {
+    throw invalid(`taskId ${JSON.stringify(confirmation.taskId)} must be a plain task id (1–64 characters: letter or digit, then letters, digits, dots, underscores, or hyphens)`)
+  }
+  const { testPlanDigest, acceptanceDefinitionDigest } = confirmation
+  if (typeof testPlanDigest !== 'string' || !DIGEST_PATTERN.test(testPlanDigest)) {
+    throw invalid(`testPlanDigest ${JSON.stringify(testPlanDigest)} must be lowercase sha-256 hex`)
+  }
+  if (typeof acceptanceDefinitionDigest !== 'string' || !DIGEST_PATTERN.test(acceptanceDefinitionDigest)) {
+    throw invalid(`acceptanceDefinitionDigest ${JSON.stringify(acceptanceDefinitionDigest)} must be lowercase sha-256 hex`)
+  }
+  if (!Array.isArray(confirmation.artifactPaths)) {
+    throw invalid(`artifactPaths ${JSON.stringify(confirmation.artifactPaths)} must list worktree-relative paths`)
+  }
+  const artifactPaths = [...new Set(confirmation.artifactPaths.map((entry: unknown) => validateArtifactPath(entry, invalid)))].sort()
   return {
     confirmedBy: confirmation.confirmedBy,
     confirmedAt: { bootId: confirmedAt.bootId, monotonicMs: confirmedAt.monotonicMs },
     worktree: confirmation.worktree,
     loopbackAllowlist: [...(confirmation.loopbackAllowlist as number[])],
     acknowledgement: confirmation.acknowledgement,
+    taskId: confirmation.taskId,
+    testPlanDigest,
+    acceptanceDefinitionDigest,
+    artifactPaths,
   }
+}
+
+/**
+ * Validate one worktree-relative artifact path. Only plain segments are
+ * accepted: an absolute path or an empty, dot, or dot-dot segment could widen
+ * the confirmed artifact set beyond what the person reviewed.
+ * @param value - one entry of `artifactPaths` as handed to the constructor.
+ * @param invalid - error factory of the enclosing validation.
+ * @returns the same path once proven relative and plain.
+ * @throws SelfDevelopmentRunnerError with `SELF_DEV_RUNNER_CONFIG_INVALID` when the entry is not a
+ *   non-empty string, is absolute, or carries an empty, dot, or dot-dot segment.
+ */
+function validateArtifactPath(value: unknown, invalid: (detail: string) => SelfDevelopmentRunnerError): string {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw invalid(`artifactPaths entry ${JSON.stringify(value)} must be a non-empty worktree-relative path`)
+  }
+  if (isAbsolute(value) || value.split('/').some(segment => segment === '' || segment === '.' || segment === '..')) {
+    throw invalid(`artifactPaths entry ${JSON.stringify(value)} must be relative without empty, dot, or dot-dot segments`)
+  }
+  return value
 }
 
 /**
