@@ -36,7 +36,7 @@ Record a development requirement, confirm its test plan, and approve a finite bu
 
 Every field is required: a deployment that has not measured its bounds configures nothing and the plugin fails at load instead of guessing. The service validates the configuration at construction — `controlDirectory` must be an absolute path and both bounds must be positive finite integers (`SELF_DEV_CONFIG_INVALID`) — and validates every `taskId` against a plain path-component grammar before it joins the control path or creates a directory.
 
-`open(taskId, clock, capabilitySource?)` takes the trusted clock and the capability-evidence source explicitly per call. There is no default clock: a Node clock cannot prove macOS sleep or reboot accounting, so the caller supplies the observation source (the future Swift supervisor). Without a `capabilitySource`, every attempt launch is rejected with `SELF_DEV_CAPABILITY_MISSING`; there is no configuration that flips isolation on.
+`open(taskId, clock)` resumes one task's controller. There is no default clock: a Node clock cannot prove macOS sleep or reboot accounting, so the caller supplies the observation source (the future Swift supervisor), and the clock passed at open is a recovery clock only — it marks an attempt left in flight by a previous process as interrupted and never observes a new attempt. The service caches no capability-evidence source: every `startAttempt` request carries its attempt's own clock and evidence source, and an attempt whose request lacks a usable source is rejected with `SELF_DEV_CAPABILITY_MISSING` before anything is committed; there is no configuration that flips isolation on.
 
 <a id="controller-operations"></a>
 ## Controller operations

@@ -21,8 +21,8 @@ import {
   SOURCE,
   SPEC,
   TASK_ID,
+  attemptInputs,
   capabilityEvidence,
-  fullCapabilitySource,
   header,
   makeTaskDir,
   openReadyTask,
@@ -49,10 +49,10 @@ const ATTEMPT = {
 } as const
 
 /** Open a fresh controller on a real empty journal. */
-async function openEmptyController(capabilitySource?: Parameters<typeof SelfDevelopmentTaskController.open>[0]['capabilitySource']) {
+async function openEmptyController() {
   const { dir, clock } = await makeTaskDir()
   const journal = await TaskJournal.open(dir, { maxRecordsPerSegment: 64, checkpointInterval: 4 })
-  const controller = await SelfDevelopmentTaskController.open({ taskId: TASK_ID, journal, clock, capabilitySource })
+  const controller = await SelfDevelopmentTaskController.open({ taskId: TASK_ID, journal, clock })
   return { dir, journal, controller }
 }
 
@@ -108,7 +108,7 @@ function stubJournal() {
 /** Drive a controller on a stub journal to `ready` status. */
 async function openReadyOn(journal: TaskJournal) {
   const controller = await SelfDevelopmentTaskController.open({
-    taskId: TASK_ID, journal, clock: new FakeClock(), capabilitySource: fullCapabilitySource,
+    taskId: TASK_ID, journal, clock: new FakeClock(),
   })
   let revision = 0
   await controller.createTask({ ...header(revision, 'create'), spec: SPEC })
@@ -131,7 +131,7 @@ describe('journal verification at open', () => {
     const segment = join(dir, 'events.00000001.jsonl')
     const text = await readFile(segment, 'utf8')
     await writeFile(segment, text.slice(0, -1))
-    const error = await rejectionOf(SelfDevelopmentTaskController.open({ taskId: TASK_ID, journal, clock, capabilitySource: undefined }))
+    const error = await rejectionOf(SelfDevelopmentTaskController.open({ taskId: TASK_ID, journal, clock }))
     expect(error.code).toBe('SELF_DEV_JOURNAL_UNAVAILABLE')
     expect(error.message).toContain('task journal is not intact (incomplete-tail)')
     expect(error.message).toContain('does not end with a terminal newline')
@@ -144,7 +144,7 @@ describe('journal verification at open', () => {
       read: async () => ({ status: 'corrupt' as const, records: [] as CommittedRecord[], detail: undefined }),
     }
     const error = await rejectionOf(SelfDevelopmentTaskController.open({
-      taskId: TASK_ID, journal: broken as unknown as TaskJournal, clock: new FakeClock(), capabilitySource: undefined,
+      taskId: TASK_ID, journal: broken as unknown as TaskJournal, clock: new FakeClock(),
     }))
     expect(error.code).toBe('SELF_DEV_JOURNAL_UNAVAILABLE')
     expect(error.message).toBe('task journal is not intact (corrupt): unknown reason')
@@ -221,9 +221,9 @@ describe('launch refusals', () => {
     const partialSource = {
       evidence: () => capabilityEvidence.filter(item => item.capability !== 'external-verifier'),
     }
-    const { controller, revision } = await openReadyTask(dir, clock, BUDGET_TWO_ROUNDS, partialSource)
+    const { controller, revision } = await openReadyTask(dir, clock, BUDGET_TWO_ROUNDS)
     const error = await rejectionOf(controller.startAttempt({
-      ...header(revision, 'attempt-missing-cap'), sourceDigest: SOURCE, artifactDigest: ARTIFACT,
+      ...header(revision, 'attempt-missing-cap'), ...attemptInputs(clock, partialSource), sourceDigest: SOURCE, artifactDigest: ARTIFACT,
       sideEffect: async () => { throw new Error('side effect must never run') },
     }))
     expect(error.code).toBe('SELF_DEV_CAPABILITY_MISSING')
@@ -251,13 +251,13 @@ describe('launch refusals', () => {
     ] as unknown as TaskEvent[]
     for (const event of events) await journal.append(event, undefined)
     const controller = await SelfDevelopmentTaskController.open({
-      taskId: TASK_ID, journal, clock: new FakeClock(), capabilitySource: fullCapabilitySource,
+      taskId: TASK_ID, journal, clock: new FakeClock(),
     })
     expect(controller.projection.status).toBe('ready')
     expect(controller.projection.timeBudgetFrozen).toBe(true)
     expect(controller.projection.consumedRounds).toBe(1)
     const error = await rejectionOf(controller.startAttempt({
-      ...header(controller.projection.revision, 'attempt-frozen'), sourceDigest: SOURCE, artifactDigest: ARTIFACT,
+      ...header(controller.projection.revision, 'attempt-frozen'), ...attemptInputs(new FakeClock()), sourceDigest: SOURCE, artifactDigest: ARTIFACT,
       sideEffect: async () => { throw new Error('side effect must never run') },
     }))
     expect(error.code).toBe('SELF_DEV_BUDGET_EXHAUSTED')
@@ -278,12 +278,12 @@ describe('launch refusals', () => {
     ] as unknown as TaskEvent[]
     for (const event of events) await journal.append(event, undefined)
     const controller = await SelfDevelopmentTaskController.open({
-      taskId: TASK_ID, journal, clock: new FakeClock(), capabilitySource: fullCapabilitySource,
+      taskId: TASK_ID, journal, clock: new FakeClock(),
     })
     expect(controller.projection.status).toBe('ready')
     expect(controller.plan).toBeUndefined()
     const error = await rejectionOf(controller.startAttempt({
-      ...header(controller.projection.revision, 'attempt-noplan'), sourceDigest: SOURCE, artifactDigest: ARTIFACT,
+      ...header(controller.projection.revision, 'attempt-noplan'), ...attemptInputs(new FakeClock()), sourceDigest: SOURCE, artifactDigest: ARTIFACT,
       sideEffect: async () => { throw new Error('side effect must never run') },
     }))
     expect(error.code).toBe('SELF_DEV_INVALID_STATE')
@@ -298,7 +298,7 @@ describe('journal faults during an attempt', () => {
     const { controller, revision } = await openReadyOn(journal)
     failAppend()
     const error = await rejectionOf(controller.startAttempt({
-      ...header(revision, 'attempt-disk'), sourceDigest: SOURCE, artifactDigest: ARTIFACT,
+      ...header(revision, 'attempt-disk'), ...attemptInputs(new FakeClock()), sourceDigest: SOURCE, artifactDigest: ARTIFACT,
       sideEffect: async () => { throw new Error('side effect must never run') },
     }))
     expect(error.code).toBe('SELF_DEV_JOURNAL_UNAVAILABLE')
@@ -315,7 +315,7 @@ describe('journal faults during an attempt', () => {
     const { controller, revision } = await openReadyOn(journal)
     failProjectionOnce()
     const error = await rejectionOf(controller.startAttempt({
-      ...header(revision, 'attempt-projection'), sourceDigest: SOURCE, artifactDigest: ARTIFACT,
+      ...header(revision, 'attempt-projection'), ...attemptInputs(new FakeClock()), sourceDigest: SOURCE, artifactDigest: ARTIFACT,
       sideEffect: async attempt => passingResult(attempt),
     }))
     expect(error.message).toBe('synthetic projection write failure')
@@ -330,10 +330,10 @@ describe('journal faults during an attempt', () => {
 describe('attempt settlement', () => {
   it('rethrows a SelfDevelopmentError from the side effect unchanged and records its message as the failure reason', async () => {
     const { dir, clock } = await makeTaskDir()
-    const { controller, revision } = await openReadyTask(dir, clock, BUDGET_TWO_ROUNDS, fullCapabilitySource)
+    const { controller, revision } = await openReadyTask(dir, clock, BUDGET_TWO_ROUNDS)
     const failure = new SelfDevelopmentError('verifier rejected the artifact', 'SELF_DEV_INVALID_RESULT')
     const rejection = controller.startAttempt({
-      ...header(revision, 'attempt-selfdev'), sourceDigest: SOURCE, artifactDigest: ARTIFACT,
+      ...header(revision, 'attempt-selfdev'), ...attemptInputs(clock), sourceDigest: SOURCE, artifactDigest: ARTIFACT,
       sideEffect: async () => { throw failure },
     })
     const error = await rejectionOf(rejection)
@@ -347,9 +347,9 @@ describe('attempt settlement', () => {
 
   it('wraps a non-Error rejection in SELF_DEV_INVALID_RESULT and records its string form', async () => {
     const { dir, clock } = await makeTaskDir()
-    const { controller, revision } = await openReadyTask(dir, clock, BUDGET_TWO_ROUNDS, fullCapabilitySource)
+    const { controller, revision } = await openReadyTask(dir, clock, BUDGET_TWO_ROUNDS)
     const rejection = controller.startAttempt({
-      ...header(revision, 'attempt-nonerror'), sourceDigest: SOURCE, artifactDigest: ARTIFACT,
+      ...header(revision, 'attempt-nonerror'), ...attemptInputs(clock), sourceDigest: SOURCE, artifactDigest: ARTIFACT,
       sideEffect: async () => { throw 'boom' },
     })
     const error = await rejectionOf(rejection)
@@ -363,9 +363,9 @@ describe('attempt settlement', () => {
 
   it('raises a clock-uncertain handoff when a failed attempt spanned a boot session', async () => {
     const { dir, clock } = await makeTaskDir()
-    const { controller, revision } = await openReadyTask(dir, clock, BUDGET_TWO_ROUNDS, fullCapabilitySource)
+    const { controller, revision } = await openReadyTask(dir, clock, BUDGET_TWO_ROUNDS)
     const rejection = controller.startAttempt({
-      ...header(revision, 'attempt-reboot-fail'), sourceDigest: SOURCE, artifactDigest: ARTIFACT,
+      ...header(revision, 'attempt-reboot-fail'), ...attemptInputs(clock), sourceDigest: SOURCE, artifactDigest: ARTIFACT,
       sideEffect: async () => {
         clock.reboot()
         throw new Error('runner crashed mid-round')
@@ -382,9 +382,9 @@ describe('attempt settlement', () => {
 
   it('raises a clock-uncertain handoff after recording a pass whose attempt spanned a boot session', async () => {
     const { dir, clock } = await makeTaskDir()
-    const { controller, revision } = await openReadyTask(dir, clock, BUDGET_TWO_ROUNDS, fullCapabilitySource)
+    const { controller, revision } = await openReadyTask(dir, clock, BUDGET_TWO_ROUNDS)
     await controller.startAttempt({
-      ...header(revision, 'attempt-reboot-pass'), sourceDigest: SOURCE, artifactDigest: ARTIFACT,
+      ...header(revision, 'attempt-reboot-pass'), ...attemptInputs(clock), sourceDigest: SOURCE, artifactDigest: ARTIFACT,
       sideEffect: async (attempt) => {
         clock.reboot()
         return passingResult(attempt)

@@ -15,7 +15,7 @@ import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import SelfDevelopmentTasks from '../src/index.ts'
 import { SelfDevOperationId, SelfDevTaskId } from '../src/runtime.ts'
-import { BUDGET_ONE_ROUND, FakeClock, SOURCE, ARTIFACT, TASK_ID, SPEC, PLAN, DRAFT, fullCapabilitySource, header, passingResult } from './helpers.ts'
+import { attemptInputs, BUDGET_ONE_ROUND, FakeClock, SOURCE, ARTIFACT, TASK_ID, SPEC, PLAN, DRAFT, header, passingResult } from './helpers.ts'
 import type { SelfDevelopmentTaskController } from '../src/controller.ts'
 
 let root: string | undefined
@@ -88,15 +88,15 @@ describe('service lifecycle', () => {
   it('drives one full task through the service and caches the controller', async () => {
     const { service } = await makeService()
     const clock = new FakeClock()
-    const controller = await service.open(TASK_ID, clock, fullCapabilitySource)
-    expect(await service.open(TASK_ID, clock, fullCapabilitySource)).toBe(controller)
+    const controller = await service.open(TASK_ID, clock)
+    expect(await service.open(TASK_ID, clock)).toBe(controller)
     await controller.createTask({ ...header(0, 'create'), spec: SPEC })
     await controller.authorizePlanning({ ...header(1, 'authorize'), authorizedBy: 'user' })
     await controller.submitPlanDraft({ ...header(2, 'draft'), draft: DRAFT })
     await controller.confirmPlan({ ...header(3, 'confirm'), plan: PLAN })
     await controller.approveBudget({ ...header(4, 'budget'), approval: BUDGET_ONE_ROUND })
     await controller.startAttempt({
-      ...header(5, 'attempt'), sourceDigest: SOURCE, artifactDigest: ARTIFACT,
+      ...header(5, 'attempt'), ...attemptInputs(clock), sourceDigest: SOURCE, artifactDigest: ARTIFACT,
       sideEffect: async attempt => passingResult(attempt),
     })
     const state = await service.state(TASK_ID, clock)
@@ -137,7 +137,7 @@ describe('Loader composition smoke', () => {
     await context.loader.await()
     const service = context.selfDevelopmentTasks
     expect(service).toBeInstanceOf(SelfDevelopmentTasks)
-    const controller: SelfDevelopmentTaskController = await service.open('loader-task', new FakeClock(), fullCapabilitySource)
+    const controller: SelfDevelopmentTaskController = await service.open('loader-task', new FakeClock())
     await controller.createTask({
       taskId: SelfDevTaskId('loader-task'), expectedRevision: 0, operationId: SelfDevOperationId('create'), spec: { ...SPEC, taskId: 'loader-task' },
     })

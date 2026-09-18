@@ -1,16 +1,37 @@
 /**
- * Capability evidence source tests: the two named source kinds, the bumped
- * journal schema, per-item source validation, the attempt's recorded
- * aggregate source, and refusal of journals written by older schema versions.
+ * Capability evidence tests: the two named source kinds, the bumped journal
+ * schema, per-item source validation, refusal of journals written by older
+ * schema versions, and the per-attempt evidence contract — every `startAttempt`
+ * request supplies its own clock and evidence source, and the service caches
+ * neither.
  * @module capability-source
  */
 
-import { readFile, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
+import { Context } from '@deepseek-ai/cordis'
 import { CAPABILITY_SOURCE_KINDS, TASK_JOURNAL_SCHEMA_VERSION, CapabilityDigest } from '../src/runtime.ts'
 import { TaskJournal } from '../src/journal.ts'
-import { ARTIFACT, SOURCE, fullCapabilitySource, header, makeTaskDir, openReadyTask, passingResult } from './helpers.ts'
+import SelfDevelopmentTasks from '../src/index.ts'
+import {
+  ARTIFACT,
+  BUDGET_ONE_ROUND,
+  DRAFT,
+  FakeClock,
+  PLAN,
+  SPEC,
+  SOURCE,
+  TASK_ID,
+  attemptInputs,
+  capabilityEvidence,
+  fullCapabilitySource,
+  header,
+  makeTaskDir,
+  openReadyTask,
+  passingResult,
+} from './helpers.ts'
 import type { Attempt, CapabilitySource } from '../src/types.ts'
 
 /** Last journal record parsed from disk. */
@@ -39,9 +60,10 @@ describe('capability source kinds', () => {
 
   it('refuses evidence that declares no valid source', async () => {
     const { dir, clock } = await makeTaskDir()
-    const { controller, revision } = await openReadyTask(dir, clock, undefined, sourcelessEvidence)
+    const { controller, revision } = await openReadyTask(dir, clock)
     await expect(controller.startAttempt({
       ...header(revision, 'attempt-sourceless'),
+      ...attemptInputs(clock, sourcelessEvidence),
       sourceDigest: SOURCE,
       artifactDigest: ARTIFACT,
       sideEffect: async () => { throw new Error('side effect must not run') },
@@ -54,9 +76,10 @@ describe('capability source kinds', () => {
 
   it('refuses evidence whose source is outside the known kinds', async () => {
     const { dir, clock } = await makeTaskDir()
-    const { controller, revision } = await openReadyTask(dir, clock, undefined, unknownSourceEvidence)
+    const { controller, revision } = await openReadyTask(dir, clock)
     await expect(controller.startAttempt({
       ...header(revision, 'attempt-unknown-source'),
+      ...attemptInputs(clock, unknownSourceEvidence),
       sourceDigest: SOURCE,
       artifactDigest: ARTIFACT,
       sideEffect: async () => { throw new Error('side effect must not run') },
@@ -72,10 +95,11 @@ describe('capability source kinds', () => {
         digest: CapabilityDigest('d'.repeat(64)),
       })),
     }
-    const { controller, revision } = await openReadyTask(dir, clock, undefined, humanSource)
+    const { controller, revision } = await openReadyTask(dir, clock)
     let observed: Attempt | undefined
     await controller.startAttempt({
       ...header(revision, 'attempt-human'),
+      ...attemptInputs(clock, humanSource),
       sourceDigest: SOURCE,
       artifactDigest: ARTIFACT,
       sideEffect: async (attempt) => {
@@ -93,10 +117,11 @@ describe('capability source kinds', () => {
 
   it('records machine when every item is machine evidence', async () => {
     const { dir, clock } = await makeTaskDir()
-    const { controller, revision } = await openReadyTask(dir, clock, undefined, fullCapabilitySource)
+    const { controller, revision } = await openReadyTask(dir, clock)
     let observed: Attempt | undefined
     await controller.startAttempt({
       ...header(revision, 'attempt-machine'),
+      ...attemptInputs(clock),
       sourceDigest: SOURCE,
       artifactDigest: ARTIFACT,
       sideEffect: async (attempt) => {
@@ -134,5 +159,148 @@ describe('capability source kinds', () => {
     const rejection = await TaskJournal.open(dir, options).then(() => null, (error: unknown) => error)
     expect((rejection as { code?: string }).code).toBe('SELF_DEV_JOURNAL_UNAVAILABLE')
     expect((rejection as { message?: string }).message).toMatch(/carries unknown schemaVersion/u)
+  })
+})
+
+describe('per-attempt evidence and clock', () => {
+  let root: string | undefined
+
+  afterEach(async () => {
+    if (root !== undefined) await rm(root, { recursive: true, force: true })
+    root = undefined
+  })
+
+  /** Build the service against a fresh absolute control directory. */
+  async function makeService(): Promise<SelfDevelopmentTasks> {
+    root = await mkdtemp(join(tmpdir(), 'self-dev-capability-'))
+    return new SelfDevelopmentTasks(new Context(), {
+      controlDirectory: join(root, 'control'),
+      maxRecordsPerSegment: 64,
+      checkpointInterval: 4,
+    })
+  }
+
+  it('records each round with the evidence source its own attempt supplied', async () => {
+    const { dir, clock } = await makeTaskDir()
+    const humanSource: CapabilitySource = {
+      evidence: names => names.map(capability => ({
+        capability,
+        source: 'human-presence' as const,
+        digest: CapabilityDigest('d'.repeat(64)),
+      })),
+    }
+    const { controller, revision } = await openReadyTask(dir, clock, { ...BUDGET_ONE_ROUND, maxRounds: 2 })
+    await expect(controller.startAttempt({
+      ...header(revision, 'attempt-round-1'),
+      ...attemptInputs(clock, fullCapabilitySource),
+      sourceDigest: SOURCE,
+      artifactDigest: ARTIFACT,
+      sideEffect: async () => { throw new Error('first build failed') },
+    })).rejects.toMatchObject({ code: 'SELF_DEV_INVALID_RESULT' })
+    await controller.startAttempt({
+      ...header(controller.projection.revision, 'attempt-round-2'),
+      ...attemptInputs(clock, humanSource),
+      sourceDigest: SOURCE,
+      artifactDigest: ARTIFACT,
+      sideEffect: async attempt => passingResult(attempt),
+    })
+    expect(controller.projection.status).toBe('awaiting-trial')
+    const line = await readFile(join(dir, 'events.00000001.jsonl'), 'utf8')
+    const started = records(line).filter(record => record.event.type === 'attempt/started')
+    expect(started.map(record => record.event.attempt?.capabilitySource)).toEqual(['machine', 'human-presence'])
+    expect(started[0]?.event.attempt?.capabilityDigest).not.toBe(started[1]?.event.attempt?.capabilityDigest)
+  })
+
+  it('drives one task through the service with evidence supplied only at startAttempt', async () => {
+    const service = await makeService()
+    const clock = new FakeClock()
+    // state() before open() must not swallow the later attempt's evidence.
+    expect(await service.state(TASK_ID, clock)).toMatchObject({ status: 'draft' })
+    const controller = await service.open(TASK_ID, clock)
+    await controller.createTask({ ...header(0, 'create'), spec: SPEC })
+    await controller.authorizePlanning({ ...header(1, 'authorize'), authorizedBy: 'user' })
+    await controller.submitPlanDraft({ ...header(2, 'draft'), draft: DRAFT })
+    await controller.confirmPlan({ ...header(3, 'confirm'), plan: PLAN })
+    await controller.approveBudget({ ...header(4, 'budget'), approval: BUDGET_ONE_ROUND })
+    await controller.startAttempt({
+      ...header(5, 'attempt'),
+      ...attemptInputs(clock, fullCapabilitySource),
+      sourceDigest: SOURCE,
+      artifactDigest: ARTIFACT,
+      sideEffect: async attempt => passingResult(attempt),
+    })
+    expect(controller.projection.status).toBe('awaiting-trial')
+  })
+
+  it.each([
+    ['absent', undefined],
+    ['null', null],
+    ['not a source object', { evidence: 1 }],
+  ])('refuses an attempt whose capability source is %s and commits nothing', async (_name, missing) => {
+    const { dir, clock } = await makeTaskDir()
+    const { controller, revision } = await openReadyTask(dir, clock)
+    const before = controller.projection.revision
+    let sideEffectRan = false
+    const request = {
+      ...header(revision, 'attempt-missing-source'),
+      clock,
+      capabilitySource: missing,
+      sourceDigest: SOURCE,
+      artifactDigest: ARTIFACT,
+      sideEffect: async () => {
+        sideEffectRan = true
+        return null
+      },
+    } as unknown as Parameters<typeof controller.startAttempt>[0]
+    await expect(controller.startAttempt(request)).rejects.toMatchObject({ code: 'SELF_DEV_CAPABILITY_MISSING' })
+    expect(controller.projection.revision).toBe(before)
+    expect(sideEffectRan).toBe(false)
+  })
+
+  it('replays a committed start with a different evidence source instance and runs the side effect once', async () => {
+    const { dir, clock } = await makeTaskDir()
+    const { controller, revision } = await openReadyTask(dir, clock)
+    let sideEffectCalls = 0
+    const request = {
+      ...header(revision, 'attempt-replay'),
+      ...attemptInputs(clock, fullCapabilitySource),
+      sourceDigest: SOURCE,
+      artifactDigest: ARTIFACT,
+      sideEffect: async (attempt: Attempt) => {
+        sideEffectCalls += 1
+        return passingResult(attempt)
+      },
+    }
+    const first = await controller.startAttempt(request)
+    const freshSource: CapabilitySource = { evidence: () => capabilityEvidence }
+    const replay = await controller.startAttempt({
+      ...request,
+      ...attemptInputs(clock, freshSource),
+      expectedRevision: controller.projection.revision,
+    })
+    expect(replay).toMatchObject({ replayed: true, revision: first.revision })
+    expect(sideEffectCalls).toBe(1)
+    expect(controller.projection.status).toBe('awaiting-trial')
+  })
+
+  it('settles the attempt with the request clock, not the clock the controller opened with', async () => {
+    const { dir, clock: recoveryClock } = await makeTaskDir()
+    const attemptClock = new FakeClock()
+    const { controller, revision } = await openReadyTask(dir, recoveryClock)
+    await controller.startAttempt({
+      ...header(revision, 'attempt-two-clocks'),
+      ...attemptInputs(attemptClock, fullCapabilitySource),
+      sourceDigest: SOURCE,
+      artifactDigest: ARTIFACT,
+      sideEffect: async (attempt) => {
+        attemptClock.advance(250)
+        return passingResult(attempt)
+      },
+    })
+    const line = await readFile(join(dir, 'events.00000001.jsonl'), 'utf8')
+    const passed = records(line).find(record => record.event.type === 'task/passed')
+    expect(passed?.event).toMatchObject({ type: 'task/passed', elapsedMs: 250 })
+    // The recovery clock never advanced: it plays no role in a new attempt.
+    expect(recoveryClock.observe()).toEqual({ bootId: 'boot-1', monotonicMs: 1000 })
   })
 })

@@ -30,7 +30,7 @@ import {
   TASK_ID,
   TESTED_ARTIFACT,
   TESTED_SOURCE,
-  fullCapabilitySource,
+  attemptInputs,
   header,
   makeTaskDir,
   openReadyTask,
@@ -89,9 +89,10 @@ function makeAttempt(planDigest: TestPlanDigest): Attempt {
 describe('tested-content binding', () => {
   it('passes a report whose tested digests differ from the launch-input digests', async () => {
     const { dir, clock } = await makeTaskDir()
-    const { controller, revision } = await openReadyTask(dir, clock, BUDGET_ONE_ROUND, fullCapabilitySource)
+    const { controller, revision } = await openReadyTask(dir, clock, BUDGET_ONE_ROUND)
     await controller.startAttempt({
       ...header(revision, 'attempt-tested'),
+      ...attemptInputs(clock),
       sourceDigest: SOURCE,
       artifactDigest: ARTIFACT,
       sideEffect: async (attempt) => {
@@ -123,10 +124,11 @@ describe('tested-content binding', () => {
 
   it('binds the manual trial approval to the digest over the exact reported content', async () => {
     const { dir, clock } = await makeTaskDir()
-    const { controller, revision } = await openReadyTask(dir, clock, BUDGET_ONE_ROUND, fullCapabilitySource)
+    const { controller, revision } = await openReadyTask(dir, clock, BUDGET_ONE_ROUND)
     let reported: Record<string, unknown> | undefined
     await controller.startAttempt({
       ...header(revision, 'attempt-trial'),
+      ...attemptInputs(clock),
       sourceDigest: SOURCE,
       artifactDigest: ARTIFACT,
       sideEffect: async (attempt) => {
@@ -148,11 +150,12 @@ describe('tested-content binding', () => {
 
   it('rejects a report missing a tested-content digest before any task/passed', async () => {
     const { dir, clock } = await makeTaskDir()
-    const { controller } = await openReadyTask(dir, clock, { ...BUDGET_ONE_ROUND, maxRounds: 3 }, fullCapabilitySource)
+    const { controller } = await openReadyTask(dir, clock, { ...BUDGET_ONE_ROUND, maxRounds: 3 })
     const fields = ['testedSourceDigest', 'testedArtifactDigest', 'acceptanceDefinitionDigest'] as const
     for (const [index, field] of fields.entries()) {
       const rejection = controller.startAttempt({
         ...header(controller.projection.revision, `attempt-missing-${field}`),
+        ...attemptInputs(clock),
         sourceDigest: SOURCE,
         artifactDigest: ARTIFACT,
         sideEffect: async attempt => omit(passingResult(attempt), field),
@@ -172,9 +175,10 @@ describe('tested-content binding', () => {
     [field, 'a non-hex digest', `x${'e'.repeat(63)}`],
   ] as const))('rejects a report whose %s is %s', async (field, _name, damaged) => {
     const { dir, clock } = await makeTaskDir()
-    const { controller, revision } = await openReadyTask(dir, clock, { ...BUDGET_ONE_ROUND, maxRounds: 2 }, fullCapabilitySource)
+    const { controller, revision } = await openReadyTask(dir, clock, { ...BUDGET_ONE_ROUND, maxRounds: 2 })
     await expect(controller.startAttempt({
       ...header(revision, 'attempt-damaged'),
+      ...attemptInputs(clock),
       sourceDigest: SOURCE,
       artifactDigest: ARTIFACT,
       sideEffect: async attempt => resultWith(attempt, { [field]: damaged }),

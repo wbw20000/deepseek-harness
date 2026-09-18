@@ -147,19 +147,19 @@ Source: [`packages/workflow/workflow-self-development-runner/src/index.ts`](../.
 
 ### `ctx.selfDevelopmentTasks` — `SelfDevelopmentTasks`
 
-Cordis service holding the per-task controllers.
+Cordis service holding the per-task controllers. The service caches no evidence source.
 
 ```ts cordis-catalog
 /**
  * Open (or resume) one task's controller against its private journal.
  * Repeated calls return the same controller.
  * @param taskId - task identity naming the journal directory.
- * @param clock - trusted clock observation source supplied by the host.
- * @param capabilitySource - capability evidence source; absence rejects attempt launches.
+ * @param clock - trusted clock observation source supplied by the host, used
+ *   only to mark an attempt left in flight by a previous process as interrupted.
  * @returns the task controller.
  * @throws SelfDevelopmentError with `SELF_DEV_JOURNAL_UNAVAILABLE` when the journal failed verification; the caller must expose handoff.
  */
-async open(taskId: string, clock: TrustedClock, capabilitySource?: CapabilitySource): Promise<SelfDevelopmentTaskController>
+async open(taskId: string, clock: TrustedClock): Promise<SelfDevelopmentTaskController>
 
 /**
  * Read a task's projection without the caller needing a controller.
