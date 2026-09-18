@@ -111,15 +111,17 @@ export function header(revision: number, operationId: string): OperationHeader {
   return { taskId: TASK_ID, expectedRevision: revision, operationId: SelfDevOperationId(operationId) }
 }
 
-/** Open a controller and drive the standard task to `ready` status. */
+/**
+ * Open a controller and drive the standard task to `ready` status. The
+ * controller holds no evidence source: every attempt request carries its own.
+ */
 export async function openReadyTask(
   dir: string,
   clock: FakeClock,
   budget: Record<string, unknown> = BUDGET_ONE_ROUND,
-  capabilitySource?: Parameters<typeof SelfDevelopmentTaskController.open>[0]['capabilitySource'],
 ): Promise<{ controller: SelfDevelopmentTaskController; revision: number }> {
   const journal = await TaskJournal.open(dir, { maxRecordsPerSegment: 64, checkpointInterval: 4 })
-  const controller = await SelfDevelopmentTaskController.open({ taskId: TASK_ID, journal, clock, capabilitySource })
+  const controller = await SelfDevelopmentTaskController.open({ taskId: TASK_ID, journal, clock })
   let revision = 0
   await controller.createTask({ ...header(revision, 'create'), spec: SPEC })
   revision = 1
@@ -171,4 +173,17 @@ export const capabilityEvidence = [
 /** Capability source covering every required capability. */
 export const fullCapabilitySource: CapabilitySource = {
   evidence: () => capabilityEvidence,
+}
+
+/**
+ * The launch inputs every `startAttempt` request must carry: the attempt's own
+ * clock for start and settlement observation, and the evidence source for this
+ * attempt. Spreading this into a request replaces the controller-level fields
+ * the old interface cached at open time.
+ */
+export function attemptInputs(
+  clock: FakeClock,
+  capabilitySource: CapabilitySource = fullCapabilitySource,
+): { clock: FakeClock; capabilitySource: CapabilitySource } {
+  return { clock, capabilitySource }
 }

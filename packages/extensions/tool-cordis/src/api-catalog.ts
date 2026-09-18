@@ -1673,12 +1673,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
   {
     key: 'selfDevelopmentTasks',
     summary: 'Cordis service holding the per-task controllers.',
-    description: 'Cordis service holding the per-task controllers.',
+    description: 'Cordis service holding the per-task controllers. The service caches no evidence source.',
     methods: [
       {
-        signature: 'async open(taskId: string, clock: TrustedClock, capabilitySource?: CapabilitySource): Promise<SelfDevelopmentTaskController>',
+        signature: 'async open(taskId: string, clock: TrustedClock): Promise<SelfDevelopmentTaskController>',
         description: 'Open (or resume) one task\'s controller against its private journal. Repeated calls return the same controller.',
-        parameters: [{ name: 'taskId', description: 'task identity naming the journal directory.' }, { name: 'clock', description: 'trusted clock observation source supplied by the host.' }, { name: 'capabilitySource', description: 'capability evidence source; absence rejects attempt launches.' }],
+        parameters: [{ name: 'taskId', description: 'task identity naming the journal directory.' }, { name: 'clock', description: 'trusted clock observation source supplied by the host, used only to mark an attempt left in flight by a previous process as interrupted.' }],
         returns: 'the task controller.',
         throws: ['SelfDevelopmentError with `SELF_DEV_JOURNAL_UNAVAILABLE` when the journal failed verification; the caller must expose handoff.'],
       },
@@ -4495,7 +4495,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ControllerRequests',
-    declaration: 'export interface ControllerRequests {\n    createTask: {\n        readonly spec: unknown;\n    };\n    authorizePlanning: {\n        readonly authorizedBy: string;\n    };\n    submitPlanDraft: {\n        readonly draft: unknown;\n    };\n    confirmPlan: {\n        readonly plan: unknown;\n    };\n    approveBudget: {\n        readonly approval: unknown;\n    };\n    startAttempt: {\n        readonly sourceDigest: string;\n        readonly artifactDigest: string;\n        readonly sideEffect: (attempt: Attempt, signal: AbortSignal) => Promise<unknown>;\n        readonly signal?: AbortSignal;\n    };\n    stop: {\n        readonly reason?: \'cancelled\';\n    };\n    recordTrialApproval: {\n        readonly approvedBy: string;\n    };\n}',
+    declaration: 'export interface ControllerRequests {\n    createTask: {\n        readonly spec: unknown;\n    };\n    authorizePlanning: {\n        readonly authorizedBy: string;\n    };\n    submitPlanDraft: {\n        readonly draft: unknown;\n    };\n    confirmPlan: {\n        readonly plan: unknown;\n    };\n    approveBudget: {\n        readonly approval: unknown;\n    };\n    startAttempt: {\n        readonly sourceDigest: string;\n        readonly artifactDigest: string;\n        readonly clock: TrustedClock;\n        readonly capabilitySource: CapabilitySource;\n        readonly sideEffect: (attempt: Attempt, signal: AbortSignal) => Promise<unknown>;\n        readonly signal?: AbortSignal;\n    };\n    stop: {\n        readonly reason?: \'cancelled\';\n    };\n    recordTrialApproval: {\n        readonly approvedBy: string;\n    };\n}',
   },
   {
     name: 'CordisDynamicPackageId',
@@ -5771,7 +5771,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SelfDevelopmentTaskController',
-    declaration: 'export class SelfDevelopmentTaskController {\n    static async open(params: {\n        taskId: string;\n        journal: TaskJournal;\n        clock: TrustedClock;\n        capabilitySource: CapabilitySource | undefined;\n    }): Promise<SelfDevelopmentTaskController>;\n    get projection(): TaskProjection;\n    get spec(): TaskSpec | undefined;\n    get plan(): FrozenTestPlan | undefined;\n    #enqueue<T>(body: () => Promise<T>): Promise<T>;\n    async #execute<T>(method: string, request: OperationHeader & object, body: (header: ParsedOperationHeader, payloadDigest: string) => Promise<T>): Promise<T>;\n    #assertJournalIntact(): void;\n    #assertNotHandoff(): void;\n    createTask(request: OperationHeader & ControllerRequests[\'createTask\']): Promise<TaskOperationResult>;\n    authorizePlanning(request: OperationHeader & ControllerRequests[\'authorizePlanning\']): Promise<TaskOperationResult>;\n    submitPlanDraft(request: OperationHeader & ControllerRequests[\'submitPlanDraft\']): Promise<TaskOperationResult>;\n    confirmPlan(request: OperationHeader & ControllerRequests[\'confirmPlan\']): Promise<TaskOperationResult>;\n    approveBudget(request: OperationHeader & ControllerRequests[\'approveBudget\']): Promise<TaskOperationResult>;\n    startAttempt(request: OperationHeader & ControllerRequests[\'startAttempt\']): Promise<TaskOperationResult>;\n    async #beginAttempt(header: ParsedOperationHeader, payloadDigest: string, externalSignal: AbortSignal | undefined, request: OperationHeader & ControllerRe /* …truncated — full shape in source */',
+    declaration: 'export class SelfDevelopmentTaskController {\n    static async open(params: {\n        taskId: string;\n        journal: TaskJournal;\n        clock: TrustedClock;\n    }): Promise<SelfDevelopmentTaskController>;\n    get projection(): TaskProjection;\n    get spec(): TaskSpec | undefined;\n    get plan(): FrozenTestPlan | undefined;\n    #enqueue<T>(body: () => Promise<T>): Promise<T>;\n    async #execute<T>(method: string, request: OperationHeader & object, body: (header: ParsedOperationHeader, payloadDigest: string) => Promise<T>): Promise<T>;\n    #assertJournalIntact(): void;\n    #assertNotHandoff(): void;\n    createTask(request: OperationHeader & ControllerRequests[\'createTask\']): Promise<TaskOperationResult>;\n    authorizePlanning(request: OperationHeader & ControllerRequests[\'authorizePlanning\']): Promise<TaskOperationResult>;\n    submitPlanDraft(request: OperationHeader & ControllerRequests[\'submitPlanDraft\']): Promise<TaskOperationResult>;\n    confirmPlan(request: OperationHeader & ControllerRequests[\'confirmPlan\']): Promise<TaskOperationResult>;\n    approveBudget(request: OperationHeader & ControllerRequests[\'approveBudget\']): Promise<TaskOperationResult>;\n    startAttempt(request: OperationHeader & ControllerRequests[\'startAttempt\']): Promise<TaskOperationResult>;\n    async #beginAttempt(header: ParsedOperationHeader, payloadDigest: string, externalSignal: AbortSignal | undefined, request: OperationHeader & ControllerRequests[\'startAttempt\']): Promise<AttemptLaunch>;\n    asy /* …truncated — full shape in source */',
   },
   {
     name: 'SelfDevOperationId',

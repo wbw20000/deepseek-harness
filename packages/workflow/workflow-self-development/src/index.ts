@@ -1,9 +1,10 @@
 /**
  * Opt-in service exposing the self-development task-control foundation. The
- * service owns one configured private control directory, caches one
- * controller per task, and hands the trusted clock and capability evidence
- * source to every open call. It performs no development work itself: the
- * worker, verifier, and release integration are later consumers.
+ * service owns one configured private control directory and caches one
+ * controller per task. It holds no capability evidence source: every
+ * `startAttempt` request supplies the attempt's own evidence source and clock.
+ * It performs no development work itself: the worker, verifier, and release
+ * integration are later consumers.
  * @module @deepseek-ai/dsh-workflow-self-development
  */
 
@@ -13,7 +14,7 @@ import z from '@deepseek-ai/schemastery'
 import { SelfDevelopmentTaskController } from './controller.ts'
 import { SelfDevelopmentError, validateTaskId } from './runtime.ts'
 import { TaskJournal } from './journal.ts'
-import type { CapabilitySource, TaskProjection, TrustedClock } from './types.ts'
+import type { TaskProjection, TrustedClock } from './types.ts'
 
 export { SelfDevelopmentTaskController } from './controller.ts'
 export { TaskJournal } from './journal.ts'
@@ -89,7 +90,7 @@ export interface Config {
   checkpointInterval: number
 }
 
-/** Cordis service holding the per-task controllers. */
+/** Cordis service holding the per-task controllers. The service caches no evidence source. */
 export class SelfDevelopmentTasks extends Service {
   static inject = []
 
@@ -123,12 +124,12 @@ export class SelfDevelopmentTasks extends Service {
    * Open (or resume) one task's controller against its private journal.
    * Repeated calls return the same controller.
    * @param taskId - task identity naming the journal directory.
-   * @param clock - trusted clock observation source supplied by the host.
-   * @param capabilitySource - capability evidence source; absence rejects attempt launches.
+   * @param clock - trusted clock observation source supplied by the host, used
+   *   only to mark an attempt left in flight by a previous process as interrupted.
    * @returns the task controller.
    * @throws SelfDevelopmentError with `SELF_DEV_JOURNAL_UNAVAILABLE` when the journal failed verification; the caller must expose handoff.
    */
-  async open(taskId: string, clock: TrustedClock, capabilitySource?: CapabilitySource): Promise<SelfDevelopmentTaskController> {
+  async open(taskId: string, clock: TrustedClock): Promise<SelfDevelopmentTaskController> {
     // The id becomes a path component; validate it before any join or mkdir.
     // Rethrowing from the async method keeps every caller on the same await
     // path.
@@ -146,7 +147,7 @@ export class SelfDevelopmentTasks extends Service {
         maxRecordsPerSegment: this.resolved.maxRecordsPerSegment,
         checkpointInterval: this.resolved.checkpointInterval,
       })
-      return SelfDevelopmentTaskController.open({ taskId, journal, clock, capabilitySource })
+      return SelfDevelopmentTaskController.open({ taskId, journal, clock })
     })().catch((error: unknown) => {
       // A refused journal stays refused until a human resolves it; drop the
       // cached promise so a later open re-verifies the files as they are.

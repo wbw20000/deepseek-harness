@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { BUDGET_ONE_ROUND, DRAFT, SPEC, fullCapabilitySource, header, makeTaskDir, openReadyTask } from './helpers.ts'
+import { attemptInputs, BUDGET_ONE_ROUND, DRAFT, SPEC, header, makeTaskDir, openReadyTask } from './helpers.ts'
 
 describe('budget validation', () => {
   it('rejects a budget with neither rounds nor time', async () => {
@@ -70,7 +70,7 @@ describe('approval ordering', () => {
     const { dir, clock } = await makeTaskDir()
     const journal = await (await import('../src/journal.ts')).TaskJournal.open(dir, { maxRecordsPerSegment: 64, checkpointInterval: 4 })
     const { SelfDevelopmentTaskController } = await import('../src/controller.ts')
-    const controller = await SelfDevelopmentTaskController.open({ taskId: 'task-1', journal, clock, capabilitySource: fullCapabilitySource })
+    const controller = await SelfDevelopmentTaskController.open({ taskId: 'task-1', journal, clock })
     await controller.createTask({ ...header(0, 'create'), spec: SPEC })
     const rejection = controller.submitPlanDraft({ ...header(1, 'draft-early'), draft: DRAFT })
     await expect(rejection).rejects.toMatchObject({ code: 'SELF_DEV_INVALID_STATE' })
@@ -79,15 +79,19 @@ describe('approval ordering', () => {
 
   it('refuses an attempt launch without capability evidence and consumes nothing', async () => {
     const { dir, clock } = await makeTaskDir()
-    const { controller, revision } = await openReadyTask(dir, clock, BUDGET_ONE_ROUND, undefined)
-    const rejection = controller.startAttempt({
+    const { controller, revision } = await openReadyTask(dir, clock, BUDGET_ONE_ROUND)
+    // The interface requires a capability source on every attempt; the
+    // assertion casts the field away to pin the runtime refusal.
+    const request = {
       ...header(revision, 'attempt-no-evidence'),
+      clock,
       sourceDigest: 'b'.repeat(64),
       artifactDigest: 'c'.repeat(64),
       sideEffect: async () => {
         throw new Error('side effect must never run')
       },
-    })
+    } as unknown as Parameters<typeof controller.startAttempt>[0]
+    const rejection = controller.startAttempt(request)
     await expect(rejection).rejects.toMatchObject({ code: 'SELF_DEV_CAPABILITY_MISSING' })
     expect(controller.projection.status).toBe('ready')
     expect(controller.projection.consumedRounds).toBe(0)
@@ -96,9 +100,10 @@ describe('approval ordering', () => {
   it('keeps consumed rounds and time across a budget revision and stops when the limit is already spent', async () => {
     const { dir, clock } = await makeTaskDir()
     const budget = { ...BUDGET_ONE_ROUND, maxRounds: 2, noProgressAttemptLimit: 99 }
-    const { controller, revision } = await openReadyTask(dir, clock, budget, fullCapabilitySource)
+    const { controller, revision } = await openReadyTask(dir, clock, budget)
     const failure = controller.startAttempt({
       ...header(revision, 'attempt-1'),
+      ...attemptInputs(clock),
       sourceDigest: 'b'.repeat(64),
       artifactDigest: 'c'.repeat(64),
       sideEffect: async () => {
@@ -119,9 +124,10 @@ describe('approval ordering', () => {
 
   it('keeps consumed rounds when a budget revision raises the limit after a failure', async () => {
     const { dir, clock } = await makeTaskDir()
-    const { controller, revision } = await openReadyTask(dir, clock, { ...BUDGET_ONE_ROUND, maxRounds: 2 }, fullCapabilitySource)
+    const { controller, revision } = await openReadyTask(dir, clock, { ...BUDGET_ONE_ROUND, maxRounds: 2 })
     const failure = controller.startAttempt({
       ...header(revision, 'attempt-1'),
+      ...attemptInputs(clock),
       sourceDigest: 'b'.repeat(64),
       artifactDigest: 'c'.repeat(64),
       sideEffect: async () => {
@@ -163,10 +169,11 @@ describe('approval ordering', () => {
 describe('fake clock isolation', () => {
   it('never reads the host clock', async () => {
     const { dir, clock } = await makeTaskDir()
-    const { controller, revision } = await openReadyTask(dir, clock, { ...BUDGET_ONE_ROUND, mode: 'both', durationMs: 1000, noProgressAttemptLimit: 5 }, fullCapabilitySource)
+    const { controller, revision } = await openReadyTask(dir, clock, { ...BUDGET_ONE_ROUND, mode: 'both', durationMs: 1000, noProgressAttemptLimit: 5 })
     const before = clock.observe()
     const failure = controller.startAttempt({
       ...header(revision, 'attempt-clock'),
+      ...attemptInputs(clock),
       sourceDigest: 'b'.repeat(64),
       artifactDigest: 'c'.repeat(64),
       sideEffect: async () => new Promise(resolve => setTimeout(resolve, 5)).then(() => {

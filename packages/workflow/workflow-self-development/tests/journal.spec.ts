@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest'
 import { TaskJournal } from '../src/journal.ts'
 import { SelfDevelopmentError, SelfDevTaskId, digestJson } from '../src/runtime.ts'
 import { SelfDevelopmentTaskController } from '../src/controller.ts'
-import { BUDGET_ONE_ROUND, SOURCE, ARTIFACT, TASK_ID, fullCapabilitySource, header, makeTaskDir, openReadyTask, passingResult } from './helpers.ts'
+import { attemptInputs, BUDGET_ONE_ROUND, SOURCE, ARTIFACT, TASK_ID, header, makeTaskDir, openReadyTask, passingResult } from './helpers.ts'
 
 const JOURNAL_OPTIONS = { maxRecordsPerSegment: 4, checkpointInterval: 2 } as const
 
@@ -48,9 +48,10 @@ async function seedReadyJournal(journal: TaskJournal, startedAt: { bootId: strin
 describe('real file journal effects', () => {
   it('stores a hash chain that an external reader can re-verify from disk', async () => {
     const { dir, clock } = await makeTaskDir()
-    const { controller, revision } = await openReadyTask(dir, clock, { ...BUDGET_ONE_ROUND, maxRounds: 2 }, fullCapabilitySource)
+    const { controller, revision } = await openReadyTask(dir, clock, { ...BUDGET_ONE_ROUND, maxRounds: 2 })
     await controller.startAttempt({
       ...header(revision, 'attempt-disk'),
+      ...attemptInputs(clock),
       sourceDigest: SOURCE,
       artifactDigest: ARTIFACT,
       sideEffect: async attempt => passingResult(attempt),
@@ -71,9 +72,10 @@ describe('real file journal effects', () => {
 
   it('rotates segments and rewrites the protected checkpoint', async () => {
     const { dir, clock } = await makeTaskDir()
-    const { controller, revision } = await openReadyTask(dir, clock, { ...BUDGET_ONE_ROUND, maxRounds: 2 }, fullCapabilitySource)
+    const { controller, revision } = await openReadyTask(dir, clock, { ...BUDGET_ONE_ROUND, maxRounds: 2 })
     await controller.startAttempt({
       ...header(revision, 'attempt-rotate'),
+      ...attemptInputs(clock),
       sourceDigest: SOURCE,
       artifactDigest: ARTIFACT,
       sideEffect: async attempt => passingResult(attempt),
@@ -91,7 +93,7 @@ describe('restart and recovery', () => {
     const { controller, revision } = await openReadyTask(dir, clock)
     await controller.stop({ ...header(revision, 'stop'), reason: 'cancelled' })
     const journal = await TaskJournal.open(dir, JOURNAL_OPTIONS)
-    const reopened = await SelfDevelopmentTaskController.open({ taskId: TASK_ID, journal, clock, capabilitySource: fullCapabilitySource })
+    const reopened = await SelfDevelopmentTaskController.open({ taskId: TASK_ID, journal, clock })
     expect(reopened.projection).toMatchObject({ status: 'stopped', stopReason: 'cancelled', revision: controller.projection.revision })
   })
 
@@ -103,7 +105,7 @@ describe('restart and recovery', () => {
     await seedReadyJournal(journal, { bootId: 'boot-1', monotonicMs: 5000 })
     clock.advance(10000)
     const reopened = await SelfDevelopmentTaskController.open({
-      taskId: TASK_ID, journal: await TaskJournal.open(dir, JOURNAL_OPTIONS), clock, capabilitySource: fullCapabilitySource,
+      taskId: TASK_ID, journal: await TaskJournal.open(dir, JOURNAL_OPTIONS), clock,
     })
     expect(reopened.projection.status).toBe('handoff')
     expect(reopened.projection.handoffReason).toBe('attempt-interrupted')
@@ -118,7 +120,7 @@ describe('restart and recovery', () => {
     clock.reboot()
     const journal = await TaskJournal.open(dir, JOURNAL_OPTIONS)
     await seedReadyJournal(journal, { bootId: 'boot-1', monotonicMs: 5000 })
-    const reopened = await SelfDevelopmentTaskController.open({ taskId: TASK_ID, journal, clock, capabilitySource: fullCapabilitySource })
+    const reopened = await SelfDevelopmentTaskController.open({ taskId: TASK_ID, journal, clock })
     expect(reopened.projection.handoffReason).toBe('clock-uncertain')
     expect(reopened.projection.timeBudgetFrozen).toBe(true)
   })

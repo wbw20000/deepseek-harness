@@ -76,6 +76,20 @@ export interface ControllerRequests {
     readonly sourceDigest: string
     readonly artifactDigest: string
     /**
+     * Trusted clock for this attempt: it observes `startedAt` and every
+     * settlement of this attempt. Each request supplies its own clock, so
+     * successive attempts never share an observation source and a clock held
+     * only for recovery never times a new attempt.
+     */
+    readonly clock: TrustedClock
+    /**
+     * Capability evidence source for this attempt. The controller caches no
+     * evidence source: a later human confirmation is expressed by a later
+     * attempt carrying a different source, and a replaying operation never
+     * re-reads the supplied instance.
+     */
+    readonly capabilitySource: CapabilitySource
+    /**
      * The side effect the host asks the controller to run for this attempt,
      * e.g. one development round performed by the future worker. The
      * controller commits `attempt/started` before invoking it and treats any
@@ -107,6 +121,8 @@ export interface ControllerRequests {
 interface AttemptLaunch {
   readonly operation: OperationCommit
   readonly attempt: Attempt
+  /** This attempt's clock; it observes every settlement, never the controller's recovery clock. */
+  readonly clock: TrustedClock
   /** Cancellation the side effect observes; aborted by `stop` or by the trusted-runner signal. */
   readonly abort: AbortController
   readonly cancelled: () => boolean
@@ -140,8 +156,12 @@ export class SelfDevelopmentTaskController {
   private constructor(
     private readonly taskId: string,
     private readonly journal: TaskJournal,
-    private readonly clock: TrustedClock,
-    private readonly capabilitySource: CapabilitySource | undefined,
+    /**
+     * Clock for recovery only: it marks an attempt left in flight by a
+     * previous process as interrupted. It never observes a new attempt —
+     * each `startAttempt` request supplies its own clock.
+     */
+    private readonly recoveryClock: TrustedClock,
     private state: TaskFoldState,
     records: readonly CommittedRecord[],
   ) {
@@ -163,8 +183,8 @@ export class SelfDevelopmentTaskController {
    * interval crossed a boot session, and rebuilds a stale projection.
    * @param params.taskId - task identity the controller owns.
    * @param params.journal - opened journal for the task.
-   * @param params.clock - trusted clock source.
-   * @param params.capabilitySource - evidence source required to launch attempts; absence rejects launching.
+   * @param params.clock - trusted clock used only to mark an attempt left in
+   *   flight by a previous process as interrupted; it never observes a new attempt.
    * @returns the ready controller.
    * @throws SelfDevelopmentError with `SELF_DEV_JOURNAL_UNAVAILABLE` when the journal failed verification; callers must expose handoff.
    */
@@ -172,7 +192,6 @@ export class SelfDevelopmentTaskController {
     taskId: string
     journal: TaskJournal
     clock: TrustedClock
-    capabilitySource: CapabilitySource | undefined
   }): Promise<SelfDevelopmentTaskController> {
     const read = await params.journal.read()
     if (read.status !== 'ok') {
@@ -184,7 +203,7 @@ export class SelfDevelopmentTaskController {
     let state = initialFoldState()
     for (const record of read.records) state = foldEvent(state, record.event)
     const controller = new SelfDevelopmentTaskController(
-      params.taskId, params.journal, params.clock, params.capabilitySource, state, read.records,
+      params.taskId, params.journal, params.clock, state, read.records,
     )
     await controller.recoverInterruptedAttempt()
     await controller.rebuildProjection()
@@ -195,7 +214,7 @@ export class SelfDevelopmentTaskController {
   private async recoverInterruptedAttempt(): Promise<void> {
     if (this.state.status !== 'attempting' || this.state.currentAttempt === undefined) return
     const attempt = this.state.currentAttempt
-    const { elapsedMs, timeAccounting } = measureAttemptTime(attempt.startedAt, this.clock.observe())
+    const { elapsedMs, timeAccounting } = measureAttemptTime(attempt.startedAt, this.recoveryClock.observe())
     await this.commit({
       type: 'attempt/failed',
       attemptId: attempt.attemptId,
@@ -500,7 +519,9 @@ export class SelfDevelopmentTaskController {
    * re-enters the serialized section. A crash after the commit consumes the
    * round exactly once, a restart never duplicates the side effect, and a
    * cancelled or superseded attempt never records a pass.
-   * @param request - operation header, source and artifact digests, the side effect, and an optional trusted-runner cancellation signal.
+   * @param request - operation header, source and artifact digests, this
+   *   attempt's clock and capability evidence source, the side effect, and an
+   *   optional trusted-runner cancellation signal.
    * @returns the operation result of the settled attempt.
    */
   startAttempt(request: OperationHeader & ControllerRequests['startAttempt']): Promise<TaskOperationResult> {
@@ -535,7 +556,7 @@ export class SelfDevelopmentTaskController {
         'SELF_DEV_INVALID_STATE',
       )
     }
-    const capability = this.#resolveCapabilityEvidence()
+    const capability = this.#resolveCapabilityEvidence(request.capabilitySource)
     const budget = checkAttemptBudget(this.state)
     if (!budget.allowed) {
       throw new SelfDevelopmentError(`attempt launch refused: ${budget.reason}`, 'SELF_DEV_BUDGET_EXHAUSTED')
@@ -544,7 +565,7 @@ export class SelfDevelopmentTaskController {
       sourceDigest: request.sourceDigest,
       artifactDigest: request.artifactDigest,
     })
-    const startedAt = this.clock.observe()
+    const startedAt = request.clock.observe()
     const attemptNumber = this.state.consumedRounds + 1
     const attempt: Attempt = deepFreeze({
       attemptId: SelfDevAttemptId(digestJson({
@@ -568,6 +589,7 @@ export class SelfDevelopmentTaskController {
     const launch: AttemptLaunch = {
       operation,
       attempt,
+      clock: request.clock,
       abort,
       cancelled: () => abort.signal.aborted,
       dispose: () => { externalSignal?.removeEventListener('abort', onExternalAbort) },
@@ -631,7 +653,7 @@ export class SelfDevelopmentTaskController {
     }
     if (launch.cancelled()) {
       await this.#recordAttemptFailure(
-        launch.operation, attempt,
+        launch,
         new SelfDevelopmentError('cancelled by the trusted runner before completion', 'SELF_DEV_ATTEMPT_CANCELLED'),
       )
       throw new SelfDevelopmentError(
@@ -640,18 +662,18 @@ export class SelfDevelopmentTaskController {
       )
     }
     if (!outcome.ok) {
-      await this.#recordAttemptFailure(launch.operation, attempt, outcome.error)
+      await this.#recordAttemptFailure(launch, outcome.error)
       throw outcome.error instanceof SelfDevelopmentError
         ? outcome.error
         : new SelfDevelopmentError(`attempt ${attempt.attemptId} failed: ${message(outcome.error)}`, 'SELF_DEV_INVALID_RESULT')
     }
     try {
-      return await this.#finishAttempt(launch.operation, attempt, outcome.result)
+      return await this.#finishAttempt(launch, outcome.result)
     } catch (error: unknown) {
       // A rejected result — late, misidentified, or incomplete — still
       // settles the attempt as a consumed failure, exactly once.
       if (attemptStillActive(this.state, attempt.attemptId)) {
-        await this.#recordAttemptFailure(launch.operation, attempt, error)
+        await this.#recordAttemptFailure(launch, error)
       }
       throw error
     }
@@ -661,16 +683,25 @@ export class SelfDevelopmentTaskController {
    * Digest the capability evidence and require every capability to be covered
    * by an item declaring a valid source kind. The attempt's aggregate source
    * is `human-presence` when any item is human-presence evidence, otherwise
-   * `machine`.
+   * `machine`. The source comes from the attempt request, never from
+   * controller state, and it is read once per serialized start: a replaying
+   * operation never re-reads a later instance.
    */
-  #resolveCapabilityEvidence(): { digest: string; source: CapabilitySourceKind } {
-    if (this.capabilitySource === undefined) {
+  #resolveCapabilityEvidence(source: CapabilitySource | undefined): { digest: string; source: CapabilitySourceKind } {
+    // The request type declares the source, but the launch refusal is part of
+    // the public interface for a malformed request, so the field is checked
+    // through `unknown` before use.
+    const candidate = source as unknown
+    if (typeof candidate !== 'object' || candidate === null
+      || typeof (candidate as CapabilitySource).evidence !== 'function') {
       throw new SelfDevelopmentError(
-        `no capability evidence source is configured; required capabilities: ${REQUIRED_ATTEMPT_CAPABILITIES.join(', ')}`,
+        'the attempt request carries no capability evidence source;'
+          + ` required capabilities: ${REQUIRED_ATTEMPT_CAPABILITIES.join(', ')}`,
         'SELF_DEV_CAPABILITY_MISSING',
       )
     }
-    const evidence = this.capabilitySource.evidence(REQUIRED_ATTEMPT_CAPABILITIES)
+    const validated = candidate as CapabilitySource
+    const evidence = validated.evidence(REQUIRED_ATTEMPT_CAPABILITIES)
     const covered = new Set(evidence.map(item => item.capability))
     const missing = REQUIRED_ATTEMPT_CAPABILITIES.filter(name => !covered.has(name))
     if (missing.length > 0) {
@@ -686,17 +717,17 @@ export class SelfDevelopmentTaskController {
         'SELF_DEV_CAPABILITY_MISSING',
       )
     }
-    const source = evidence.some(item => item.source === 'human-presence') ? 'human-presence' : 'machine'
-    return { digest: digestJson(evidence), source }
+    const aggregate = evidence.some(item => item.source === 'human-presence') ? 'human-presence' : 'machine'
+    return { digest: digestJson(evidence), source: aggregate }
   }
 
   /** Verify and commit a completed attempt result. */
   async #finishAttempt(
-    operation: OperationCommit,
-    attempt: Attempt,
+    launch: AttemptLaunch,
     rawResult: unknown,
   ): Promise<TaskOperationResult> {
-    const { elapsedMs, timeAccounting } = measureAttemptTime(attempt.startedAt, this.clock.observe())
+    const { operation, attempt, clock } = launch
+    const { elapsedMs, timeAccounting } = measureAttemptTime(attempt.startedAt, clock.observe())
     const approval = approvedBudget(this.state)
     if (approval.durationMs !== undefined && timeAccounting === 'measured'
       && this.state.consumedTimeMs + elapsedMs >= approval.durationMs) {
@@ -728,11 +759,11 @@ export class SelfDevelopmentTaskController {
 
   /** Record a failed attempt, then enforce the no-progress and budget floors. */
   async #recordAttemptFailure(
-    operation: OperationCommit,
-    attempt: Attempt,
+    launch: AttemptLaunch,
     error: unknown,
   ): Promise<void> {
-    const { elapsedMs, timeAccounting } = measureAttemptTime(attempt.startedAt, this.clock.observe())
+    const { operation, attempt, clock } = launch
+    const { elapsedMs, timeAccounting } = measureAttemptTime(attempt.startedAt, clock.observe())
     const reason = (message(error) || 'runner failed without an error message').slice(0, FAILURE_REASON_MAX_CHARS)
     await this.commit({
       type: 'attempt/failed',
@@ -831,6 +862,7 @@ function approvedBudget(state: TaskFoldState): BudgetApproval {
 /** Strip the header and the execution-only fields from an operation request, leaving the durable payload to digest. */
 function operationPayload(request: OperationHeader & object): Record<string, unknown> {
   const { taskId: _taskId, expectedRevision: _expectedRevision, operationId: _operationId,
+    clock: _clock, capabilitySource: _capabilitySource,
     sideEffect: _sideEffect, signal: _signal, ...payload } = request as OperationHeader & Record<string, unknown>
   return payload
 }

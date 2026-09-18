@@ -8,7 +8,7 @@
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { BUDGET_ONE_ROUND, SOURCE, ARTIFACT, fullCapabilitySource, header, makeTaskDir, openReadyTask, passingResult, resultWith } from './helpers.ts'
+import { attemptInputs, BUDGET_ONE_ROUND, SOURCE, ARTIFACT, header, makeTaskDir, openReadyTask, passingResult, resultWith } from './helpers.ts'
 import type { Attempt } from '../src/types.ts'
 
 /** Last journal record parsed from disk. */
@@ -24,10 +24,11 @@ function lastRecord(text: string): StoredRecord {
 describe('attempt lifecycle', () => {
   it('commits attempt/started durably before running the requested side effect', async () => {
     const { dir, clock } = await makeTaskDir()
-    const { controller, revision } = await openReadyTask(dir, clock, BUDGET_ONE_ROUND, fullCapabilitySource)
+    const { controller, revision } = await openReadyTask(dir, clock, BUDGET_ONE_ROUND)
     let journalLine = ''
     await controller.startAttempt({
       ...header(revision, 'attempt-order'),
+      ...attemptInputs(clock),
       sourceDigest: SOURCE,
       artifactDigest: ARTIFACT,
       sideEffect: async () => {
@@ -42,9 +43,10 @@ describe('attempt lifecycle', () => {
 
   it('consumes the only round on a first failed build and stops', async () => {
     const { dir, clock } = await makeTaskDir()
-    const { controller, revision } = await openReadyTask(dir, clock, BUDGET_ONE_ROUND, fullCapabilitySource)
+    const { controller, revision } = await openReadyTask(dir, clock, BUDGET_ONE_ROUND)
     const rejection = controller.startAttempt({
       ...header(revision, 'attempt-fail'),
+      ...attemptInputs(clock),
       sourceDigest: SOURCE,
       artifactDigest: ARTIFACT,
       sideEffect: async () => {
@@ -60,10 +62,11 @@ describe('attempt lifecycle', () => {
   it('stops with the time reason when the deadline passes first, rejecting the late result', async () => {
     const { dir, clock } = await makeTaskDir()
     const budget = { mode: 'both', maxRounds: 5, durationMs: 1000, phaseTimeoutMs: 500, maxStepsPerAttempt: 10, noProgressAttemptLimit: 5, testPlanVersion: 1, taskSpecVersion: 1, approvedBy: 'user' }
-    const { controller, revision } = await openReadyTask(dir, clock, budget, fullCapabilitySource)
+    const { controller, revision } = await openReadyTask(dir, clock, budget)
     let attemptSeen: Parameters<typeof passingResult>[0] | undefined
     const rejection = controller.startAttempt({
       ...header(revision, 'attempt-late'),
+      ...attemptInputs(clock),
       sourceDigest: SOURCE,
       artifactDigest: ARTIFACT,
       sideEffect: async (attempt) => {
@@ -84,9 +87,10 @@ describe('attempt lifecycle', () => {
   it('stops with the rounds reason when the round budget is spent first', async () => {
     const { dir, clock } = await makeTaskDir()
     const budget = { mode: 'both', maxRounds: 1, durationMs: 600000, phaseTimeoutMs: 500, maxStepsPerAttempt: 10, testPlanVersion: 1, taskSpecVersion: 1, approvedBy: 'user' }
-    const { controller, revision } = await openReadyTask(dir, clock, budget, fullCapabilitySource)
+    const { controller, revision } = await openReadyTask(dir, clock, budget)
     const rejection = controller.startAttempt({
       ...header(revision, 'attempt-rounds'),
+      ...attemptInputs(clock),
       sourceDigest: SOURCE,
       artifactDigest: ARTIFACT,
       sideEffect: async () => {
@@ -101,10 +105,10 @@ describe('attempt lifecycle', () => {
   it('stops with the no-progress reason when repeated attempts repeat one failure fingerprint', async () => {
     const { dir, clock } = await makeTaskDir()
     const budget = { ...BUDGET_ONE_ROUND, maxRounds: 3, noProgressAttemptLimit: 2 }
-    const { controller, revision } = await openReadyTask(dir, clock, budget, fullCapabilitySource)
-    const first = controller.startAttempt({ ...header(revision, 'a1'), sourceDigest: SOURCE, artifactDigest: ARTIFACT, sideEffect: async () => { throw new Error('same failure') } })
+    const { controller, revision } = await openReadyTask(dir, clock, budget)
+    const first = controller.startAttempt({ ...header(revision, 'a1'), ...attemptInputs(clock), sourceDigest: SOURCE, artifactDigest: ARTIFACT, sideEffect: async () => { throw new Error('same failure') } })
     await expect(first).rejects.toMatchObject({ code: 'SELF_DEV_INVALID_RESULT' })
-    const second = controller.startAttempt({ ...header(controller.projection.revision, 'a2'), sourceDigest: SOURCE, artifactDigest: ARTIFACT, sideEffect: async () => { throw new Error('same failure') } })
+    const second = controller.startAttempt({ ...header(controller.projection.revision, 'a2'), ...attemptInputs(clock), sourceDigest: SOURCE, artifactDigest: ARTIFACT, sideEffect: async () => { throw new Error('same failure') } })
     await expect(second).rejects.toMatchObject({ code: 'SELF_DEV_INVALID_RESULT' })
     expect(controller.projection.status).toBe('stopped')
     expect(controller.projection.stopReason).toBe('no-progress')
@@ -114,7 +118,7 @@ describe('attempt lifecycle', () => {
 describe('result verification', () => {
   it('rejects results bound to another attempt, source, artifact, or plan', async () => {
     const { dir, clock } = await makeTaskDir()
-    const { controller } = await openReadyTask(dir, clock, { ...BUDGET_ONE_ROUND, maxRounds: 4 }, fullCapabilitySource)
+    const { controller } = await openReadyTask(dir, clock, { ...BUDGET_ONE_ROUND, maxRounds: 4 })
     const cases: readonly [string, (attempt: Parameters<typeof passingResult>[0]) => Record<string, unknown>][] = [
       ['attempt', (attempt: Parameters<typeof passingResult>[0]) => resultWith(attempt, { attemptId: 'other-attempt' })],
       ['source', (attempt: Parameters<typeof passingResult>[0]) => resultWith(attempt, { sourceDigest: 'e'.repeat(64) })],
@@ -124,6 +128,7 @@ describe('result verification', () => {
     for (const [index, [label, patch]] of cases.entries()) {
       const rejection = controller.startAttempt({
         ...header(controller.projection.revision, `attempt-${label}`),
+        ...attemptInputs(clock),
         sourceDigest: SOURCE,
         artifactDigest: ARTIFACT,
         sideEffect: async attempt => patch(attempt),
@@ -144,9 +149,10 @@ describe('result verification', () => {
     ['a non-zero exit', { exitCode: 1 }],
   ])('never lets %s pass', async (_name, patch) => {
     const { dir, clock } = await makeTaskDir()
-    const { controller, revision } = await openReadyTask(dir, clock, { ...BUDGET_ONE_ROUND, maxRounds: 2 }, fullCapabilitySource)
+    const { controller, revision } = await openReadyTask(dir, clock, { ...BUDGET_ONE_ROUND, maxRounds: 2 })
     const rejection = controller.startAttempt({
       ...header(revision, 'attempt-incomplete'),
+      ...attemptInputs(clock),
       sourceDigest: SOURCE,
       artifactDigest: ARTIFACT,
       sideEffect: async attempt => resultWith(attempt, patch),
@@ -166,9 +172,10 @@ describe('result verification', () => {
 
   it('binds a trial approval to the verified result and refuses further launches', async () => {
     const { dir, clock } = await makeTaskDir()
-    const { controller, revision } = await openReadyTask(dir, clock, BUDGET_ONE_ROUND, fullCapabilitySource)
+    const { controller, revision } = await openReadyTask(dir, clock, BUDGET_ONE_ROUND)
     await controller.startAttempt({
       ...header(revision, 'attempt-pass'),
+      ...attemptInputs(clock),
       sourceDigest: SOURCE,
       artifactDigest: ARTIFACT,
       sideEffect: async attempt => passingResult(attempt),
@@ -179,6 +186,7 @@ describe('result verification', () => {
     // No upgrade or continuation path exists: awaiting-trial refuses launches.
     const relaunch = controller.startAttempt({
       ...header(controller.projection.revision, 'attempt-again'),
+      ...attemptInputs(clock),
       sourceDigest: SOURCE,
       artifactDigest: ARTIFACT,
       sideEffect: async attempt => passingResult(attempt),

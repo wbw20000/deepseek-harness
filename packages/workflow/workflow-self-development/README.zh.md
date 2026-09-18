@@ -36,7 +36,7 @@ kind: "package-reference"
 
 所有字段均为必填：未实测其边界的部署不提供任何数值，插件在加载时立即失败，而不是猜测。服务在构造时校验配置——`controlDirectory` 必须是绝对路径，两个界限必须为正有限整数（`SELF_DEV_CONFIG_INVALID`）——并在 `taskId` 参与控制路径拼接或创建目录之前，先用纯路径分量文法校验它。
 
-`open(taskId, clock, capabilitySource?)` 每次调用都显式传入受信时钟和能力证据来源。没有默认时钟：Node 时钟无法证明 macOS 的休眠与重启记账，观察来源必须由调用方提供（即未来的 Swift 监督者）。缺少 `capabilitySource` 时，每次尝试启动都以 `SELF_DEV_CAPABILITY_MISSING` 拒绝；不存在能把隔离打开的配置项。
+`open(taskId, clock)` 恢复一个任务的控制器。没有默认时钟：Node 时钟无法证明 macOS 的休眠与重启记账，观察来源必须由调用方提供（即未来的 Swift 监督者）；open 传入的时钟只是恢复时钟——仅用于把上一进程遗留的进行中尝试记为中断，不会观测任何新尝试。服务不再缓存能力证据来源：每次 `startAttempt` 请求都携带本次尝试自己的时钟与证据来源，请求缺少可用来源时该尝试以 `SELF_DEV_CAPABILITY_MISSING` 拒绝且不提交任何事件；不存在能把隔离打开的配置项。
 
 <a id="controller-operations"></a>
 ## 控制器操作

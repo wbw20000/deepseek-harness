@@ -3768,7 +3768,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/workflow/workflow-self-development/src/index.ts:79`](../packages/workflow/workflow-self-development/src/index.ts)
+Source: [`packages/workflow/workflow-self-development/src/index.ts:80`](../packages/workflow/workflow-self-development/src/index.ts)
 
 <a id="deepseek-aidsh-workflow-self-development-runner"></a>
 
