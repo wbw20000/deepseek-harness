@@ -71,7 +71,9 @@ public struct FrozenLauncherConfig: Codable, Equatable {
     /// directory. Returns the first violated rule; nothing is guessed.
     public static func load(from resourcesDirectory: URL) -> Result<Resolved, ConfigError> {
         let url = resourcesDirectory.appendingPathComponent("frozen-launcher-config.json")
-        guard let data = FrozenFileReader.read(url, maximumBytes: 64 * 1024) else { return .failure(.missingResource) }
+        guard let data = FrozenFileReader.read(url, maximumBytes: FrozenFileReader.maximumConfigBytes) else {
+            return .failure(.missingResource)
+        }
         let config: FrozenLauncherConfig
         do {
             config = try JSONDecoder().decode(FrozenLauncherConfig.self, from: data)
@@ -136,10 +138,36 @@ public struct FrozenLauncherConfig: Codable, Equatable {
         let resources = resolved.resourcesDirectory.resolvingSymlinksInPath().standardizedFileURL.path
         let stableHome = fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".dsh")
             .resolvingSymlinksInPath().standardizedFileURL.path
-        guard home != stableHome, home != resources,
-              !home.hasPrefix(resources + "/"), !resources.hasPrefix(home + "/") else {
+        guard !Self.overlap(home, resources), !Self.overlap(home, stableHome),
+              !Self.containsSharedRoot(home, fileManager: fileManager) else {
             return .failure(.invalid("the trial data home overlaps the stable home or bundled runtime"))
         }
         return .success(())
+    }
+
+    /// `true` when the two canonical paths are equal or one is an ancestor of
+    /// the other, so neither directory can be treated as the other's data.
+    /// Internal for tests: the descendant direction of the stable home cannot
+    /// be created on disk without touching real stable data.
+    static func overlap(_ first: String, _ second: String) -> Bool {
+        first == second
+            || first.hasPrefix(second.hasSuffix("/") ? second : second + "/")
+            || second.hasPrefix(first.hasSuffix("/") ? first : first + "/")
+    }
+
+    /// `true` when the home is a shared root itself or an ancestor of one:
+    /// the filesystem root, the user's home, or the platform temporary root.
+    /// A dedicated leaf under the temporary root stays valid; using a shared
+    /// root (or a directory containing it) as a data home would make the
+    /// backend treat an unrelated shared directory as its own.
+    private static func containsSharedRoot(_ home: String, fileManager: FileManager) -> Bool {
+        let shared = ["/", fileManager.homeDirectoryForCurrentUser.path, NSTemporaryDirectory(), "/tmp", "/var/tmp"]
+        for path in shared {
+            let root = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+            if home == root || root.hasPrefix(home.hasSuffix("/") ? home : home + "/") {
+                return true
+            }
+        }
+        return false
     }
 }

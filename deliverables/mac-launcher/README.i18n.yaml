@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write deliverables/mac-launcher/README.md
-README.md: d951149b22cbf2cd9db40d8ac918751118e0d84a
-README.zh.md: 7df6c135a3c55629261ecda37c4b1acddcd75de2
+README.md: 8ee49b041108c4eb95e8b06eb58e8207ccb7be22
+README.zh.md: d550ef886a5aace4652b30e1f314ec3e3dfc212c

@@ -88,8 +88,9 @@ public enum RuntimeIntegrityValidator {
         if (inventoryStats.st_mode & S_IFMT) == S_IFLNK { return .failure(.symlink("runtime-inventory.json")) }
         if (inventoryStats.st_mode & S_IFMT) != S_IFREG { return .failure(.specialFile("runtime-inventory.json")) }
         if inventoryStats.st_nlink != 1 { return .failure(.hardlinked("runtime-inventory.json", UInt64(inventoryStats.st_nlink))) }
-        guard let data = FrozenFileReader.read(inventoryURL, maximumBytes: 32 * 1024 * 1024) else {
-            return .failure(.inventoryMalformed("inventory is unreadable or exceeds 32 MiB"))
+        guard let data = FrozenFileReader.read(inventoryURL, maximumBytes: FrozenFileReader.maximumInventoryBytes) else {
+            return .failure(.inventoryMalformed(
+                "inventory is unreadable or exceeds \(FrozenFileReader.maximumInventoryBytes / 1024 / 1024) MiB"))
         }
         let inventory: Inventory
         do {
@@ -153,7 +154,11 @@ public enum RuntimeIntegrityValidator {
             guard let recorded = sealed[String(relative)] else { return .extraFile(String(relative)) }
             if Int(stats.st_size) != recorded.size { return .sizeMismatch(String(relative)) }
             if UInt16(recorded.mode, radix: 8) != (stats.st_mode & 0o7777) { return .modeMismatch(relative) }
-            guard let digest = streamSha256(child.path) else { return .unreadable(String(relative)) }
+            guard let digest = streamSha256(child.path) else {
+                // A mid-hash cancellation returns `nil` like a read failure;
+                // report the real condition instead of an unreadable file.
+                return Task.isCancelled ? .cancelled : .unreadable(String(relative))
+            }
             if Task.isCancelled { return .cancelled }
             if digest != recorded.sha256 { return .hashMismatch(String(relative)) }
             seen.insert(String(relative))

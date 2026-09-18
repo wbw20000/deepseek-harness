@@ -22,7 +22,7 @@ Source links and hardlinks cannot preserve runnable bytes when a developer chang
 
 ## Consequences
 
-The inventory detects accidental corruption, not a hostile actor able to replace both metadata and payload. Ad-hoc signing is local execution support, not notarization or human release approval. The candidate has ordinary user privileges; recovery copies, storage quotas, network restrictions, and unattended iteration require separate mechanisms. Building or passing tests never authorizes an upgrade.
+The inventory detects accidental corruption, not a hostile actor able to replace both metadata and payload. Ad-hoc signing is local execution support, not notarization or human release approval. The candidate has ordinary user privileges; storage quotas, network restrictions, and unattended iteration require separate mechanisms. The opt-in [recovery Apps](../feature/2026-09-18-recovery-mac-apps.md) provide independent recovery entry points, not those isolation mechanisms. Building or passing tests never authorizes an upgrade.
 
 ## Existing decisions
 

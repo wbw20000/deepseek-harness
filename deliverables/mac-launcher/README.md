@@ -11,6 +11,7 @@ This directory builds a macOS App candidate that owns the DeepSeek Harness Web b
 - [Prerequisites](#prerequisites)
 - [Build a candidate](#build-a-candidate)
 - [Frozen candidate](#frozen-candidate)
+- [Recovery Apps](#recovery-apps)
 - [Tests](#tests)
 - [Source-linked limitation](#source-linked-limitation)
 - [Identity and diagnostics](#identity-and-diagnostics)
@@ -62,19 +63,44 @@ The frozen identity is `com.local.deepseek-harness-launcher.candidate.frozen`. I
 
 This is runtime and data separation, not filesystem, process, network, or storage-quota confinement. There is no automatic upgrade, recovery-copy manager, release pointer, or unattended development loop. A human must trial the exact candidate before approving any separate installation action. See the [frozen-runtime decision](../../.agents/notes/implemented/architecture/2026-09-17-frozen-mac-launcher.md).
 
+<a id="recovery-apps"></a>
+
+## Recovery Apps
+
+`tools/build-recovery.sh` builds two independent ordinary Apps for the opt-in recovery path: `DeepSeek Harness Recovery.app` (`com.local.deepseek-harness-launcher.recovery`) and `DeepSeek Harness Emergency Recovery.app` (`com.local.deepseek-harness-launcher.recovery.emergency`). Each bundle carries its own copy of the `RecoveryApp` executable and its resources, so neither depends on the main LauncherApp executable, a source checkout, or a global Node at runtime. Neither App installs anything or replaces an existing App.
+
+```sh
+zsh deliverables/mac-launcher/tools/build-recovery.sh \
+  --installation <absolute managed installation root> \
+  [--output-root <absolute existing parent directory>]
+```
+
+The script seals exactly one managed installation root into each bundle (`Contents/Resources/recovery-installation.json`), refuses a relative, missing, or symlinked root, and publishes both bundles with the same atomic no-replace rename as `build.sh`. Rebuilding means running the script again; an existing destination is never overwritten.
+
+At startup each App reads exactly one explicit versioned last-good record, `<installation root>/recovery-last-good.json`, and accepts only schema `deepseek-harness.recovery.last-good/1`. The record names a frozen `.app` bundle directly inside the installation plus the SHA-256 digests of its `frozen-launcher-config.json` and `runtime-inventory.json`. The loader reuses the frozen validator and rejects everything else: unsupported schema, malformed, over-size, hardlinked, or FIFO records, traversal and symlinked bundle paths, bundles outside the chosen installation, digest mismatch, and missing bundle or data-home parts. The recorded data home must be a real directory strictly inside the chosen managed installation, reached through checked components (no `..`, no symlinked intermediate), and must not overlap the selected App in either direction; a nested release path is accepted only as an explicit recorded path with every component checked. The inventory digest read bound matches the validator's 32 MiB inventory limit, since a real inventory seals tens of thousands of files. There is no directory scan, no newest-mtime guess, no automatic fallback, and no declaration that an existing HEAD build is approved stable.
+
+Diagnosis is read-only and runs first, off the main thread: the record load and digest checks are followed by a full `RuntimeIntegrityValidator` payload pass, and only a diagnosis that passed both shows the verified state and enables the start button; hashing never blocks the main actor. Only a deliberate click on the start button launches the verified last-good backend through an owned `BackendController`; the launch binds to the verified data home and configuration and re-validates the frozen payload. A recovery launch never rewrites active/last-good records, never migrates data, and never upgrades a release: it is not an upgrade and not a data rollback. A new diagnosis or a quit discards stale results and never reenables start, and a live backend is stopped through its owned teardown before a new diagnosis runs. Errors name the violated rule and the path.
+
+Before a frozen backend starts, `BackendController` takes an OS `flock` lease on its data-home directory. The ordinary frozen launcher and both recovery Apps share this rule; contention refuses a launch before spawn. An unconfirmed child exit retains the lease and delays App termination until exit is observed. The lock is advisory and disappears if the launcher is forcibly killed, even if its backend survives; after a forced exit, check for residual backends before reopening. It is not an orphan supervisor. Metadata hashes detect accidental mismatch, not malicious same-user edits. Recovery does not perform release transactions or restore backups.
+
 <a id="tests"></a>
 
 ## Tests
 
 ```sh
 swift run --package-path deliverables/mac-launcher LauncherTests
+swift run --package-path deliverables/mac-launcher RecoveryTests
 zsh deliverables/mac-launcher/tests/run-build-tests.sh
 node --test deliverables/mac-launcher/tests/freeze-runtime.test.mjs
 ```
 
-`LauncherTests` covers readiness parsing, redaction, authenticated probes, configuration, owned-child lifecycle, and frozen integrity rejection. It binds temporary loopback listeners and spawns fixture children in private directories; use this executable, not `swift test`. The build suites do not launch a backend. The Node suite tests materialization with isolated build-tool fixtures; a passing fixture test is not a real-runtime trial.
+`RecoveryTests` is a separate no-GUI runner for the recovery core. It covers last-good selection (valid record, corrupt and unsupported schema, over-size, hardlinked, and FIFO record metadata, traversal and symlink escapes, digest mismatch, missing bundle or data-home parts, inventories larger than 64 KiB, the over-32-MiB inventory refusal, sealed installation loading, and data-home containment: outside the installation, overlapping the selected App, `..` and symlinked components, and an accepted explicit nested release path), the recovery lease (in-process exclusion, release, missing and linked data homes), and the owned controller (launch and stop of a sealed launchable fixture, and independent-process lease contention that fails before any spawn). An explicit `swift run --package-path deliverables/mac-launcher RecoveryTests --fixture-install <existing directory>` builds a private fixture installation inside that directory and runs selection, full payload integrity validation, and a real owned `BackendController` launch and stop; fixtures only, no credentials. Fixtures are private temporary directories and clearly test-only; a fixture record is never a real last-good approval. The build-time refusals of `build-recovery.sh` (usage, relative or missing installation root, existing destination) are exercised against the real script; the full packaging flow needs a host that permits SwiftPM's manifest sandbox.
+
+`LauncherTests` covers readiness parsing, redaction, authenticated probes, configuration and data-home overlap rules, frozen identity selection, owned-child lifecycle, and frozen integrity rejection. It binds temporary loopback listeners and spawns fixture children in private directories; use this executable, not `swift test`. The build suites do not launch a backend. The Node suite tests materialization with isolated build-tool fixtures; a passing fixture test is not a real-runtime trial.
 
 For a separately built frozen candidate, run `swift run --package-path deliverables/mac-launcher LauncherTests --frozen-smoke-resources <absolute candidate Contents/Resources path>`. This opt-in smoke starts the real bundled backend, confirms authenticated readiness, stops it, and repeats using its recorded trial data home. It does not open a browser, send a model request, validate AppKit interaction, or test OS permission prompts. Separately trial the native window, browser, Cmd-Q, and reopening on an unlocked Mac.
+
+For a separately packaged, isolated recovery installation with a test-only last-good record, run `swift run --package-path deliverables/mac-launcher RecoveryTests --last-good-smoke <absolute installation path>`. This uses the recorded real Node/runtime and trial home, checks authenticated readiness and exclusion of a competing frozen launcher, stops the owned backend, and repeats. It does not invoke the main App executable and does not validate native Recovery App interaction. Never point this test at production data.
 
 The suite exercises the rejection paths (existing destination with a sentinel file, symlink destination, relative and nonexistent inputs, a missing or `bin.dsh`-less CLI manifest), verifies a failed SwiftPM build leaves no destination and no staging residue, compiles `publish-rename.c` and exercises the real publication operation — a fresh publish removes the staged bundle; an existing file, directory, and symlink survive with their sentinels and the directory gains no extra children; competing publishers produce exactly one winner — then runs hermetic builds with shimmed `swift` and `codesign` from the repository root and from an unrelated working directory with quoting-heavy paths, checking publication, staging cleanup, and verbatim `launcher-config.json` serialization, and finally builds a real candidate from the repository root and checks its identifier, display name, signature, macOS 13 target, and recorded configuration. Fixtures are private temporary directories; no test binds a port, writes credentials, or launches the installed App.
 

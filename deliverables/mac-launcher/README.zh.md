@@ -11,6 +11,7 @@
 - [前置条件](#prerequisites)
 - [构建候选包](#build-a-candidate)
 - [冻结候选包](#frozen-candidate)
+- [恢复 App](#recovery-apps)
 - [测试](#tests)
 - [源码链接限制](#source-linked-limitation)
 - [标识与诊断](#identity-and-diagnostics)
@@ -62,19 +63,44 @@ bundle 内是 Node 和运行时的独立字节副本。内部链接被展开为�
 
 这提供运行时和数据分离，不提供文件系统、进程、网络或存储配额限制。没有自动升级、恢复副本管理器、发布指针或无人值守开发循环。任何单独的安装操作获批前，必须由人工试用确切的候选包。详见[冻结运行时决策](../../.agents/notes/implemented/architecture/2026-09-17-frozen-mac-launcher.zh.md)。
 
+<a id="recovery-apps"></a>
+
+## 恢复 App
+
+`tools/build-recovery.sh` 为显式启用的恢复路径构建两个独立的普通 App：`DeepSeek Harness Recovery.app`（`com.local.deepseek-harness-launcher.recovery`）与 `DeepSeek Harness Emergency Recovery.app`（`com.local.deepseek-harness-launcher.recovery.emergency`）。每个 bundle 各自携带一份 `RecoveryApp` 可执行文件与资源的独立副本，因此运行期都不依赖主 LauncherApp 可执行文件、源码工作区或全局 Node。两者都不安装任何内容，也不替换既有 App。
+
+```sh
+zsh deliverables/mac-launcher/tools/build-recovery.sh \
+  --installation <absolute managed installation root> \
+  [--output-root <absolute existing parent directory>]
+```
+
+脚本把唯一一个受管安装根目录密封进每个 bundle（`Contents/Resources/recovery-installation.json`），拒绝相对、缺失或符号链接的根目录，并以与 `build.sh` 相同的原子不替换重命名发布两个 bundle。重新构建意味着再次运行脚本；绝不覆盖既有目标。
+
+启动时每个 App 只读取一条显式的带版本 last-good 记录（`<安装根目录>/recovery-last-good.json`），只接受 schema `deepseek-harness.recovery.last-good/1`。记录命名安装内直接的冻结 `.app` bundle，以及它的 `frozen-launcher-config.json` 与 `runtime-inventory.json` 的 SHA-256 摘要。加载器复用冻结校验器并拒绝其余一切：不受支持的 schema、损坏、超长、硬链接或 FIFO 记录、穿越与符号链接的 bundle 路径、所选安装之外的 bundle、摘要不一致，以及缺失的 bundle 或数据目录部分。记录的数据目录必须是所选受管安装内严格更深一层真实目录，且逐级组件经过检查（无 `..`、无符号链接中间组件），并且不得与所选 App 双向重叠；嵌套发布路径只有在记录显式写出且每个组件都检查过时才被接受。清单摘要的读取上限与校验器的 32 MiB 清单上限一致，因为真实清单会密封数万个文件。没有目录扫描、没有最新 mtime 猜测、没有自动回退，也不会宣称既有 HEAD 构建已获批稳定。
+
+诊断只读且先行，并在主线程之外运行：记录加载与摘要检查之后是完整的 `RuntimeIntegrityValidator` 负载校验，只有两者都通过才显示已验证状态并启用启动按钮；哈希计算绝不阻塞主 actor。只有人工点击启动按钮，才会通过自有 `BackendController` 启动已验证的 last-good 后端；启动绑定已验证的数据目录与配置，并重新校验冻结负载。恢复启动绝不改写 active/last-good 记录、绝不迁移数据、也绝不升级发布：它不是升级，也不是数据回滚。新的诊断或退出会丢弃过期结果，绝不会重新启用启动；仍有后端在运行时，新的诊断会先通过其自有销毁流程停止它。错误会指明被违反的规则与路径。
+
+冻结后端启动前，`BackendController` 会在数据目录上获取 OS `flock` 锁。普通冻结启动器与两个恢复 App 共用此规则；锁被占用时，在创建进程之前拒绝启动。尚未确认子进程退出时继续持锁，App 等待确认退出后再关闭。该锁是协作性的；启动器被强制杀死时锁会释放，即使后端仍存活，因此强制退出后必须先检查残留后端再打开。它不是孤儿进程监督器。元数据哈希检测意外不一致，不能防止同用户恶意改写。恢复入口不执行发布事务，也不还原备份。
+
 <a id="tests"></a>
 
 ## 测试
 
 ```sh
 swift run --package-path deliverables/mac-launcher LauncherTests
+swift run --package-path deliverables/mac-launcher RecoveryTests
 zsh deliverables/mac-launcher/tests/run-build-tests.sh
 node --test deliverables/mac-launcher/tests/freeze-runtime.test.mjs
 ```
 
-`LauncherTests` 覆盖就绪解析、脱敏、认证探测、配置、自有子进程生命周期和冻结运行时完整性拒绝行为。它在私有目录中创建测试子进程，并绑定临时回环监听端口；请运行这个可执行测试入口，而不是 `swift test`。构建套件不会启动后端。Node 套件使用独立构建工具 fixture（测试前置数据）检查文件复制；fixture 通过不等于真实运行时试用通过。
+`RecoveryTests` 是恢复核心的独立无 GUI 测试入口。它覆盖 last-good 选择（有效记录、损坏与不受支持的 schema、超长、硬链接与 FIFO 记录元数据、穿越与符号链接逃逸、摘要不一致、缺失 bundle 或数据目录部分、超过 64 KiB 的清单、超过 32 MiB 清单的拒绝、密封安装加载，以及数据目录包含关系：安装之外、与所选 App 重叠、`..` 与符号链接组件、被接受的显式嵌套发布路径）、恢复锁（进程内互斥、释放、缺失与链接的数据目录），以及自有控制器（密封可启动 fixture 的启动与停止、独立进程租约争用在任何进程被启动之前失败）。显式运行 `swift run --package-path deliverables/mac-launcher RecoveryTests --fixture-install <已存在目录>` 会在该目录内构建一个私有 fixture 安装，并执行选择、完整负载完整性校验和真实自有 `BackendController` 的启动与停止；仅 fixture，无凭据。测试夹具都是私有的临时目录，且明确仅用于测试；fixture 记录绝不是真实的 last-good 批准。`build-recovery.sh` 的构建期拒绝（用法、相对或缺失的安装根目录、既有目标）针对真实脚本验证；完整打包流程需要允许 SwiftPM manifest 沙箱的主机。
+
+`LauncherTests` 覆盖就绪解析、脱敏、认证探测、配置与数据目录重叠规则、冻结标识选择、自有子进程生命周期和冻结运行时完整性拒绝行为。它在私有目录中创建测试子进程，并绑定临时回环监听端口；请运行这个可执行测试入口，而不是 `swift test`。构建套件不会启动后端。Node 套件使用独立构建工具 fixture（测试前置数据）检查文件复制；fixture 通过不等于真实运行时试用通过。
 
 对于单独构建的冻结候选包，运行 `swift run --package-path deliverables/mac-launcher LauncherTests --frozen-smoke-resources <absolute candidate Contents/Resources path>`。这一显式启用的冒烟测试使用记录的试用数据目录，启动真实内置后端、确认认证就绪、停止，再重复一次。它不打开浏览器、不发送模型请求，也不验证 AppKit 交互或操作系统权限弹窗。原生窗口、浏览器、Cmd-Q 和重新打开仍需在已解锁的 Mac 上单独试用。
+
+对于单独打包、仅含测试 last-good 记录的隔离恢复安装，运行 `swift run --package-path deliverables/mac-launcher RecoveryTests --last-good-smoke <absolute installation path>`。它使用记录中的真实 Node、运行时和试用数据目录，检查认证就绪状态与竞争冻结启动器的互斥，停止自有后端后重复一次。它不调用主 App 可执行文件，也不验证原生恢复 App 交互。绝不能把这个测试指向生产数据。
 
 该套件覆盖各拒绝路径（带哨兵文件的既有目标、符号链接目标、相对与不存在的输入、缺失或没有 `bin.dsh` 的 CLI manifest），验证失败的 SwiftPM 构建不留下目标路径和暂存残留，编译 `publish-rename.c` 并直接测试真实发布操作——全新发布会让暂存 bundle 消失；既有的文件、目录和符号链接连同各自哨兵原样保留，且该目录不会多出子项；并发发布者恰好产生一个胜出者——随后用替身的 `swift` 与 `codesign` 从仓库根目录和含重引号路径的无关工作目录运行密闭构建，检查发布、暂存清理与逐字的 `launcher-config.json` 序列化，最后从仓库根目录构建一个真实候选包并检查其标识符、显示名称、签名、macOS 13 目标与记录的配置。测试夹具都是私有的临时目录；没有任何测试绑定端口、写入凭据或启动已安装的 App。
 

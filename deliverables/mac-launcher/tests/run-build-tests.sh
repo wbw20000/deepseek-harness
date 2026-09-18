@@ -473,6 +473,52 @@ else
   pass_test
 fi
 
+# Recovery build script refusals run before any SwiftPM build, so they are
+# exercised here without a host that permits SwiftPM's manifest sandbox.
+# run_recovery_build mirrors run_build_in for the recovery script.
+run_recovery_build() {
+  build_output=$(cd "$recovery_fixture" && zsh "$recovery_script" "$@" 2>&1)
+  build_rc=$?
+}
+recovery_script="${launcher_dir}/tools/build-recovery.sh"
+recovery_fixture="${fixture_root}/recovery"
+mkdir -p "$recovery_fixture/installation" "$recovery_fixture/output"
+begin "build-recovery.sh refuses missing arguments"
+run_recovery_build
+if assert "missing --installation is a usage refusal" test "$build_rc" -eq 2; then
+  pass_test
+else
+  fail_test "build-recovery.sh refuses missing arguments"
+fi
+begin "build-recovery.sh refuses a relative and a missing installation root"
+run_recovery_build --installation "relative/path"
+refused_relative=$build_rc
+run_recovery_build --installation "$recovery_fixture/absent-root"
+if assert "relative root is refused" test "$refused_relative" -ne 0 \
+  && assert "missing root is refused" test "$build_rc" -ne 0; then
+  pass_test
+else
+  fail_test "build-recovery.sh refuses a relative and a missing installation root"
+fi
+begin "build-recovery.sh refuses an existing destination and leaves it intact"
+touch "$recovery_fixture/output/DeepSeek Harness Recovery.app"
+run_recovery_build --installation "$recovery_fixture/installation" --output-root "$recovery_fixture/output"
+refusal_output=$build_output
+if assert "existing destination is refused" test "$build_rc" -ne 0 \
+  && [[ $refusal_output == *"refusing to overwrite"* ]] \
+  && assert "the destination is untouched" test -f "$recovery_fixture/output/DeepSeek Harness Recovery.app"; then
+  pass_test
+else
+  fail_test "build-recovery.sh refuses an existing destination and leaves it intact"
+fi
+begin "a refused recovery build leaves no staging directory"
+staging_residue=$(find "$recovery_fixture/output" -maxdepth 1 -name ".deepseek-harness-recovery-build.*" | wc -l | tr -d ' ')
+if assert "no staging residue" test "$staging_residue" -eq 0; then
+  pass_test
+else
+  fail_test "a refused recovery build leaves no staging directory"
+fi
+
 print
 print "$passed passed, $failed failed"
 [[ $failed -eq 0 ]]

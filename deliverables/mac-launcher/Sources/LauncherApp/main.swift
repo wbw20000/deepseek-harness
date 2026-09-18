@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var openButton: NSButton!
     private var controller: BackendController?
     private var openedBrowserOnce = false
+    private var lastShownFailure: String?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMainMenu()
@@ -56,6 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func startController() {
+        lastShownFailure = nil
         let diagnosticLog: DiagnosticLog?
         do {
             diagnosticLog = try DiagnosticLog(
@@ -68,8 +70,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let resourcesURL = Bundle.main.resourceURL ?? Bundle.main.bundleURL
         // Identity selects frozen mode even when its configuration is missing
         // or unreadable; a damaged frozen bundle never falls back to source.
-        let frozenConfigPresent = Bundle.main.bundleIdentifier ==
-            "com.local.deepseek-harness-launcher.candidate.frozen"
+        let frozenConfigPresent = LauncherModeSelection.isFrozenCandidate(
+            bundleIdentifier: Bundle.main.bundleIdentifier)
         let controller: BackendController
         if frozenConfigPresent {
             let launch: FrozenLauncherConfig.Resolved
@@ -157,6 +159,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func showFailure(_ message: String) {
+        guard lastShownFailure != message else { return }
+        lastShownFailure = message
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = LauncherCopy.failureTitle
@@ -232,9 +236,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         openButton.isEnabled = false
 
         // The frozen candidate describes its own mode; the source-linked
-        // candidate keeps its note.
-        let frozenCandidate = (try? Data(contentsOf: (Bundle.main.resourceURL ?? Bundle.main.bundleURL)
-            .appendingPathComponent("frozen-launcher-config.json"))) != nil
+        // candidate keeps its note. The footer consults the same identity
+        // selector as `startController`, so it never opens a resource file
+        // (a damaged bundle must not block window construction on a FIFO)
+        // and never contradicts the mode the controller actually runs.
+        let frozenCandidate = LauncherModeSelection.isFrozenCandidate(
+            bundleIdentifier: Bundle.main.bundleIdentifier)
         let note = NSTextField(wrappingLabelWithString: frozenCandidate ? LauncherCopy.frozenFooterNote : LauncherCopy.footerNote)
         note.font = .systemFont(ofSize: 12)
         note.textColor = .tertiaryLabelColor

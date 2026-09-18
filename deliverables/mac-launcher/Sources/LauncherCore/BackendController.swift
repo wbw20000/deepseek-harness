@@ -116,6 +116,7 @@ public final class BackendController {
     private let onPhaseChange: (Phase) -> Void
 
     private var child: Process?
+    private var lease: RecoveryLease?
     private var stdoutAssembler = OutputAssembler()
     private var stderrAssembler = OutputAssembler()
     private var stdoutPipe: Pipe?
@@ -130,6 +131,7 @@ public final class BackendController {
     private var stopCompletions: [() -> Void] = []
     private var stopStartedAt: Date?
     private var didSendKill = false
+    private var didReportUnconfirmedStop = false
 
     /// - Parameters:
     ///   - mode: which runtime to launch; see `LaunchMode`.
@@ -265,6 +267,18 @@ public final class BackendController {
             case .success:
                 break
             }
+            // Both frozen launchers and recovery Apps exclude each other from
+            // the same data home before payload validation or spawn: the
+            // OS lease fails here, before a child can exist. It is held until
+            // teardown has fully settled so a stale validation can never
+            // reopen the data home after a quit.
+            switch RecoveryLease.acquire(dataHome: launch.dshHomeURL) {
+            case let .failure(error):
+                reportFailure(Self.describeLease(error), exitCode: nil)
+                return
+            case let .success(acquired):
+                lease = acquired
+            }
             // The bundled Node must never start before its payload validated.
             // The integrity scan runs off the main actor; only the settle hop
             // touches lifecycle state, and a stale result is discarded.
@@ -370,6 +384,13 @@ public final class BackendController {
         [dshEntryPath, "web", "--patch", patchPath, "--no-open"]
     }
 
+    private static func describeLease(_ error: RecoveryLease.LeaseError) -> String {
+        switch error {
+        case .unavailable: return LauncherCopy.backendLeaseBusy
+        case let .cannotLock(detail): return LauncherCopy.backendLeaseCannotLock(Redaction.redact(detail))
+        }
+    }
+
     private func cancelValidation() {
         validationTask?.cancel()
         validationTask = nil
@@ -390,8 +411,8 @@ public final class BackendController {
     /// SIGTERM first; SIGKILL only after the declared grace bound, and only
     /// for the direct child this launcher created.
     /// - Parameter completion: runs on the main actor once the child has exited
-    ///   — or, when even SIGKILL stays unobservable, once the backstop reports
-    ///   teardown unconfirmed.
+    ///   — or, for source-linked launches, when the backstop reports teardown
+    ///   unconfirmed. Frozen launches keep their data lease and wait for exit.
     public func stop(completion: @escaping () -> Void = {}) {
         stopCompletions.append(completion)
         switch state {
@@ -560,6 +581,7 @@ public final class BackendController {
         setPhase(.stopping)
         stopStartedAt = Date()
         didSendKill = false
+        didReportUnconfirmedStop = false
         if let child, child.isRunning {
             log("sending SIGTERM to own child pid \(child.processIdentifier)")
             child.terminate()
@@ -599,7 +621,21 @@ public final class BackendController {
             log("teardown grace of \(Int(terminationGrace))s elapsed; sending SIGKILL to own child")
             kill(child.processIdentifier, SIGKILL)
         case .confirmUnconfirmed:
-            log("no exit observed \(Int(Self.killConfirmationBackstop))s after SIGKILL; completing teardown without confirmation")
+            reportUnconfirmedStop()
+        }
+    }
+
+    /// Report the stop backstop without releasing a frozen data-home lease.
+    /// The termination handler still owns completion if exit arrives later.
+    func reportUnconfirmedStop() {
+        guard case .stopping = state, !didReportUnconfirmedStop else { return }
+        didReportUnconfirmedStop = true
+        log("no exit observed after SIGKILL; teardown remains unconfirmed")
+        if case .frozen = mode {
+            authenticatedURL = nil
+            state = .stopping(pendingFailure: currentPendingFailure() ?? LauncherCopy.frozenTeardownUnconfirmed)
+            setPhase(.failed(LauncherCopy.frozenTeardownUnconfirmed))
+        } else {
             finishTeardown(pendingFailure: currentPendingFailure() ?? LauncherCopy.teardownUnconfirmed)
         }
     }
@@ -610,6 +646,11 @@ public final class BackendController {
         startupDeadlineTask?.cancel()
         startupDeadlineTask = nil
         cancelValidation()
+        // Teardown is fully settled here: no child, no in-flight validation.
+        // The data home is released only now, so a stale validation result
+        // can never reopen it.
+        lease?.release()
+        lease = nil
         child = nil
         authenticatedURL = nil
         closeStreams()
@@ -636,6 +677,9 @@ public final class BackendController {
         startupDeadlineTask?.cancel()
         startupDeadlineTask = nil
         cancelValidation()
+        // A failed launch owns neither a child nor the data-home lease.
+        lease?.release()
+        lease = nil
         child = nil
         authenticatedURL = nil
         closeStreams()

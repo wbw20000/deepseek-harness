@@ -72,6 +72,9 @@ public enum LauncherCopy {
     public static let teardownUnconfirmed =
         "未能确认本 App 启动的后台进程已退出；未继续重启，请检查是否有残留进程后重新打开 App。"
 
+    public static let frozenTeardownUnconfirmed =
+        "尚未确认后台进程已退出；数据目录仍被锁定，本 App 继续等待，不会启动第二个后端。请勿强制退出后立即重启，请先检查残留进程。"
+
     // MARK: Configuration errors
 
     public static let configMissingResource =
@@ -136,6 +139,17 @@ public enum LauncherCopy {
         "无法读取或计算摘要：\(path)"
     }
     public static let integrityCancelled = "运行时校验已取消。"
+
+    // MARK: Data-home lease
+
+    /// Another frozen launcher or recovery App holds the OS lease on this
+    /// data home; the launch fails before any process starts.
+    public static let backendLeaseBusy =
+        "另一个 DeepSeek Harness 启动器或恢复 App 正在使用该数据目录；为避免并发写入，本次未启动任何进程。请先退出占用该数据目录的 App。"
+
+    public static func backendLeaseCannotLock(_ detail: String) -> String {
+        "无法锁定该数据目录，已拒绝启动：\(detail)"
+    }
 
     // MARK: Exit description
 

@@ -11,6 +11,7 @@ import Foundation
 struct FrozenLaunchTests {
 
     func run(_ t: TestRunner) {
+        frozenIdentitySelection(t)
         configLoading(t)
         configValidation(t)
         environmentSelection(t)
@@ -358,6 +359,26 @@ struct FrozenLaunchTests {
 
     // MARK: Configuration
 
+    /// Mode selection keys on the bundle identity alone: the same selector
+    /// drives the controller construction and the footer note, and it never
+    /// opens a resource file (a probed FIFO would block window construction).
+    private func frozenIdentitySelection(_ t: TestRunner) {
+        t.check(LauncherModeSelection.isFrozenCandidate(
+            bundleIdentifier: LauncherModeSelection.frozenBundleIdentifier),
+            "the frozen candidate identity selects frozen mode")
+        t.check(LauncherModeSelection.isFrozenCandidate(bundleIdentifier:
+            "com.local.deepseek-harness-launcher.candidate") == false,
+            "the source-linked identity keeps source-linked mode")
+        t.check(LauncherModeSelection.isFrozenCandidate(bundleIdentifier: nil) == false,
+                "a bundle without an identifier is not frozen")
+        t.check(LauncherModeSelection.isFrozenCandidate(bundleIdentifier:
+            "com.local.deepseek-harness-launcher.candidate.frozen.extra") == false,
+            "only the exact frozen identity selects frozen mode")
+        t.check(LauncherModeSelection.isFrozenCandidate(bundleIdentifier:
+            "com.local.deepseek-harness-launcher.recovery") == false,
+            "a recovery bundle is not a frozen launcher candidate")
+    }
+
     private func configLoading(_ t: TestRunner) {
         let fixture = Fixture("frozen-config")
         defer { fixture.cleanup() }
@@ -398,6 +419,50 @@ struct FrozenLaunchTests {
             t.check(true, "a symlinked recorded home is refused")
         } else {
             t.check(false, "a symlinked recorded home is refused")
+        }
+
+        // Shared roots: the home must not be a shared root or contain one.
+        // A dedicated leaf under the temporary root (this fixture itself)
+        // stays valid; the checks below only cover the rejected directions.
+        let sharedRootHomes: [(String, URL)] = [
+            ("the filesystem root", URL(fileURLWithPath: "/", isDirectory: true)),
+            ("the current user home", FileManager.default.homeDirectoryForCurrentUser),
+            ("the shared /tmp directory", URL(fileURLWithPath: "/tmp", isDirectory: true)),
+            ("the shared /var/tmp directory", URL(fileURLWithPath: "/var/tmp", isDirectory: true)),
+            ("the platform temporary root",
+             URL(fileURLWithPath: NSTemporaryDirectory()).standardizedFileURL),
+        ]
+        for (name, home) in sharedRootHomes {
+            if case .failure = resolved(withHome: fixture, home).config.validate(resolved: resolved(withHome: fixture, home)) {
+                t.check(true, "\(name) is refused as a recorded home")
+            } else {
+                t.check(false, "\(name) is refused as a recorded home")
+            }
+        }
+
+        // The stable home is refused as a recorded home; its descendant
+        // direction cannot be created on disk (real stable data is never
+        // touched), so it is asserted on the overlap rule itself.
+        let stableHome = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".dsh")
+        if case .failure = resolved(withHome: fixture, stableHome).config.validate(resolved: resolved(withHome: fixture, stableHome)) {
+            t.check(true, "the stable home itself is refused as a recorded home")
+        } else {
+            t.check(false, "the stable home itself is refused as a recorded home")
+        }
+        t.check(FrozenLauncherConfig.overlap(
+            stableHome.path, stableHome.appendingPathComponent("trial", isDirectory: true).path),
+            "a descendant of the stable home overlaps it")
+        t.check(FrozenLauncherConfig.overlap(
+            fixture.resolved.resourcesDirectory.path,
+            fixture.resolved.resourcesDirectory.appendingPathComponent("payload", isDirectory: true).path),
+            "a home inside the bundled runtime overlaps it")
+
+        // The bundled runtime is refused in both directions, including the
+        // fixture root that contains the Resources directory.
+        if case .failure = resolved(withHome: fixture, fixture.root).config.validate(resolved: resolved(withHome: fixture, fixture.root)) {
+            t.check(true, "a home containing the bundled runtime is refused")
+        } else {
+            t.check(false, "a home containing the bundled runtime is refused")
         }
     }
 

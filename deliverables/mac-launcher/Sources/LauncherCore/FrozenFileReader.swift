@@ -4,6 +4,15 @@ import Foundation
 /// Reads bounded regular metadata files without following a final symlink or
 /// waiting for a FIFO writer. Callers own the JSON schema and error message.
 enum FrozenFileReader {
+
+    /// Largest `frozen-launcher-config.json` accepted: small build metadata.
+    public static let maximumConfigBytes = 64 * 1024
+
+    /// Largest `runtime-inventory.json` accepted. A real frozen payload seals
+    /// tens of thousands of files, which exceeds the config bound, so the
+    /// inventory read bound matches the validator's 32 MiB inventory limit.
+    public static let maximumInventoryBytes = 32 * 1024 * 1024
+
     static func read(_ url: URL, maximumBytes: Int) -> Data? {
         let descriptor = open(url.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
         guard descriptor >= 0 else { return nil }
