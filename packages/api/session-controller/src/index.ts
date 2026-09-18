@@ -51,6 +51,8 @@ import type {
   SessionSearchValue,
   SessionSelectModelRequest,
   SessionSelectModelValue,
+  SessionStopAllRequest,
+  SessionStopAllValue,
   SessionUpdateQueueRequest,
   SessionUpdateQueueValue,
 } from './types.ts'
@@ -121,6 +123,7 @@ export class SessionController extends TypertRemoteService {
     super(ctx, 'sessionController', { namespace: 'session' })
     installModelSelectionProjection(ctx)
     this.agents = new ApiSessionAgentController(ctx)
+    this.agents.stopAllGate.registerProjection()
     this.commands = new SessionCommandController(ctx, this.agents, process.cwd())
     ctx.effect(() => ctx.fileUploads.registerAgentResolver(async (sessionId) => {
       const result = await this.agents.resolveAgent(sessionId)
@@ -377,6 +380,18 @@ export class SessionController extends TypertRemoteService {
   @Remote('cancel')
   cancel(request: SessionCancelRequest): SessionCancelValue {
     return this.commands.cancel(request)
+  }
+
+  /**
+   * Stop one Session completely after explicitly resuming it: cancel the
+   * active turn, discard the pending queue, and block automatic
+   * continuations until the next explicit user message.
+   * @param request - Session to stop completely.
+   * @returns acknowledgement plus the discarded pending identities.
+   */
+  @Remote('stopAll')
+  stopAll(request: SessionStopAllRequest): Promise<SessionStopAllValue> {
+    return this.commands.stopAll(request)
   }
 
   /**

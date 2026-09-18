@@ -20,6 +20,8 @@ declare module '@deepseek-ai/dsh-session-projection/types' {
     imageLimits: null
     /** Durable model selection already used by a request and still pending for a later request. */
     modelSelection: ModelSelectionProjectionState
+    /** Durable full-stop flag armed by `stopAll` and cleared by the next explicit user message. */
+    stopAll: SessionStopAllProjectionState
   }
   interface SessionProjectionMap {
     /** Persisted facts used to summarize a Session without activating it. */
@@ -28,6 +30,8 @@ declare module '@deepseek-ai/dsh-session-projection/types' {
     imageLimits: ImageAttachmentLimits
     /** Durable model selection already used and selected for the next request. */
     modelSelection: ModelSelectionProjection
+    /** Whether the Session is fully stopped until the next explicit user message. */
+    stopAll: SessionStopAllProjection
   }
 }
 
@@ -357,6 +361,34 @@ export interface SessionCancelRequest {
 /** Receipt after cancellation is admitted to the live Agent. */
 export interface SessionCancelValue {
   readonly accepted: true
+}
+
+/** Full-task stop request. */
+export interface SessionStopAllRequest {
+  readonly sessionId: SessionId
+}
+
+/** Receipt after a full stop: discarded pending identities plus acknowledgement. */
+export interface SessionStopAllValue {
+  readonly accepted: true
+  /** Identities of the pending inbox occurrences the stop discarded, in discard order. */
+  readonly discardedItemIds: readonly MessageId[]
+}
+
+/** Host fold state of the durable full-stop flag. */
+export interface SessionStopAllProjectionState {
+  /** Session identity carried so the pure fold can read its live arm cut. */
+  readonly sessionId: SessionId
+  /** Whether the Session is fully stopped until the next explicit user message. */
+  readonly stopped: boolean
+  /** Event seq that armed {@link stopped}; `-1` when the Session was never armed. */
+  readonly stoppedAtSeq: number
+}
+
+/** Client view of the durable full-stop flag. */
+export interface SessionStopAllProjection {
+  /** Whether the Session is fully stopped until the next explicit user message. */
+  readonly stopped: boolean
 }
 
 /** Request to open one path prepared by a Session-aware caller on the Host desktop. */

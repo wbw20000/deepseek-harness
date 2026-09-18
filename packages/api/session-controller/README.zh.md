@@ -44,6 +44,8 @@ Session 对象还承载本地提交回显：`session.beginSubmission` 在调用�
 
 恢复会话时若已有写句柄占用，返回 `session/writer-held`，并携带会话 id；其他恢复失败仍返回 `gateway/internal`。
 
+`cancel` 只停止当前回合并保留排队输入，随后按 FIFO 顺序继续消费。`stopAll` 是全任务停止：它解析或恢复普通 Session，取消当前回合并丢弃全部排队 inbox 输入，按 inbox 清空顺序（`SessionStopAllValue.discardedItemIds`，next-step 项先于 next-turn 项）返回被丢弃的身份。重复调用 `stopAll` 是幂等的：没有任何待处理工作的空闲 Session 返回同样的结果形状，丢弃列表为空。停止会置位一个由 `stopAll` Session projection（`{ stopped: boolean }`）承载的全停标志，在 follow 打开快照、控制流 projection 帧和 projection cache 读取路径中均可见。标志为 stopped 期间，任何自动续跑——排队消费唤醒、hook steer 及类似的非用户投递——都无法进入模型步骤：Agent loop 将这类唤醒作为 blocked 回合结束，不发起请求、不消费输入、不产生新的用户内容，被唤醒认领的消息会被丢弃。只有显式用户新消息提交（`user/message` 且 source 为 `user`，来自本 prompt endpoint、SDK 或 headless 投递）才会清除标志，此后恢复正常投递。该执行状态是 Host 内 live 状态，由 projection 镜像并经 projection cache 跨重启携带：标志跨重启存续的 Session 会像重启前一样阻止自动续跑，直到下一条显式用户消息；缓存标志不可用的 Session 则读取为未停止。
+
 <a id="client-references"></a>
 ## Client 引用
 

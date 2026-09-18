@@ -870,6 +870,15 @@ workspaceDesktop(): { name: string; available: boolean; fileManager: 'finder' | 
 @Remote('cancel') cancel(request: SessionCancelRequest): SessionCancelValue
 
 /**
+ * Stop one Session completely after explicitly resuming it: cancel the
+ * active turn, discard the pending queue, and block automatic
+ * continuations until the next explicit user message.
+ * @param request - Session to stop completely.
+ * @returns acknowledgement plus the discarded pending identities.
+ */
+@Remote('stopAll') stopAll(request: SessionStopAllRequest): Promise<SessionStopAllValue>
+
+/**
  * Read one cold-safe, message-aligned Session history page.
  * @param request - durable address, backward cursor, and page budget.
  * @param signal - cancellation for persistence reads.
