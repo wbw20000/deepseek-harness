@@ -58,6 +58,8 @@ export interface SaveFileAttachment {
   data: Uint8Array
   /** Optional browser/provider display name; it is never interpreted as a path. */
   name?: string
+  /** Caller-declared media type checked against the deployment allowlist; omitted means `application/octet-stream`. */
+  mediaType?: string
 }
 
 /** Request to durably commit one file from bounded byte chunks. */
@@ -68,6 +70,53 @@ export interface SaveFileStreamAttachment {
   signal?: AbortSignal
   /** Optional browser/provider display name; it is never interpreted as a path. */
   name?: string
+  /**
+   * Caller-declared total byte count, such as an HTTP `Content-Length`.
+   * Admission refuses an over-limit declaration before any byte is written;
+   * the stream itself is still counted, so a declaration below the real
+   * length cannot bypass the limit.
+   */
+  declaredBytes?: number
+  /** Caller-declared media type checked against the deployment allowlist; omitted means `application/octet-stream`. */
+  mediaType?: string
+}
+
+/** Deployment-resolved admission policy for verbatim file uploads. */
+export interface FileAdmissionLimits {
+  /** Maximum bytes accepted for one verbatim file upload, declared or streamed. */
+  maxUploadBytes: number
+  /** Accepted media types; exact types, `type/*` wildcards, and the match-all wildcard are honored. */
+  allowedMimeTypes: readonly string[]
+}
+
+/** Request for one garbage-collection pass over durable attachment objects. */
+export interface GarbageCollectionRequest {
+  /** Attachment ids currently referenced by sessions; every other object is collectable. */
+  referenced: Iterable<AttachmentId>
+  /** Grace period in milliseconds; objects modified within it are never collected. */
+  olderThanMs: number
+}
+
+/** Bytes and object count reclaimed by one garbage-collection pass. */
+export interface GarbageCollectionResult {
+  /** Sum of deleted object bytes, counted once per content-addressed object. */
+  collectedBytes: number
+  /** Number of deleted content-addressed objects. */
+  collectedCount: number
+}
+
+/** Read-only snapshot of durable attachment storage consumption against its budget. */
+export interface AttachmentStorageUsage {
+  /** Bytes currently held by durable attachment objects. */
+  usedBytes: number
+  /** Configured disk budget in bytes; 0 means unlimited. */
+  budgetBytes: number
+  /** Budget fraction at or above which a warning fires. */
+  budgetWarnRatio: number
+  /** Whether `usedBytes` has reached `budgetBytes × budgetWarnRatio`. */
+  overBudgetWarn: boolean
+  /** Whether `usedBytes` exceeds the budget outright; always false when the budget is unlimited. */
+  overBudget: boolean
 }
 
 /** Deployment-resolved limits used by upload admission and request buffering. */

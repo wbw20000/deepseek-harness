@@ -427,6 +427,34 @@ describe('Session-addressed file upload', () => {
     await fiber.dispose()
   })
 
+  it('declares a typed Blob media type and omits the header for untyped and streamed bodies', async () => {
+    vi.stubGlobal('location', { origin: 'https://preview.test' })
+    const fetch = vi.fn(() => Promise.resolve(new Response(JSON.stringify({
+      ok: true,
+      value: { receiptId: 'receipt-1', file: { attachmentId: 'file-1', name: 'file', bytes: 1 } },
+    }), { status: 200 })))
+    ;(globalThis as UploadGlobal).__DSH_FILE_UPLOAD__ = { fetch }
+    const { fiber, service } = await scopedService()
+    const typed = new Blob(['png'], { type: 'image/png' })
+    await service.upload(SESSION_ID, typed)
+    expect(fetch).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({
+      headers: { 'content-type': 'application/octet-stream', 'x-dsh-file-type': 'image/png' },
+    }))
+
+    const untyped = new Blob(['raw'])
+    await service.upload(SESSION_ID, untyped)
+    expect(fetch).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({
+      headers: { 'content-type': 'application/octet-stream' },
+    }))
+
+    const stream = new ReadableStream<Uint8Array>({ start(controller) { controller.close() } })
+    await service.upload(SESSION_ID, stream)
+    expect(fetch).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({
+      headers: { 'content-type': 'application/octet-stream' },
+    }))
+    await fiber.dispose()
+  })
+
   it('uses the direct Remote fallback for exact bytes', async () => {
     const remote = vi.fn(() => Promise.resolve({
       ok: true,

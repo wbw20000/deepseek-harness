@@ -15,8 +15,18 @@ const IMAGE_ADMISSION_ERROR_CODES = [
 /** Caller-correctable attachment failure codes raised while admitting image input. */
 export type ImageAdmissionErrorCode = typeof IMAGE_ADMISSION_ERROR_CODES[number]
 
+const FILE_ADMISSION_ERROR_CODES = [
+  'FILE_TOO_LARGE',
+  'UNSUPPORTED_FILE_TYPE',
+  'DISK_BUDGET_EXCEEDED',
+] as const
+
+/** Caller-correctable attachment failure codes raised while admitting file input. */
+export type FileAdmissionErrorCode = typeof FILE_ADMISSION_ERROR_CODES[number]
+
 const ATTACHMENT_ERROR_CODES = [
   ...IMAGE_ADMISSION_ERROR_CODES,
+  ...FILE_ADMISSION_ERROR_CODES,
   'INVALID_FILE_BASE64',
   'INVALID_ATTACHMENT_REF',
   'ATTACHMENT_CORRUPT',
@@ -32,6 +42,7 @@ export type AttachmentErrorCode = typeof ATTACHMENT_ERROR_CODES[number]
 
 /** Runtime membership for structurally compatible errors crossing package boundaries. */
 const IMAGE_ADMISSION_ERROR_CODE_SET: ReadonlySet<string> = new Set(IMAGE_ADMISSION_ERROR_CODES)
+const FILE_ADMISSION_ERROR_CODE_SET: ReadonlySet<string> = new Set(FILE_ADMISSION_ERROR_CODES)
 const ATTACHMENT_ERROR_CODE_SET: ReadonlySet<string> = new Set(ATTACHMENT_ERROR_CODES)
 
 /**
@@ -83,4 +94,18 @@ export function isImageAdmissionError(
     && 'code' in error
     && typeof error.code === 'string'
     && IMAGE_ADMISSION_ERROR_CODE_SET.has(error.code)
+}
+
+/**
+ * Distinguish caller-correctable file admission failures from storage faults.
+ * @param error - failure raised while validating or persisting a file upload.
+ * @returns whether the caller can correct the proposed file content or resend a smaller upload.
+ */
+export function isFileAdmissionError(
+  error: unknown,
+): error is AttachmentError & { readonly code: FileAdmissionErrorCode } {
+  return error instanceof Error
+    && 'code' in error
+    && typeof error.code === 'string'
+    && FILE_ADMISSION_ERROR_CODE_SET.has(error.code)
 }

@@ -5,6 +5,7 @@ import AttachmentStore, {
   AttachmentId,
   ImageVariantId,
   isAttachmentError,
+  isFileAdmissionError,
   isImageAdmissionError,
   type ImageAttachmentRef,
   type ImageMediaType,
@@ -204,6 +205,28 @@ describe('AttachmentStore file admission', () => {
     expect(store.isAttachmentError(new AttachmentError('disk failed', 'ATTACHMENT_WRITE_FAILED'))).toBe(true)
     expect(store.isAttachmentError(new Error('unknown failure'))).toBe(false)
   })
+
+  it('admits uploads against the deployment policy before storage is consulted', () => {
+    const store = new RecordingFileStore(new Context())
+    expect(store.fileAdmission).toMatchObject({ maxUploadBytes: 300 * 1024 * 1024 })
+    expect(() => {
+      store.admitFileUpload({ bytes: 10, mediaType: 'text/plain' })
+    }).not.toThrow()
+    try {
+      store.admitFileUpload({ bytes: 300 * 1024 * 1024 + 1, mediaType: 'text/plain' })
+      throw new Error('expected the over-limit declaration to be refused')
+    } catch (error) {
+      expect(error).toMatchObject({ code: 'FILE_TOO_LARGE' })
+    }
+    try {
+      store.admitFileUpload({ bytes: 1, mediaType: 'application/x-unknown' })
+      throw new Error('expected the unaccepted type to be refused')
+    } catch (error) {
+      expect(isFileAdmissionError(error)).toBe(true)
+      expect(error).toMatchObject({ code: 'UNSUPPORTED_FILE_TYPE' })
+    }
+  })
+
 })
 
 describe('isImageAdmissionError', () => {

@@ -217,6 +217,16 @@ async admitPromptContent( content: readonly AttachmentAdmissionPart[], ): Promis
 admitEncodedFile(input: EncodedFileAttachment): Promise<FileAttachmentRef>
 
 /**
+ * Admit one verbatim file upload against {@link fileAdmission} before any
+ * byte is written. Storage operations enforce the same policy on the exact
+ * byte count, so a caller that skips this check cannot bypass admission.
+ * @param declared - declared byte count and media type; an omitted value
+ * defers that check to the stream itself or to the undeclared default.
+ * @throws an AttachmentError with `FILE_TOO_LARGE` or `UNSUPPORTED_FILE_TYPE`.
+ */
+admitFileUpload(declared: { readonly bytes?: number; readonly mediaType?: string }): void
+
+/**
  * Identify a failure emitted by this attachment capability by its stable code.
  * @param error - value caught from an attachment operation.
  * @returns whether the value is an attachment failure.
@@ -252,9 +262,11 @@ imageHostPath(ref: ImageAttachmentRef): string | undefined
 
 /**
  * Durably commit one file byte-for-byte before its owning session event is
- * appended. Files carry no admission limits: any byte content and length is
- * accepted, and the stored object is the exact submitted bytes. Backends
- * without verbatim file storage keep this default rejection.
+ * appended. File admission rejects a declared byte count above
+ * `fileAdmission.maxUploadBytes` and a media type outside
+ * `fileAdmission.allowedMimeTypes` before any byte is written; the stored
+ * object is the exact submitted bytes. Backends without verbatim file
+ * storage keep this default rejection.
  * @param input - exact bytes and optional display name.
  * @returns the durable content-addressed file reference.
  */
@@ -263,7 +275,10 @@ saveFile(input: SaveFileAttachment): Promise<FileAttachmentRef>
 /**
  * Durably commit one file byte-for-byte from bounded chunks. Providers must
  * apply backpressure and must not collect the complete file in memory.
- * Backends without streamed verbatim storage keep this default rejection.
+ * Providers enforce file admission while counting the stream, so an
+ * undeclared or under-declared length cannot bypass the byte limit or the
+ * disk budget. Backends without streamed verbatim storage keep this default
+ * rejection.
  * @param input - ordered exact bytes, optional cancellation, and display name.
  * @returns the durable content-addressed file reference.
  */
@@ -314,6 +329,16 @@ Host service owning upload storage and Agent-scoped staged receipts.
 registerAgentResolver(resolve: AgentResolver): () => void
 
 /**
+ * Admit one upload against the mounted attachment store's policy before any
+ * byte is read. The streaming route calls this so an over-limit declared
+ * length or an unaccepted declared file type becomes HTTP 413/415 instead of
+ * a stored partial object.
+ * @param declared - declared byte count and file media type, each optional.
+ * @throws an AttachmentError with `FILE_TOO_LARGE` or `UNSUPPORTED_FILE_TYPE`.
+ */
+admitUpload(declared: { readonly bytes?: number; readonly mediaType?: string }): void
+
+/**
  * Persist one encoded upload and stage it under the Agent receiver selected by Typert.
  * @param agent - receiving Agent resolved from the Remote Agent scope.
  * @param request - canonical base64 bytes and optional display name.
@@ -323,11 +348,14 @@ registerAgentResolver(resolve: AgentResolver): () => void
 @Remote('upload') upload(agent: Agent, request: EncodedFileUploadRequest, signal: AbortSignal): Promise<FileUploadValue>
 
 /**
- * Persist raw chunks for one Session without aggregating the upload.
- * @param request - Session identity, ordered bytes, cancellation, and optional display name.
+ * Persist raw chunks for one Session without aggregating the upload. The
+ * mounted attachment store enforces file admission while counting the
+ * stream, so an undeclared or under-declared length cannot bypass the byte
+ * limit or the disk budget.
+ * @param request - Session identity, ordered bytes, cancellation, declared length and media type, and optional display name.
  * @returns the staged receipt and durable file reference.
  */
-async uploadStream(request: { readonly sessionId: SessionId readonly data: AsyncIterable<Uint8Array> readonly signal?: AbortSignal readonly name?: string }): Promise<FileUploadValue>
+async uploadStream(request: { readonly sessionId: SessionId readonly data: AsyncIterable<Uint8Array> readonly signal?: AbortSignal readonly name?: string readonly declaredBytes?: number readonly mediaType?: string }): Promise<FileUploadValue>
 
 /**
  * Resolve one staged receipt inside its receiving Agent scope.

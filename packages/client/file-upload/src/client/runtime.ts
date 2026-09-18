@@ -197,10 +197,16 @@ export class FileUploadRuntime extends Service implements FileUploadService {
     if (!(data instanceof Uint8Array)) {
       const query = new URLSearchParams({ sessionId })
       if (name !== undefined) query.set('name', name)
+      // A Blob carries the file's declared media type; the transport framing
+      // type stays application/octet-stream. Streams declare no type.
+      const fileType = data instanceof Blob && data.type !== '' ? data.type : undefined
       const response = await this.post({
         path: `${FILE_UPLOAD_PATH}?${query.toString()}`,
         body: data,
-        headers: { 'content-type': 'application/octet-stream' },
+        headers: {
+          'content-type': 'application/octet-stream',
+          ...(fileType === undefined ? {} : { 'x-dsh-file-type': fileType }),
+        },
         ...(signal === undefined ? {} : { signal }),
         ...(onProgress === undefined ? {} : { onProgress }),
       })

@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-Store images and generic file attachments durably below `DSH_HOME` on the machine running DSH. Images are validated, normalized for model requests, and cached per route; generic files are preserved byte-for-byte without admission limits. Identical bytes are stored once even when uploads use different display names, reads verify file length and content, and admitted images remain readable if limits later tighten. The shipped `dsh` composition uses this package without configuration. Objects remain local to one machine and are never deleted automatically.
+Store images and generic file attachments durably below `DSH_HOME` on the machine running DSH. Images are validated, normalized for model requests, and cached per route; generic files are preserved byte-for-byte under a write-ahead byte limit and media-type allowlist, and an optional disk budget bounds stored and reserved bytes. Identical bytes are stored once even when uploads use different display names, reads verify file length and content, and admitted images remain readable if limits later tighten. The shipped `dsh` composition uses this package without configuration. Objects remain local to one machine and are collected only when a caller runs garbage collection.
 
 ## Table of Contents
 
@@ -47,8 +47,26 @@ Mount the plugin with no required configuration. The defaults below define what 
 | `normalizedImageMaxDimension` | `8192` | Maximum long edge after applying the total-pixel budget |
 | `normalizedImageMaxBytes` | `4 MiB` | Encoded-byte target; the smallest quality-ladder output is kept when none fits |
 | `imageCompressionConcurrency` | `2` | FIFO limit for concurrent normalization and request transforms |
+| `maxUploadBytes` | `300 MiB` | Maximum bytes accepted for one verbatim file upload |
+| `allowedMimeTypes` | images, text, common documents | Accepted file media types; exact types, `type/*` wildcards, and the match-all wildcard are honored |
+| `diskBudgetBytes` | `0` (unlimited) | Durable attachment disk budget; stored plus reserved bytes may not exceed it |
+| `budgetWarnRatio` | `0.8` | Budget fraction at or above which one debounced warning is logged |
+| `gcIntervalMs` | `0` (off) | Garbage-collection timer interval; when set, each pass needs a registered reference source |
+| `gcGracePeriodMs` | `24 hours` | Grace period the garbage-collection timer applies to unreferenced objects |
 
 The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-attachment-local) is the exhaustive source for every accepted field and its JSDoc.
+
+### How file uploads are admitted
+
+A generic file is checked before any byte is written: a declared upload over `maxUploadBytes` is refused with `FILE_TOO_LARGE`, and a declared media type outside `allowedMimeTypes` is refused with `UNSUPPORTED_FILE_TYPE`. An upload that declares no media type counts as `application/octet-stream`, which the default allowlist contains, so existing clients keep working. Streaming uploads are counted while they write, so a missing or under-declared length cannot sneak past the byte limit — the partial staging file is deleted and the upload fails. Zero-byte files are valid uploads.
+
+### How the disk budget works
+
+With `diskBudgetBytes` above zero, every upload reserves its declared byte count before writing, and undeclared streams reserve while they grow. Stored object bytes plus all active reservations may never exceed the budget; an upload that would push past it is refused with `DISK_BUDGET_EXCEEDED` and its reservation is released. Reservation records live beside the store in `v1/reservations`, and the store deletes a crashed process's records and `v1/tmp` staging files unconditionally when the plugin starts, whether or not the budget is enabled. Exactly one process may write attachments to a home: the cleanup cannot tell another live process's records from crash orphans. When stored usage reaches `budgetWarnRatio` of the budget, one warning is logged; the warning fires again only after usage falls back below the threshold. `usage()` reports the current bytes, budget, and warning and over-budget flags at any time.
+
+### How objects are garbage-collected
+
+`collectGarbage({ referenced, olderThanMs })` deletes stored objects whose attachment id is not in the caller's `referenced` set and whose last modification is older than `olderThanMs`, returning the reclaimed bytes and object count. Deleting a file object also removes its read-only name links. Collection never touches referenced objects or anything inside the grace period, and it runs only when a caller triggers it: `gcIntervalMs` enables a timer, but each timed pass skips unless a reference source is registered with `setGarbageReferenceSource()`, because only the caller knows which sessions still reference an attachment.
 
 ### Where your images are stored and how long they last
 
@@ -78,6 +96,7 @@ This section explains the durability and verification design behind the storage,
 - **Normalize once, project per route.** Admission persists one provider-independent normalized attachment; request projection derives deterministic variants without rewriting durable history.
 - **Lazy alpha-routed encoding.** Alpha images use WebP and opaque images use JPEG; quality candidates run in 85/75/60 order, and the smallest output is retained when none meets the encoded-byte target.
 - **Limits are write-time policy.** Byte, total-pixel, and per-side dimension limits bind admission only, so tightening them later never makes admitted history unreadable.
+- **Reservations make the budget concurrency-safe.** Each upload reserves before writing, in memory and in a record beside the store; a failed or aborted upload releases its reservation and deletes its partial staging file, and the startup orphan cleanup runs even when the budget is disabled.
 
 ### Write and read paths
 
@@ -96,6 +115,8 @@ Generic-file bytes have one canonical object at `<DSH_HOME>/attachments/v1/file-
 | [`src/index.ts`](src/index.ts) | Plugin entry: `LocalAttachmentStore`, `Config` schema, defaults |
 | [`src/store.ts`](src/store.ts) | Content-addressed write and verified read: staging, hard-link publish, fsync chain, digest verification |
 | [`src/file-store.ts`](src/file-store.ts) | Verbatim streamed file writes, verified streamed reads, and safe stored filenames |
+| [`src/budget.ts`](src/budget.ts) | Disk-budget reservation ledger, stored-bytes snapshot, and budget warnings |
+| [`src/gc.ts`](src/gc.ts) | Stored-byte scanning and unreferenced-object collection |
 | [`src/normalization.ts`](src/normalization.ts) + [`src/encoding.ts`](src/encoding.ts) | Provider-independent normalization and bounded format/quality candidates |
 | [`src/request-image.ts`](src/request-image.ts) | Route-specific request transforms, cache identity, and singleflight |
 | [`src/image.ts`](src/image.ts) | Full raster decode and metadata verification |
@@ -133,7 +154,7 @@ Normalization and request projection are deterministic. An unchanged attachment 
 
 These limits describe what this storage can and cannot do; they are current package constraints.
 
-- **Images are kept forever** — stored images are never deleted automatically, and nothing collects unreferenced objects.
+- **Collection needs the caller's reference set** — `collectGarbage()` deletes only objects the caller's `referenced` set does not name, so no component collects anything until a caller wires session references into a schedule; a second harness process sharing the same home is invisible to the budget ledger, and one process's startup cleanup treats another live process's reservation records as orphans.
 - **Local to this machine** — images live on the machine that runs the harness; other hosts cannot read them.
 - **Animated GIF becomes static** — normalization retains only the first frame; animation is outside the version-one image contract.
 - **Encoder output is versioned** — the installed Sharp/libvips build pins normalization and request bytes; an encoder or transform-version upgrade re-addresses future variants while existing objects remain valid.
@@ -148,6 +169,6 @@ This Dev Note is working context for maintainers: undecided directions and open 
 
 #### Future: retention and remote storage
 
-Retention and garbage collection are deferred because resumed and forked sessions may share immutable objects, and a backend serving remote runtimes or shared storage would need its own durability proof. Both directions are undecided; the local storage currently retains every object under `DSH_HOME`.
+The `collectGarbage()` API owns deletion and the timer wiring is available, but no owner for the referenced-set side exists: resumed and forked sessions may share immutable objects, so whoever wires session references into a schedule must account for session lineage. A backend serving remote runtimes or shared storage would need its own durability proof and budget ledger. Both directions are undecided.
 
 </details>

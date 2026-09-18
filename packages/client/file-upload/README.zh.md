@@ -42,9 +42,9 @@ kind: "package-reference"
 <details>
 <summary>实现细节——点击展开</summary>
 
-Client 插件提供 `ctx.fileUpload`。其 `upload()` 方法接收所属 Session 标识，组装原始路由请求，并为精确字节调用生成的 Remote。提供方只读取一次可选的 Cordis 启动前 `__DSH_FILE_UPLOAD__` 钩子。没有该钩子时，每个 Blob 或 stream 请求拥有一个短期 Worker，并在完成、失败或取消后释放。存在该钩子时，服务通过页面自己提供的 Fetch 载体发送请求体；Web Worker runtime 会通过请求帧转移 stream 请求体，再以带背压的分片形式交给 Host HTTP bridge。
+Client 插件提供 `ctx.fileUpload`。其 `upload()` 方法接收所属 Session 标识，组装原始路由请求，并为精确字节调用生成的 Remote。`Blob` 通过 `x-dsh-file-type` 请求头声明自己的媒体类型，Host 据此按部署允许列表准入；传输帧类型仍保持 `application/octet-stream`。提供方只读取一次可选的 Cordis 启动前 `__DSH_FILE_UPLOAD__` 钩子。没有该钩子时，每个 Blob 或 stream 请求拥有一个短期 Worker，并在完成、失败或取消后释放。存在该钩子时，服务通过页面自己提供的 Fetch 载体发送请求体；Web Worker runtime 会通过请求帧转移 stream 请求体，再以带背压的分片形式交给 Host HTTP bridge。
 
-Host 插件提供 `ctx.fileUploads`。它拥有经过认证的流式路由、编码 Remote 兜底、命令凭证解析器与暂存凭证生命周期；编码准入、附件错误识别与字节存储仍由 `ctx.attachments` 提供。凭证表以接收方 Agent 的 Session 对象为键。Session Controller 注册可恢复休眠普通 Agent 的解析器，并在 prompt 准入时消费凭证。Prompt 投递通过可释放事务持有每个凭证绑定。成功投递提交事务前，释放会恢复原绑定；提交后，队列或历史观察会退休该凭证。
+Host 插件提供 `ctx.fileUploads`。它拥有经过认证的流式路由、编码 Remote 兜底、命令凭证解析器与暂存凭证生命周期；附件存储、准入策略与字节上限仍由 `ctx.attachments` 提供。路由在读取任何请求字节前，先用挂载附件存储的策略检查声明的 `Content-Length` 与声明的文件类型，对超限声明回答 HTTP 413，对不被接受的声明文件类型回答 HTTP 415；随后声明的长度与类型随请求进入存储，由存储对流计数，因此谎报或缺失的 `Content-Length` 无法绕过字节上限或磁盘预算。凭证表以接收方 Agent 的 Session 对象为键。Session Controller 注册可恢复休眠普通 Agent 的解析器，并在 prompt 准入时消费凭证。Prompt 投递通过可释放事务持有每个凭证绑定。成功投递提交事务前，释放会恢复原绑定；提交后，队列或历史观察会退休该凭证。
 
 | 文件 | 职责 |
 |---|---|
@@ -89,6 +89,7 @@ Host 插件提供 `ctx.fileUploads`。它拥有经过认证的流式路由、编
 - **stream 请求体只能使用一次**：转移 `ReadableStream` 会锁定调用方的对象，因此重试必须重新创建 stream。
 - **stream 进度没有总量**：stream API 不携带字节长度，因此调用方只能收到已消费字节数。
 - **浏览器 Worker 必须自包含**：其源代码由函数字符串生成。如果实现需要运行时 import，就必须迁移为由 tsdown 打包的独立 Worker 入口。
+- **准入依赖挂载的附件存储**：路由只把 `FILE_TOO_LARGE` 与 `UNSUPPORTED_FILE_TYPE` 映射为 413 与 415；字节计数与磁盘预算在存储过程中生效，流中途被拒时返回 JSON 失败信封。
 
 <a id="dev-note"></a>
 ### 开发备注
