@@ -146,7 +146,8 @@ export function freezeTestPlan(plan: ConfirmedPlanInput, spec: TaskSpec): Frozen
  * @param params.attempt - attempt the result must answer.
  * @param params.result - schema-parsed report from the trusted verifier.
  * @param params.approval - the approved budget, when one is recorded; supplies the phase deadline and step cap the report must not overrun.
- * @returns the sha-256 digest of the verified result.
+ * @returns the sha-256 digest of the verified result, covering the
+ *   tested-content and acceptance-definition digests the report carries.
  * @throws SelfDevelopmentError with `SELF_DEV_IDENTITY_MISMATCH` when the report answers another task, attempt, source, artifact, or plan.
  * @throws SelfDevelopmentError with `SELF_DEV_INVALID_RESULT` when the run or any required assertion did not complete.
  * @throws SelfDevelopmentError with `SELF_DEV_LATE_RESULT` when the run or a reported phase overran the approved deadline or step cap.
@@ -159,6 +160,10 @@ export function verifyAttemptResult(params: {
   approval?: BudgetApproval
 }): string {
   const { taskId, attempt, plan, result, approval } = params
+  // `sourceDigest`/`artifactDigest` bind launch-input identity. The
+  // tested-content digests the report carries are the runner's claim about
+  // what it actually tested; this function cannot check worktree bytes, so it
+  // records them inside the returned digest instead of re-deriving them.
   if (result.taskId !== taskId || result.attemptId !== attempt.attemptId
     || result.sourceDigest !== attempt.sourceDigest
     || result.artifactDigest !== attempt.artifactDigest
