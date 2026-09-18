@@ -1,5 +1,5 @@
 ---
-description: "有人监督的自开发执行与验收辅助能力：进程限制、worktree 摘要、人工在场记录，以及部署要求。"
+description: "有人监督的自开发尝试执行：受信时钟、人工在场证据、操作绑定的启动记录、headless 执行、独立验收、证据落盘，以及由控制器拥有的停止。有人监督模式，不是无人值守。"
 kind: "package-reference"
 ---
 
@@ -10,13 +10,19 @@ kind: "package-reference"
 <a id="summary"></a>
 ## 概述
 
-使用导出的辅助函数运行 headless 开发命令，并独立检查明确的验收用例。记录人工监督确认，计算源码与产物摘要。这些辅助函数不提供操作系统隔离或自动开发循环，也不会升级已有安装。
+端到端运行一次有人监督的自开发尝试。该服务组合受信时钟、人工在场证据、操作绑定的启动记录、headless 执行器与独立验收器，把持久尝试证据与终局结果一起落盘，停止则经由任务控制器。每次启动都要求一条已记录的人工确认和有限预算。这是带明确记录限制的有人监督模式，不是无人值守运行：这里没有任何东西提供操作系统隔离，也不会升级已有安装。
 
 ## 目录
 
 - [服务](#service)
 - [受信时钟](#trusted-clock)
+- [人工在场证据](#human-presence-evidence)
+- [尝试预算](#attempt-budget)
+- [启动绑定与启动记录](#launch-binding-and-the-launch-record)
 - [执行与验收](#execution-and-acceptance)
+- [尝试证据](#attempt-evidence)
+- [尝试编排](#attempt-orchestration)
+- [错误码](#error-codes)
 - [进一步探索](#further-exploration)
 - [Model Experience](#model-experience)
 - [已知限制与延期工作](#known-limitations-and-deferred-work)
@@ -27,7 +33,7 @@ kind: "package-reference"
 <a id="service"></a>
 ## 服务
 
-`SelfDevelopmentRunner`（默认导出，Cordis 服务 `selfDevelopmentRunner`）在构造时校验部署配置。它不出现在任何默认 bundle 中，也没有可启动任务的服务方法。导出的辅助函数与任务控制器尚未连接；调用方必须提供监督并自行接入取消机制。
+`SelfDevelopmentRunner`（默认导出，Cordis 服务 `selfDevelopmentRunner`）在构造时校验部署配置。它不出现在任何默认 bundle 中，也没有可启动任务的服务方法；启动经由导出的 `runSupervisedAttempt` 完成，调用方把它指向核心任务控制包的 `SelfDevelopmentTaskController`，并传入为该启动捕获的人工确认。
 
 | 配置字段 | 含义 |
 |---|---|
@@ -40,27 +46,81 @@ kind: "package-reference"
 
 每个字段都是必需的。相对路径、词法上位于 `experimentsRoot` 之内的 `evidenceRoot`，或者不是正有限整数的 `killGraceMs`，都会在构造时抛出带 `SELF_DEV_RUNNER_CONFIG_INVALID` 的 `SelfDevelopmentRunnerError`。这项配置检查不能建立文件系统隔离，也不能阻止以同一用户身份运行的其他进程访问目录。
 
-没有发布运行时不变式伴生包，因为本包尚无独立的可观察关系——时钟、摘要与配置校验都由聚焦的行为测试往返覆盖，而能证明跨观察不变式的尝试流水线还不存在。
+没有发布运行时不变式伴生包：本包不暴露自己的运行时观察流，它拥有的启动记录、尝试证据与核心结果之间的关系由聚焦行为测试覆盖，而证据目录与控制目录之间的漂移通过拒绝并转人工处理，而不是由进程内检查来调和。
 
 <a id="trusted-clock"></a>
 ## 受信时钟
 
-`HostClock` 从 `sysctl kern.boottime` 派生 `bootId`，并用当前墙钟与启动时间的差计算 `monotonicMs`。尽管字段这样命名，它并不保证单调。核心任务控制包将启动标识变化判为 `uncertain`。此辅助函数不能替代经过验证的监督者时钟。
+[`clock.ts`](src/clock.ts) 导出 `HostClock`：从 `sysctl kern.boottime` 派生 `bootId`，并用当前墙钟与启动时间的差计算 `monotonicMs`。尽管字段这样命名，它并不保证单调。核心任务控制包将启动标识变化判为 `uncertain`。每次尝试请求都携带自己的时钟；此辅助函数不能替代经过验证的监督者时钟。
+
+<a id="human-presence-evidence"></a>
+## 人工在场证据
+
+[`presence.ts`](src/presence.ts) 把一条具体确认变成核心 `startAttempt` 约定的能力证据。确认记录由谁确认、何时确认（一条受信时钟观察）、尝试在哪个实验 worktree 中运行、会话可绑定哪些回环端口，以及字面确认语 `supervised-not-unattended`。它还绑定被确认人审阅过的启动事实：任务 id、冻结测试计划摘要、验收定义摘要与产物路径集，因此为一次启动给出的确认不能被重放到不同内容上。
+
+`HumanPresenceCapabilitySource` 为每个所需能力产出一条证据项，每条的摘要都绑定到该确认，核心据此把尝试记录为有人监督。该来源记录的是一次确认；它不会检测人员是否持续在场，也不会强制执行所记录的回环端口允许清单。
+
+<a id="attempt-budget"></a>
+## 尝试预算
+
+[`budget.ts`](src/budget.ts) 从人工批准的预算中减去任务已消耗的时间，得到本次尝试的有限界限。缺少批准、既不约束阶段也不约束总量的预算、或者总量已经花完的预算，都会在任何进程启动之前以 `SELF_DEV_RUNNER_BUDGET_INVALID` 拒绝。每个阶段都在自己的运行中期限下运行：开发阶段取批准的阶段上限与剩余总量中较小者，验收阶段取开发之后剩下的时间。任何一个限制先到零，都取消本次运行。期限在自己的 `AbortSignal` 上按限值中止；外部取消会中止它但不报告为超时。期限结束的是本次运行的可观察执行；对于逃出进程组的进程，它不是子进程监督。
+
+<a id="launch-binding-and-the-launch-record"></a>
+## 启动绑定与启动记录
+
+[`binding.ts`](src/binding.ts) 拒绝确认未绑定真实启动事实的启动：任务 id、worktree 的文件系统 realpath（必须解析到 experiments root 之内并带有 `.git` 条目）、冻结计划摘要、验收定义摘要与产物路径集。
+
+[`launch-record.ts`](src/launch-record.ts) 把操作绑定的启动记录写到 `<evidenceRoot>/tasks/<taskId>/launches/<operationId>.json`，每个操作只写一次，内容是启动时计算的摘要：worktree realpath、产物路径、验收路径与摘要、测试计划摘要、源码与产物摘要、派生预算以及人工确认。用同一 operation id 重试时读取该记录，而不是重新计算启动输入；记录的内容事实被精确比对，任何分歧都会抛出 `SELF_DEV_RUNNER_LAUNCH_MISMATCH`，把启动拒绝给人工。记录的 `expectedRevision` 记录本次启动期望的 revision，并被刻意排除在比对之外：失败尝试后的重试必然到达更高 revision，绑定重试操作的是核心自己的重放检查。
 
 <a id="execution-and-acceptance"></a>
 ## 执行与验收
 
-[执行器](src/executor.ts) 通过 headless profile 启动配置的 CLI，并以实验目录为工作目录。[验收器](src/acceptor.ts) 加载独立定义，检查命令结果与文件断言。二者均使用 POSIX 进程组执行取消。[在场证据源](src/presence.ts) 记录确认，但不会检测人员是否持续在场，也不会强制执行所记录的回环端口允许清单。
+[执行器](src/executor.ts) 通过 headless profile 启动配置的 CLI，并以实验目录为工作目录。[验收器](src/acceptor.ts) 加载独立定义，检查命令结果与文件断言。二者均使用 POSIX 进程组执行取消。上文的在场证据源记录的是一次确认；它不会检测人员是否持续在场，也不会强制执行所记录的回环端口允许清单。
 
 验收定义必须位于实验根目录之外。这种放置方式可以减少误改，但不能保证同一用户的进程无法修改它。调用方必须独立保护控制文件与已批准输入。只有完整接入任务控制器，才能将这些辅助函数的结果与任务预算、冻结计划及人工试用关联起来。
 
 执行器遇到标准输出溢出就停止，不会把截断结果当作成功。验收输出溢出会使所有断言失败。二者都会读完直接子进程的管道，杀掉其进程组内剩余成员，并等待进程组消失后才返回。无法确认退出就拒绝本次运行，包括仍可观察到未回收进程的情形。验收路径和产物祖先目录通过文件系统检查；产物符号链接只记录链接文本，不读取目标内容。这些检查不能阻止同用户的并发写入者在两次观察之间替换文件。
 
+<a id="attempt-evidence"></a>
+## 尝试证据
+
+[`evidence.ts`](src/evidence.ts) 把一次尝试的持久记录发布到 `<evidenceRoot>/tasks/<taskId>/attempts/<attemptId>.json`，并把终局决定作为 `<attemptId>.outcome.json` 写在其旁边。证据记录启动摘要、开发阶段结束后取的摘要 A、验收后取的摘要 B（验收未运行时为 `undefined`）、两者是否相等、观察到的执行器与验收事实、阶段运行以及结构化结果。结果文件记录终局决定——`passed`、`failed`、`cancelled`、`late` 或 `unknown`——已提交的 revision，以及结构化失败。
+
+没有结果文件的证据只算诊断记录：它绝不声称核心日志已通过。写入经由 [`durable-json.ts`](src/durable-json.ts)：独占临时文件、fsync、原子重命名加目录同步，因此中断的写入绝不会留下可读的半发布文件。重写相同字节返回 `unchanged`；目标路径已持有不同字节时抛出 `SELF_DEV_RUNNER_EVIDENCE_CONFLICT`。
+
+<a id="attempt-orchestration"></a>
+## 尝试编排
+
+[`attempt.ts`](src/attempt.ts) 按固定顺序运行一次有人监督的尝试：先判定任务状态与 revision，把确认绑定到解析出的 worktree、计划摘要、验收定义与产物集，写入或校验启动记录，然后让核心在任何进程启动之前提交 `attempt/started`。副作用随后运行开发、取摘要 A、在自己的期限下运行验收、取摘要 B、比对 A 与 B（不相等即判本次运行失败）、写入持久证据，并把结果交回核心校验与提交。核心重放绝不启动第二个执行器：重放操作直接返回已记录结果，不执行任何内容。证据写入失败使该轮失败；结果文件写入失败按尽力而为记录，绝不会遮蔽核心自己的决定。
+
+本服务不注册自己的 `stop`，也没有自己的 dispose。`stop` 是核心控制器操作：它在尝试仍执行时持久提交，并中止该尝试的取消句柄让副作用得以静默，因为副作用运行在控制器串行化区段之外；结算时再回到区段，被取消的尝试只能以取消失败结算。卸载等待同样的收尾：执行器与验收器读完管道、杀掉组内剩余成员并等待进程组退出后才返回。`SELF_DEV_RUNNER_ATTEMPT_ACTIVE` 在此边界为并发尝试拒绝而声明；当前没有任何代码路径抛出它。
+
+<a id="error-codes"></a>
+## 错误码
+
+`SelfDevelopmentRunnerError` 携带以下机器可路由代码之一（见 [`runtime.ts`](src/runtime.ts)）：
+
+| 代码 | 含义 |
+|---|---|
+| `SELF_DEV_RUNNER_CONFIG_INVALID` | 服务配置或人工在场确认在配置边界未通过形状校验。 |
+| `SELF_DEV_RUNNER_WORKTREE_INVALID` | worktree 不能解析到 experiments root 之内、缺少 `.git` 条目，或者无法计算摘要。 |
+| `SELF_DEV_RUNNER_CLOCK_UNAVAILABLE` | `sysctl kern.boottime` 无法启动、读取或解析成启动记录。 |
+| `SELF_DEV_RUNNER_ACCEPTANCE_INVALID` | 验收定义不可用、位置不对，或者未覆盖冻结计划的必测用例。 |
+| `SELF_DEV_RUNNER_EXECUTOR_FAILED` | headless 执行器无法 spawn 子进程，或无法确认进程组退出。 |
+| `SELF_DEV_RUNNER_EVIDENCE_FAILED` | 启动记录、证据文件或结果文件的持久写入失败。 |
+| `SELF_DEV_RUNNER_EVIDENCE_CONFLICT` | 目标路径已持有的字节与正在写入的记录、证据或结果不同。 |
+| `SELF_DEV_RUNNER_EVIDENCE_INVALID` | 启动记录、证据文件或结果文件未通过字段或路径校验，或证据根目录、id 畸形。 |
+| `SELF_DEV_RUNNER_PRESENCE_MISMATCH` | 人工确认未绑定启动的真实事实。 |
+| `SELF_DEV_RUNNER_BUDGET_INVALID` | 批准的预算缺失、畸形、不约束任何东西，或总量已经花完。 |
+| `SELF_DEV_RUNNER_LAUNCH_MISMATCH` | 已存在的启动记录与本次重试启动的内容或路径不一致。 |
+| `SELF_DEV_RUNNER_ATTEMPT_ACTIVE` | 为此边界的并发尝试拒绝保留；当前没有任何代码路径抛出它。 |
+
 <a id="further-exploration"></a>
 ## 进一步探索
 
-阅读把本包放进 workflow 兄弟包中的子系统页。
+阅读拥有编排决策的决策记录、把本包放进 workflow 兄弟包中的子系统页，以及拥有辅助函数 fail-closed 限制的记录。
 
+- [有人监督的尝试编排](../../../.agents/notes/implemented/feature/2026-09-18-supervised-attempt-orchestration.zh.md) —— 每次尝试显式传入证据与时钟、操作绑定的启动记录，以及 A/B 摘要比对。
 - [Workflow 子系统](../../../docs/subsystems/workflow.zh.md) —— workflow 接缝与组内其他包。
 - [监督辅助能力的限制](../../../.agents/notes/implemented/bug-fix/2026-09-18-supervised-runner-fail-closed.zh.md) —— 失败处理与本地检查的能力范围。
 
@@ -76,10 +136,14 @@ kind: "package-reference"
 ## Known Limitations and Deferred Work
 
 - **墙钟敏感性** —— `HostClock.monotonicMs` 派生自 `Date.now()`，墙钟调整可能使时长测量失效。JavaScript 定时器不是能够应对进程故障或主机休眠的独立监督者。
-- **没有任务编排** —— 服务尚未将辅助函数接入 `startAttempt`、持久化尝试证据或重复失败的尝试。不提供无人值守执行或升级路径。
+- **没有自动尝试循环** —— 服务不会重复失败的尝试，也不提供无人值守执行或升级路径。重试是由调用方发起、携带自己幂等键的操作；启动记录要么重放它，要么把它拒绝给人工。
 - **同用户执行** —— 选择工作目录和限制环境变量不是沙箱。子进程仍拥有操作系统用户的权限；所提供的实验 home 可能含有凭据。验收命令也没有外层沙箱。
 - **进程组身份与逃逸** —— 离开进程组的后代（例如调用 `setsid`）可以逃过进程组取消。数字进程组 ID 在退出后也可能被复用；发信号并未固定操作系统拥有的进程身份。执行辅助函数在启动进程前拒绝 Windows；它们没有实现 Windows 进程监督机制。
 - **时钟源仅限 macOS** —— `readBootTimeSysctl` 依赖 `sysctl kern.boottime`，Linux 与 Windows 上不存在；没有后备时钟。
+- **监督不是隔离** —— 工作目录选择、环境变量白名单、workspace-write 和路径检查不是外层操作系统沙箱。同一用户的子进程可能访问正式 home、实验凭据、控制目录与其他进程。人工确认不会自动生成配额、隔离或真实在场检测。Node 墙钟差与 JavaScript 定时器不能替代独立监督者的时钟、休眠计账和崩溃清理。当前阶段只能提供明确记录限制的有人监督测试，不得据此放行无人值守。
+- **预算期限结束的是观察，不是逃逸的进程** —— 阶段期限与取消经由 POSIX 进程组生效，而进程组无法约束用 `setsid` 逃逸的后代；限制触发时会拆除组内成员并记录超时，但停不掉已离开进程组的进程。
+- **检查与使用之间的符号链接竞态** —— worktree 包含关系、验收放置与产物路径检查在执行时解析路径；同用户的并发写入者可以在检查与使用之间把某个路径组件替换成符号链接，这些检查不能消除这一竞态。
+- **证据目录与控制目录同属操作用户** —— 证据根目录与任务控制目录都是与尝试同用户的普通目录；本包没有任何东西阻止同用户进程（包括实验本身）改写证据、启动记录或结果文件。
 
 <a id="dev-note"></a>
 ### 开发备注

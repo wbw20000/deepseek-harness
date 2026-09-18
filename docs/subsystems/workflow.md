@@ -127,6 +127,10 @@ The top-level `dsh-tool-workflow` consumer projects display facts into its calli
 
 `dsh-client-ui-workflow-run` folds the four events through the Conversation Node engine into one `workflow-run` Chat node anchored at the run-start sequence, after the original workflow tool node. Phase groups come only from actual member starts and preserve exact strings, including the distinction between an omitted phase and `''`. Closed Locations turn missing terminal facts into interrupted presentation. The [UI package README](../../packages/client/ui-workflow-run/README.md) owns disclosure, status, and same-parent local navigation behavior.
 
+## Self-development task control and the supervised runner
+
+The workflow group also owns the opt-in self-development pair, which lives outside the script seam. [dsh-workflow-self-development](../../packages/workflow/workflow-self-development/README.md) owns one durable lifecycle per task — versioned spec, frozen test plan, human budget approval, verified attempt results, trial approval — in a private control directory, and caches one serialized controller per task. [dsh-workflow-self-development-runner](../../packages/workflow/workflow-self-development-runner/README.md) composes one supervised attempt against that controller: the trusted clock, human-presence evidence, the operation-bound launch record, the headless executor, the independent acceptor, and durable attempt evidence with its terminal outcome. Every launch requires a recorded human confirmation and a finite budget; the pair provides supervised testing with recorded limits, never unattended operation. Both services appear in the [Cordis API](#cordis-surface) as `ctx.selfDevelopmentTasks` and `ctx.selfDevelopmentRunner`.
+
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
 <a id="cordis-surface"></a>

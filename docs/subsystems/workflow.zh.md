@@ -127,6 +127,10 @@ interface WorkflowRun {
 
 `dsh-client-ui-workflow-run` 通过 Conversation Node 引擎把四类事件折叠为一个 `workflow-run` Chat 节点，以 run-start 序号锚定在原工作流工具节点之后。阶段组只来自真正开始过的成员，并保留精确字符串，包括字段缺省与 `''` 的区别。Location 关闭时，缺失终点会显示为已中断。[界面包 README](../../packages/client/ui-workflow-run/README.zh.md)负责定义 disclosure、状态与同父本地导航行为。
 
+## 自开发任务控制与有人监督的 runner
+
+workflow 组还拥有脚本 seam 之外的可选自开发组合。[dsh-workflow-self-development](../../packages/workflow/workflow-self-development/README.zh.md) 在私有控制目录中为每个任务拥有一条持久生命周期——版本化 spec、冻结测试计划、人工预算批准、已验证尝试结果、试用批准——并为每个任务缓存一个串行化控制器。[dsh-workflow-self-development-runner](../../packages/workflow/workflow-self-development-runner/README.zh.md) 针对该控制器组合一次有人监督的尝试：受信时钟、人工在场证据、操作绑定的启动记录、headless 执行器、独立验收器，以及带终局结果的持久尝试证据。每次启动都要求一条已记录的人工确认和有限预算；这对包提供的是带明确记录限制的有人监督测试，绝不是无人值守运行。两个服务都以 `ctx.selfDevelopmentTasks` 与 `ctx.selfDevelopmentRunner` 出现在 [Cordis API](#cordis-surface) 中。
+
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
 <a id="cordis-surface"></a>
