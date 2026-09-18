@@ -89,7 +89,7 @@ function validateConfig(config: RunnerConfig): RunnerConfig {
   if (isInsideReal(resolve(config.experimentsRoot), resolve(config.evidenceRoot))) {
     throw invalid(`evidenceRoot ${JSON.stringify(config.evidenceRoot)} must live outside experimentsRoot ${JSON.stringify(config.experimentsRoot)}`)
   }
-  if (!Number.isInteger(config.killGraceMs) || config.killGraceMs < 1 || !Number.isFinite(config.killGraceMs)) {
+  if (!Number.isInteger(config.killGraceMs) || config.killGraceMs < 1) {
     throw invalid(`killGraceMs must be a positive finite integer, got ${String(config.killGraceMs)}`)
   }
   return config

@@ -9,7 +9,7 @@
 
 import { spawn, type SpawnOptionsWithStdioTuple } from 'node:child_process'
 import { lstat, readFile, realpath } from 'node:fs/promises'
-import { isAbsolute, relative, resolve } from 'node:path'
+import { resolve } from 'node:path'
 import type { CaseResult, FrozenTestPlan } from '@deepseek-ai/dsh-workflow-self-development'
 import { isInsideReal, staysInside } from './path-containment.ts'
 import { SelfDevelopmentRunnerError } from './runtime.ts'
@@ -245,8 +245,7 @@ export async function runAcceptance(
  */
 async function assertPathInsideWorktree(worktree: string, path: string, caseId: string, assertionId: string): Promise<void> {
   const resolved = resolve(worktree, path)
-  const rel = relative(worktree, resolved)
-  if (rel.startsWith('..') || isAbsolute(rel) || !(await staysInside(worktree, resolved))) {
+  if (!isInsideReal(worktree, resolved) || !(await staysInside(worktree, resolved))) {
     throw new SelfDevelopmentRunnerError(
       `acceptance case ${caseId} assertion ${assertionId} path ${path} escapes the worktree`,
       'SELF_DEV_RUNNER_ACCEPTANCE_INVALID',
@@ -265,8 +264,7 @@ async function assertPathInsideWorktree(worktree: string, path: string, caseId: 
  */
 async function assertCwdInsideWorktree(worktree: string, cwd: string, caseId: string): Promise<void> {
   const resolved = resolve(worktree, cwd)
-  const rel = relative(worktree, resolved)
-  if (rel.startsWith('..') || isAbsolute(rel) || !(await staysInside(worktree, resolved))) {
+  if (!isInsideReal(worktree, resolved) || !(await staysInside(worktree, resolved))) {
     throw new SelfDevelopmentRunnerError(
       `acceptance case ${caseId} cwd ${cwd} escapes the worktree ${worktree}`,
       'SELF_DEV_RUNNER_ACCEPTANCE_INVALID',

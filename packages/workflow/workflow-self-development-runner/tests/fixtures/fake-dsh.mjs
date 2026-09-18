@@ -18,9 +18,10 @@
  *               300 ms later, after the CLI process itself is already gone.
  * - `slow`    → session event, ignores SIGTERM, keeps the loop alive until SIGKILL.
  * - `slow-steps` → session event, 3 step_starts with the third 300 ms in, then ignores
- *               SIGTERM and stays alive until SIGKILL; the delayed step places the step
- *               cap's teardown inside a still-pending phase deadline (the re-arm test
- *               uses a 400 ms deadline), so the deadline replaces the pending grace.
+ *               SIGTERM and stays alive until SIGKILL; the delayed step fires the step
+ *               cap while the phase deadline is still far off, so a cancellation that
+ *               follows during the kill grace (400 ms in the no-restart test) must not
+ *               re-arm it — only the original grace's SIGKILL ends the run.
  * - `orphan`  → spawns `sleep 30` inside its own process group, announces the pid in a
  *               text event and in `./orphan-grandchild.pid` inside its cwd, stays alive.
  * - `fail`    → parser-tolerance noise (blank line, non-JSON, `null`, JSON number, session
@@ -62,9 +63,9 @@ if (task === 'ok') {
 } else if (task === 'slow-steps') {
   emit({ type: 'session', sessionId: 'session-fake-slow-steps', cwd: process.cwd() })
   for (const step of [1, 2]) emit({ type: 'status', phase: 'step_start', turn: 1, step })
-  // The third step at 300 ms fires the step cap while the phase deadline
-  // (400 ms in the re-arm test) is still pending; SIGTERM is ignored, so
-  // only the deadline's re-armed escalation can end the run.
+  // The third step at 300 ms fires the step cap long before the phase
+  // deadline; SIGTERM is ignored, so only the SIGKILL that follows the
+  // original kill grace (400 ms in the no-restart test) can end the run.
   setTimeout(() => emit({ type: 'status', phase: 'step_start', turn: 1, step: 3 }), 300)
   process.on('SIGTERM', () => {})
   setInterval(() => {}, 1_000)
