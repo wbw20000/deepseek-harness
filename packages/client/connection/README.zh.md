@@ -34,9 +34,11 @@ kind: "package-reference"
 <a id="browser-authentication-and-request-trust"></a>
 ## 浏览器认证与请求信任
 
-每个 Host RPC 方法和 WebSocket 流都要求一个浏览器会话，不存在按方法区分的 loopback 层。每个进程生成一个随机启动令牌。`dsh-web-app` 打印并打开带 `?token=...` 的普通根 URL；`frontend-static` 把根路径和 index 请求交给 `ctx.connection.authorizeIndex`，后者只在 `GET /` 接受该令牌，写入绑定 authority 的签名 cookie，再重定向到干净的 `/`。缺失、过期、畸形或 authority 不匹配的 cookie 会在 RPC 分发前得到 401。静态资源保持公开。HTTP 载体不在根路径交换之外接受 query token，也不接受 Authorization header token。
+每个 Host RPC 方法和 WebSocket 流都要求一个浏览器会话，不存在按方法区分的 loopback 层。每个进程生成一个随机启动令牌。`dsh-web-app` 打印并打开带 `?token=...` 的普通根 URL；`frontend-static` 把根路径和 index 请求交给 `ctx.connection.authorizeIndex`，后者只在 `GET /` 接受该令牌，先登记一个服务端会话，再写入命名该会话、绑定 authority 的签名 cookie，然后重定向到干净的 `/`。缺失、过期、畸形或 authority 不匹配的 cookie 会在 RPC 分发前得到 401。静态资源保持公开。HTTP 载体不在根路径交换之外接受 query token，也不接受 Authorization header token。
 
-cookie 签名密钥是 `ctx.credentials` 中由 `client-connection/browser-session` 拥有的 grant 记录。本地提供方把它持久化到 `$DSH_HOME/.credentials.yaml`；`BrowserAuth` 在 Connection 激活期间加载或创建该记录，并把密钥留在内存中，因此请求认证同步执行。删除或替换该记录会在下一次 Connection 激活时生效。cookie 携带绝对签发与过期区间，`cookieMaxAgeDays` 默认设为 30 天，并在确定性名称与签名 payload 中同时绑定规范化 hostname 和 port。它是 host-only、`Path=/`、`HttpOnly`、`SameSite=Strict`；随附服务器使用 loopback HTTP，因此刻意不设置 `Secure`。
+cookie 签名密钥是 `ctx.credentials` 中由 `client-connection/browser-session` 拥有的 grant 记录，会话登记把它的 JSON 快照作为 `client-connection/browser-sessions` 记录存在同一旁；本地提供方把两者都持久化到 `$DSH_HOME/.credentials.yaml`，Connection 激活期间把两者都载入内存，因此请求认证同步执行。每次令牌交换都先登记会话再铸造命名它的 cookie，而校验还要求该会话存在且未被撤销，因此撤销一条登记会让对应 cookie 失效，且不触碰签名密钥。删除或替换记录会在下一次 Connection 激活时生效。cookie 携带绝对签发与过期区间，`cookieMaxAgeDays` 默认设为 30 天，并在确定性名称与签名 payload 中同时绑定规范化 hostname 和 port。它是 host-only、`Path=/`、`HttpOnly`、`SameSite=Strict`。随附服务器使用 loopback HTTP，因此 `Secure` 默认关闭；仅当浏览器 origin 经 HTTPS 终止的反向代理提供时，才把 Host Connection 行的 `cookieSecure` 设为 true，这同时把铸造的配对 URL 切换为 `https`。
+
+Connection 自有四条需认证的会话生命周期 Fetch 路由：`GET /api/connection.sessions` 列出登记（设备标签与签发、过期、撤销时间，绝无 cookie 值）；`POST /api/connection.sessions.revoke` 携带 `{ sessionId }` 撤销一条登记；`POST /api/connection.logout` 撤销调用方自己的会话并令其 cookie 过期；`POST /api/connection.pairing.mint` 携带 `{ ttlMs?, deviceLabel }` 铸造一枚一次性配对令牌，并返回带 `?token=...` 的普通根 URL。配对令牌是 32 字节随机 base64url 密文，同时未消费的至多 5 枚，有效期至多 10 分钟（默认 5 分钟）；`authorizeIndex` 只消费它一次，按铸造时的设备标签登记会话并签发该会话的 cookie。令牌只保存在内存中，不写日志，也不出现在错误消息里。同一认证检查同样把守 `/api/remote.mux` 的 WebSocket 升级，因此被撤销的会话在下次握手时会被拒绝；已被接受的 mux 连接会继续服务直到断开，因为本包不持有活动连接表。
 
 认证之前，每个请求仍经过 `src/api-request-trust.ts`。其 `Host` 必须是 loopback，或与 `trustedHosts` 条目匹配：带端口的 `host:port` 精确匹配，不带端口的条目匹配任意端口，两侧均经 WHATWG 归一化。若附带 `Origin`，它必须等于该 Host；`sec-fetch-site: cross-site` 一律拒绝。畸形配置 authority 会让插件加载失败。这些检查防御 DNS rebinding 与跨站浏览器请求，绝不建立身份。Host/Origin 校验失败返回 403；Host 可信但未认证的请求返回 401。`dsh web --host 0.0.0.0` 仍不受支持。决策记录：[浏览器请求信任](../../../.agents/notes/implemented/architecture/2026-07-28-api-browser-trust-boundary.zh.md)与[浏览器令牌认证](../../../.agents/notes/implemented/architecture/2026-08-24-browser-token-authentication.zh.md)。
 
@@ -68,8 +70,7 @@ API Gateway Client 把内部 `$events` 逻辑流注册为唯一 generation sourc
 <a id="known-limitations-and-deferred-work"></a>
 
 - **缓冲型 `/api` 路由会把每个请求体保留在内存里**：`maxRequestBodyBytes`（默认 300 MiB，按默认 200 MiB 图片总量上限经 base64 膨胀加信封余量得出）限制普通图片与 RPC 信封。显式启用的流式路由接收带背压的分块并绕过总量上限；路由实现负责持久化、取消与存储配额。
-- **浏览器 cookie 不带 `Secure`**：当前随产品提供的传输方式是 loopback HTTP；若部署经明文网络暴露同一 authority，bearer cookie 可能在传输中泄露。
-- **没有 logout 操作**：清除浏览器 cookie 会结束单个浏览器会话；删除 owner 凭据记录并重启 `dsh` 会撤销全部会话。
+- **会话登记只属于单个进程和单个数据目录**：登记不是跨设备证书；共用同一凭据文件的并发进程各自保留 last-write-wins 的登记快照，不做合并；被撤销会话中已被接受的 WebSocket mux 连接会继续服务直到断开，因为本包不持有活动连接表。
 
 
 <a id="dev-note"></a>
@@ -82,4 +83,4 @@ API Gateway Client 把内部 `$events` 逻辑流注册为唯一 generation sourc
 
 </details>
 
-**运行时不变式：** 不发布伴生入口。浏览器会话验证会在请求授权工作时异步读取凭据记录，而记录的 commit-event 生命周期由 credentials 伴生入口负责；流与重连的时序及 rpcId 往返约束由行为规范直接验证，路由注册与 dispose（资源释放）的对称性由 webserver 伴生入口审计。
+**运行时不变式：** 不发布伴生入口。浏览器会话验证同步读取内存中的会话登记表；登记快照每次激活加载一次，并经 credentials 提供方持久化，记录 commit-event 生命周期由 credentials 伴生入口负责。流与重连的时序及 rpcId 往返约束由行为规范直接验证，路由注册与 dispose（资源释放）的对称性由 webserver 伴生入口审计。

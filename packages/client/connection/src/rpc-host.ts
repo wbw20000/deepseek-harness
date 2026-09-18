@@ -12,6 +12,7 @@ import { bridge } from './http-bridge.ts'
 import { isTrustedApiRequest } from './api-request-trust.ts'
 import { API_PATH } from './api-path.ts'
 import type { BrowserAuth } from './browser-auth.ts'
+import type { RegisteredSession } from './session-registry.ts'
 import type {
   ConnectionIndexRequest,
   ConnectionIndexResponse,
@@ -107,6 +108,48 @@ export class HostConnectionService extends Service implements HostConnectionHand
   /** Add this process's launch token to the clean application URL. */
   authenticatedUrl(baseUrl: string): string {
     return this.browserAuth.authenticatedUrl(baseUrl)
+  }
+
+  /**
+   * List registered browser sessions.
+   * @returns the registrations; no cookie value is part of a registration.
+   */
+  listSessions(): Promise<readonly RegisteredSession[]> {
+    return this.browserAuth.listSessions()
+  }
+
+  /**
+   * Revoke one registered browser session; its cookie stops authenticating.
+   * @param sessionId - registration to revoke.
+   * @returns false when it was unknown or already revoked, otherwise true.
+   */
+  revokeSession(sessionId: string): Promise<boolean> {
+    return this.browserAuth.revokeSession(sessionId)
+  }
+
+  /**
+   * Mint one single-use pairing login URL.
+   * @param baseUrl - canonical browser origin for the one-shot URL.
+   * @param ttlMs - pairing-token time to live between 1 ms and ten minutes.
+   * @param deviceLabel - label recorded for the session issued at consumption.
+   * @returns the one-shot URL and the token's absolute expiry.
+   */
+  mintPairingUrl(
+    baseUrl: string,
+    ttlMs: number,
+    deviceLabel: string,
+  ): { readonly authenticatedUrl: string; readonly expiresAt: number } {
+    return this.browserAuth.pairingUrl(baseUrl, ttlMs, deviceLabel)
+  }
+
+  /**
+   * Revoke the session presented by this request's cookie.
+   * @param request - request headers carrying Host and Cookie.
+   * @returns the cookie-clearing `Set-Cookie` value, or undefined when no
+   * cookie signed for this authority is present.
+   */
+  logoutSession(request: ConnectionTrustRequest): Promise<string | undefined> {
+    return this.browserAuth.logout(request)
   }
 
   /**

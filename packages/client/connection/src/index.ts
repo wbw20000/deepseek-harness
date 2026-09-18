@@ -10,6 +10,7 @@ import { API_PATH } from './api-path.ts'
 import { bridge, DEFAULT_MAX_REQUEST_BODY_BYTES } from './http-bridge.ts'
 import { assertTrustedAuthority } from './api-request-trust.ts'
 import { BrowserAuth } from './browser-auth.ts'
+import { DEFAULT_PAIRING_TTL_MS } from './pairing.ts'
 import { HostConnectionService } from './rpc-host.ts'
 import { ConnectionRecoveryConfigSchema, resolveConnectionConfig, type ConnectionRecoveryConfig } from './recovery-config.ts'
 
@@ -43,8 +44,24 @@ export {
   serverResponseSchema,
 } from './rpc-schema.ts'
 export { HostConnectionService } from './rpc-host.ts'
+export type { RegisteredSession, SessionRegistryStore } from './session-registry.ts'
+export {
+  MAX_PAIRING_DEVICE_LABEL_LENGTH,
+  MAX_PAIRING_TTL_MS,
+  MAX_PENDING_PAIRING_TOKENS,
+} from './pairing.ts'
+export { SessionRegistry, credentialSessionRegistryStore } from './session-registry.ts'
 
 export { API_PATH } from './api-path.ts'
+
+/** Exact Fetch route listing registered browser sessions. */
+export const SESSIONS_ROUTE_PATH = '/api/connection.sessions'
+/** Exact Fetch route revoking one registered browser session. */
+export const SESSIONS_REVOKE_ROUTE_PATH = '/api/connection.sessions.revoke'
+/** Exact Fetch route minting one single-use pairing login URL. */
+export const PAIRING_MINT_ROUTE_PATH = '/api/connection.pairing.mint'
+/** Exact Fetch route revoking the caller's own browser session. */
+export const LOGOUT_ROUTE_PATH = '/api/connection.logout'
 
 /** Stable Cordis plugin name. */
 export const name = 'client-connection'
@@ -98,6 +115,13 @@ export interface ConnectionConfig {
   trustedHosts?: string[]
   /** Absolute browser-session lifetime in days. Default: 30. */
   cookieMaxAgeDays?: number
+  /**
+   * Add the `Secure` attribute to every browser-session cookie. Default:
+   * false. Enable only when the deployment serves the browser origin through
+   * an HTTPS-terminating reverse proxy; on plain HTTP the browser would
+   * refuse to store or send the cookie.
+   */
+  cookieSecure?: boolean
   /** Maximum buffered JSON body for every `/api` request. Default: 300 MiB. */
   maxRequestBodyBytes?: number
 }
@@ -106,6 +130,7 @@ export const Config: z<ConnectionConfig> = z.object({
   recovery: ConnectionRecoveryConfigSchema.default({}),
   trustedHosts: z.array(String).default([]),
   cookieMaxAgeDays: z.natural().min(1).default(30),
+  cookieSecure: z.boolean().default(false),
   maxRequestBodyBytes: z.natural().min(1).default(DEFAULT_MAX_REQUEST_BODY_BYTES),
 })
 
@@ -121,6 +146,8 @@ export async function apply(ctx: Context, config?: ConnectionConfig): Promise<vo
   // The Loader resolves schema defaults; hand-built test contexts may pass none.
   const trustedHosts = config?.trustedHosts ?? []
   const cookieMaxAgeDays = config?.cookieMaxAgeDays ?? 30
+  // The Loader resolves schema defaults; hand-built test contexts may pass none.
+  const cookieSecure = config?.cookieSecure ?? false
   const maxRequestBodyBytes = config?.maxRequestBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES
   // Config boundary: a malformed entry fails the load loudly here rather than
   // silently authorizing its hostname prefix at request time.
@@ -129,7 +156,7 @@ export async function apply(ctx: Context, config?: ConnectionConfig): Promise<vo
   const connection = new HostConnectionService(
     ctx,
     trustedHosts,
-    await BrowserAuth.create(ctx.root, ctx.credentials, cookieMaxAgeDays),
+    await BrowserAuth.create(ctx.root, ctx.credentials, cookieMaxAgeDays, cookieSecure),
   )
   ctx.inject(['webServer'], (webCtx) => {
     assertImageBodyCapacity(webCtx, maxRequestBodyBytes)
@@ -151,8 +178,116 @@ export async function apply(ctx: Context, config?: ConnectionConfig): Promise<vo
       },
     }
     webCtx.effect(() => webCtx.webServer.register(route), 'client-connection: /api route')
+    registerConnectionRoutes(webCtx, connection, cookieSecure)
   })
   ctx.inject(['attachments'], (attachmentCtx) => {
     assertImageBodyCapacity(attachmentCtx, maxRequestBodyBytes)
   })
+}
+
+/** Parse one buffered JSON-object request body, or undefined when it is not a JSON object. */
+async function readJsonObject(request: Request): Promise<Record<string, unknown> | undefined> {
+  let body: unknown
+  try {
+    body = await request.json()
+  } catch {
+    return undefined
+  }
+  return typeof body === 'object' && body !== null && !Array.isArray(body)
+    ? body as Record<string, unknown>
+    : undefined
+}
+
+function plainResponse(status: number, message: string): Response {
+  return new Response(`${message}\n`, {
+    status,
+    headers: { 'cache-control': 'no-store', 'content-type': 'text/plain; charset=utf-8' },
+  })
+}
+
+/** Session-management origin derived from the trust-fenced Host header and the cookie security setting. */
+function requestOrigin(request: Request, cookieSecure: boolean): string | undefined {
+  const host = request.headers.get('host')
+  return host === null ? undefined : `${cookieSecure ? 'https' : 'http'}://${host}`
+}
+
+/**
+ * Register the session-lifecycle Fetch routes Connection owns itself. Every
+ * route runs after the `/api` trust fence and browser authentication, so all
+ * of them are authenticated operations.
+ * @param owner - context owning the route effects.
+ * @param connection - Host Connection service carrying the session registry.
+ * @param cookieSecure - cookie `Secure` setting; also selects the pairing URL scheme.
+ */
+function registerConnectionRoutes(
+  owner: Context,
+  connection: HostConnectionService,
+  cookieSecure: boolean,
+): void {
+  owner.effect(() => connection.fetch.register({
+    path: SESSIONS_ROUTE_PATH,
+    methods: ['GET'],
+    requestBody: 'buffered',
+    fetch: async () => Response.json(
+      { sessions: await connection.listSessions() },
+      { headers: { 'cache-control': 'no-store' } },
+    ),
+  }), 'client-connection: /api/connection.sessions route')
+  owner.effect(() => connection.fetch.register({
+    path: SESSIONS_REVOKE_ROUTE_PATH,
+    methods: ['POST'],
+    requestBody: 'buffered',
+    fetch: async (request) => {
+      const body = await readJsonObject(request)
+      const sessionId = body?.sessionId
+      if (typeof sessionId !== 'string' || sessionId === '') {
+        return plainResponse(400, 'connection: sessionId must be a non-empty string')
+      }
+      return Response.json(
+        { revoked: await connection.revokeSession(sessionId) },
+        { headers: { 'cache-control': 'no-store' } },
+      )
+    },
+  }), 'client-connection: /api/connection.sessions.revoke route')
+  owner.effect(() => connection.fetch.register({
+    path: PAIRING_MINT_ROUTE_PATH,
+    methods: ['POST'],
+    requestBody: 'buffered',
+    fetch: async (request) => {
+      const origin = requestOrigin(request, cookieSecure)
+      if (origin === undefined) return plainResponse(400, 'connection: request carries no Host header')
+      const body = (await readJsonObject(request)) ?? {}
+      const ttlMs = body.ttlMs === undefined ? DEFAULT_PAIRING_TTL_MS : body.ttlMs
+      const deviceLabel = body.deviceLabel
+      if (typeof ttlMs !== 'number' || typeof deviceLabel !== 'string') {
+        return plainResponse(400, 'connection: ttlMs must be a number and deviceLabel must be a string')
+      }
+      try {
+        const minted = connection.mintPairingUrl(origin, ttlMs, deviceLabel)
+        return Response.json(
+          { authenticatedUrl: minted.authenticatedUrl, expiresAt: minted.expiresAt },
+          { headers: { 'cache-control': 'no-store' } },
+        )
+      } catch (error) {
+        return plainResponse(400, error instanceof Error ? error.message : String(error))
+      }
+    },
+  }), 'client-connection: /api/connection.pairing.mint route')
+  owner.effect(() => connection.fetch.register({
+    path: LOGOUT_ROUTE_PATH,
+    methods: ['POST'],
+    requestBody: 'buffered',
+    fetch: async (request) => {
+      const clearCookie = await connection.logoutSession(request)
+      return Response.json(
+        { ok: true },
+        {
+          headers: {
+            'cache-control': 'no-store',
+            ...(clearCookie === undefined ? {} : { 'set-cookie': clearCookie }),
+          },
+        },
+      )
+    },
+  }), 'client-connection: /api/connection.logout route')
 }

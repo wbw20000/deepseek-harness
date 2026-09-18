@@ -6,6 +6,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   apply,
+  installConnection,
   type ClientConnectionRpc,
   type ClientTransportHooks,
   type ConnectionGenerationSource,
@@ -121,6 +122,14 @@ describe('connection client apply', () => {
   it('treats a runtime without browser location as local', async () => {
     delete (globalThis as Win).location
     expect((await mount()).isLoopback).toBe(true)
+  })
+
+  it('installs a default carrier and default recovery timing when called without options', () => {
+    const ctx = new Context()
+    installConnection(ctx)
+    const handle = ctx.get('connection') as ConnectionHandle
+    expect(handle.isLoopback).toBe(true)
+    expect(() => handle.start({})).toThrow('no generation source is registered')
   })
 
   it('mounts ctx.connection and identifies a loopback page', async () => {
