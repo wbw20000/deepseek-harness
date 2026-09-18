@@ -386,7 +386,8 @@ async function bindLaunchInputs(
 
 /**
  * Compare an existing launch record against the current launch. The record's
- * `expectedRevision` is provenance and is deliberately not compared: a retry
+ * `expectedRevision` field records which revision the launch expected and is
+ * deliberately not compared: a retry
  * after a failed attempt necessarily arrives at a higher revision, and the
  * core's replay check — which precedes its own revision check and excludes
  * the header from the payload digest — is what binds the retried operation.

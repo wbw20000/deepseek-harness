@@ -852,6 +852,9 @@ export const TYPE_LINK_EXEMPTIONS: Readonly<Record<string, string>> = {
   AcceptanceCase: 'stable-side acceptance case definition is owned by packages/workflow/workflow-self-development-runner/README.md',
   ExecutorRun: 'headless executor run facts are owned by packages/workflow/workflow-self-development-runner/README.md',
   AttemptEvidence: 'stable-side attempt evidence record is owned by packages/workflow/workflow-self-development-runner/README.md',
+  SupervisedAttemptRequest: 'one supervised attempt request is owned by packages/workflow/workflow-self-development-runner/README.md',
+  SupervisedAttemptOutcome: 'one supervised attempt outcome is owned by packages/workflow/workflow-self-development-runner/README.md',
+  TaskOperationResult: 'core task operation result is owned by packages/workflow/workflow-self-development/README.md',
 }
 
 /** Repository data policy consumed by the Cordis catalog projector. */

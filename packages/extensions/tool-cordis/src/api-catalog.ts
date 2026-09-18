@@ -1668,7 +1668,34 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     key: 'selfDevelopmentRunner',
     summary: 'Cordis service composing the supervised-mode attempt pipeline.',
     description: 'Cordis service composing the supervised-mode attempt pipeline.',
-    methods: [],
+    methods: [
+      {
+        signature: 'clock(): HostClock',
+        description: 'The runner\'s trusted clock. The first call creates one `HostClock`; later calls return the same instance, so every task and attempt shares one boot-session observer.',
+        parameters: [],
+        returns: 'the singleton trusted clock.',
+      },
+      {
+        signature: 'runAttempt(req: SupervisedAttemptRequest): Promise<SupervisedAttemptOutcome>',
+        description: 'Run one supervised attempt for a task. A second attempt for the same task while one is in flight in this runner is refused before the core is touched; worktree, confirmation, launch-record, and evidence validation are `runSupervisedAttempt`\'s responsibility.',
+        parameters: [{ name: 'req', description: 'the supervised attempt to run, keyed by task id.' }],
+        returns: 'the core operation result with the attempt id, evidence path, and outcome write failure of this process\'s execution.',
+        throws: ['SelfDevelopmentRunnerError with `SELF_DEV_RUNNER_ATTEMPT_ACTIVE` when this runner already owns an in-flight attempt for `req.taskId`.', 'whatever the core\'s `open` or `runSupervisedAttempt` rejects with, verbatim: a journal handoff is a human decision and is never wrapped, retried, or recorded as an attempt outcome here.'],
+      },
+      {
+        signature: 'async stop(req: { readonly taskId: string readonly expectedRevision: number readonly operationId: string }): Promise<TaskOperationResult>',
+        description: 'Stop a task and finish this runner\'s own work for it. The core commits `task/stopped` and aborts the attempt\'s launch signal first; this runner then aborts its own cancellation handle and waits until the attempt\'s promise has settled — the executor and acceptor process groups have exited and the evidence writes are done — before returning the core\'s result. Without an in-flight attempt, only the core stop runs.',
+        parameters: [{ name: 'req', description: 'task, expected revision, and idempotency key of the stop.' }],
+        returns: 'the core\'s stop operation result.',
+        throws: ['whatever the core\'s `open` or `stop` rejects with, verbatim.'],
+      },
+      {
+        signature: 'activeTasks(): readonly string[]',
+        description: 'The task ids of the attempts this runner currently owns.',
+        parameters: [],
+        returns: 'a read-only snapshot; later ownership changes are not reflected.',
+      },
+    ],
   },
   {
     key: 'selfDevelopmentTasks',
@@ -4266,6 +4293,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface BashEnvVariableInfo extends BashEnvVariable {\n    contributor: string;\n    key: DshEnvironmentKey;\n}',
   },
   {
+    name: 'BootTime',
+    declaration: 'export interface BootTime {\n    readonly bootEpochMs: number;\n    readonly bootId: string;\n}',
+  },
+  {
+    name: 'BootTimeReader',
+    declaration: 'export type BootTimeReader = () => BootTime;',
+  },
+  {
     name: 'Branded',
     declaration: 'export type Branded<B extends string> = string & {\n    readonly [BRAND]: B;\n};',
   },
@@ -4898,6 +4933,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface GrantRecord {\n    readonly kind: \'grant\';\n    readonly payload: unknown;\n}',
   },
   {
+    name: 'HostClock',
+    declaration: 'export class HostClock implements TrustedClock {\n    constructor(read: BootTimeReader = readBootTimeSysctl);\n    observe(): ClockObservation;\n}',
+  },
+  {
     name: 'HostConnectionFetch',
     declaration: 'export interface HostConnectionFetch {\n    register(route: ConnectionFetchRoute): () => Promise<void>;\n}',
   },
@@ -5452,6 +5491,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'PrepareSessionOptions',
     declaration: 'export type PrepareSessionOptions = (CreateSessionOptions & {\n    readonly eventState?: undefined;\n}) | RestoredSessionOptions;',
+  },
+  {
+    name: 'PresenceConfirmation',
+    declaration: 'export interface PresenceConfirmation {\n    readonly confirmedBy: string;\n    readonly confirmedAt: ClockObservation;\n    readonly worktree: string;\n    readonly loopbackAllowlist: readonly number[];\n    readonly acknowledgement: \'supervised-not-unattended\';\n    readonly taskId: string;\n    readonly testPlanDigest: string;\n    readonly acceptanceDefinitionDigest: string;\n    readonly artifactPaths: readonly string[];\n}',
   },
   {
     name: 'PresetOption',
@@ -6620,6 +6663,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SubprocessTerminalSpawnSpec',
     declaration: 'export interface SubprocessTerminalSpawnSpec {\n    argv: readonly string[];\n    cwd: string;\n    env?: Record<string, string> | undefined;\n    rows: number;\n    cols: number;\n    terminalType: string;\n    shellActivity?: boolean | undefined;\n    graceMs: number;\n    signal?: AbortSignal | undefined;\n}',
+  },
+  {
+    name: 'SupervisedAttemptOutcome',
+    declaration: 'export interface SupervisedAttemptOutcome {\n    readonly operation: TaskOperationResult;\n    readonly attemptId: string | undefined;\n    readonly evidencePath: string | undefined;\n    readonly outcomeWriteError: {\n        readonly code: string;\n        readonly message: string;\n    } | undefined;\n}',
+  },
+  {
+    name: 'SupervisedAttemptRequest',
+    declaration: 'export interface SupervisedAttemptRequest {\n    readonly taskId: string;\n    readonly expectedRevision: number;\n    readonly operationId: string;\n    readonly worktree: string;\n    readonly artifactPaths: readonly string[];\n    readonly acceptancePath: string;\n    readonly presence: PresenceConfirmation;\n    readonly signal?: AbortSignal;\n}',
   },
   {
     name: 'SurfaceEvent',

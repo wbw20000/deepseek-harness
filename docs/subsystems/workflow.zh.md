@@ -127,6 +127,10 @@ interface WorkflowRun {
 
 `dsh-client-ui-workflow-run` 通过 Conversation Node 引擎把四类事件折叠为一个 `workflow-run` Chat 节点，以 run-start 序号锚定在原工作流工具节点之后。阶段组只来自真正开始过的成员，并保留精确字符串，包括字段缺省与 `''` 的区别。Location 关闭时，缺失终点会显示为已中断。[界面包 README](../../packages/client/ui-workflow-run/README.zh.md)负责定义 disclosure、状态与同父本地导航行为。
 
+## 自开发任务控制与有人监督的 runner
+
+workflow 组还拥有脚本 seam 之外的可选自开发组合。[dsh-workflow-self-development](../../packages/workflow/workflow-self-development/README.zh.md) 在私有控制目录中为每个任务拥有一条持久生命周期——版本化 spec、冻结测试计划、人工预算批准、已验证尝试结果、试用批准——并为每个任务缓存一个串行化控制器。[dsh-workflow-self-development-runner](../../packages/workflow/workflow-self-development-runner/README.zh.md) 针对该控制器组合一次有人监督的尝试：受信时钟、人工在场证据、操作绑定的启动记录、headless 执行器、独立验收器，以及带终局结果的持久尝试证据。每次启动都要求一条已记录的人工确认和有限预算；这对包提供的是带明确记录限制的有人监督测试，绝不是无人值守运行。两个服务都以 `ctx.selfDevelopmentTasks` 与 `ctx.selfDevelopmentRunner` 出现在 [Cordis API](#cordis-surface) 中。
+
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
 <a id="cordis-surface"></a>
@@ -140,6 +144,51 @@ Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnp
 ### `ctx.selfDevelopmentRunner` — `SelfDevelopmentRunner`
 
 Cordis service composing the supervised-mode attempt pipeline.
+
+```ts cordis-catalog
+/**
+ * The runner's trusted clock. The first call creates one `HostClock`; later
+ * calls return the same instance, so every task and attempt shares one
+ * boot-session observer.
+ * @returns the singleton trusted clock.
+ */
+clock(): HostClock
+
+/**
+ * Run one supervised attempt for a task. A second attempt for the same task
+ * while one is in flight in this runner is refused before the core is
+ * touched; worktree, confirmation, launch-record, and evidence validation
+ * are `runSupervisedAttempt`'s responsibility.
+ * @param req - the supervised attempt to run, keyed by task id.
+ * @returns the core operation result with the attempt id, evidence path, and
+ *   outcome write failure of this process's execution.
+ * @throws SelfDevelopmentRunnerError with `SELF_DEV_RUNNER_ATTEMPT_ACTIVE` when this runner
+ *   already owns an in-flight attempt for `req.taskId`.
+ * @throws whatever the core's `open` or `runSupervisedAttempt` rejects with,
+ *   verbatim: a journal handoff is a human decision and is never wrapped,
+ *   retried, or recorded as an attempt outcome here.
+ */
+runAttempt(req: SupervisedAttemptRequest): Promise<SupervisedAttemptOutcome>
+
+/**
+ * Stop a task and finish this runner's own work for it. The core commits
+ * `task/stopped` and aborts the attempt's launch signal first; this runner
+ * then aborts its own cancellation handle and waits until the attempt's
+ * promise has settled — the executor and acceptor process groups have exited
+ * and the evidence writes are done — before returning the core's result.
+ * Without an in-flight attempt, only the core stop runs.
+ * @param req - task, expected revision, and idempotency key of the stop.
+ * @returns the core's stop operation result.
+ * @throws whatever the core's `open` or `stop` rejects with, verbatim.
+ */
+async stop(req: { readonly taskId: string readonly expectedRevision: number readonly operationId: string }): Promise<TaskOperationResult>
+
+/**
+ * The task ids of the attempts this runner currently owns.
+ * @returns a read-only snapshot; later ownership changes are not reflected.
+ */
+activeTasks(): readonly string[]
+```
 
 Source: [`packages/workflow/workflow-self-development-runner/src/index.ts`](../../packages/workflow/workflow-self-development-runner/src/index.ts)
 
