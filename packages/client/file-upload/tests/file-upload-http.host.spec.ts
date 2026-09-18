@@ -1,4 +1,5 @@
 import { runInNewContext } from 'node:vm'
+import { AttachmentError } from '@deepseek-ai/dsh-attachment'
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 import { describe, expect, it, vi } from 'vitest'
 import type { Mock } from 'vitest'
@@ -11,6 +12,7 @@ function request(input: {
   name?: string
   contentType?: string
   body?: Uint8Array
+  headers?: Record<string, string>
 } = {}): Request {
   const query = new URLSearchParams()
   if (input.sessionId !== undefined) query.set('sessionId', input.sessionId)
@@ -18,13 +20,17 @@ function request(input: {
   const suffix = query.size === 0 ? '' : `?${query.toString()}`
   return new Request(`http://host/api/session/uploadFileBinary${suffix}`, {
     method: input.method ?? 'POST',
-    headers: input.contentType === undefined ? {} : { 'content-type': input.contentType },
+    headers: {
+      ...(input.contentType === undefined ? {} : { 'content-type': input.contentType }),
+      ...input.headers,
+    },
     ...(input.body === undefined ? {} : { body: new Blob([Uint8Array.from(input.body).buffer]) }),
   })
 }
 
 function uploads(result: unknown): FileUploads & {
   uploadStream: Mock<FileUploads['uploadStream']>
+  admitUpload: Mock<FileUploads['admitUpload']>
   uploadedChunks: Uint8Array[]
 } {
   const uploadedChunks: Uint8Array[] = []
@@ -35,8 +41,10 @@ function uploads(result: unknown): FileUploads & {
   return {
     uploadedChunks,
     uploadStream,
+    admitUpload: vi.fn(),
   } as unknown as FileUploads & {
     uploadStream: Mock<FileUploads['uploadStream']>
+    admitUpload: Mock<FileUploads['admitUpload']>
     uploadedChunks: Uint8Array[]
   }
 }
@@ -122,5 +130,71 @@ describe('background file upload Fetch route', () => {
     }))).json()).toEqual({
       ok: false, error: { code: 'gateway/internal', message: 'Error: disk exception', details: {} },
     })
+  })
+
+  it('rejects an over-limit declared Content-Length with 413 before reading the body', async () => {
+    const service = uploads(Promise.resolve({}))
+    service.admitUpload.mockImplementation(() => {
+      throw new AttachmentError('File upload exceeds the configured byte limit.', 'FILE_TOO_LARGE')
+    })
+    const response = await handleFileUploadHttp(service, request({
+      sessionId: 's1',
+      contentType: 'application/octet-stream',
+      body: Uint8Array.of(1, 2, 3, 4),
+      headers: { 'content-length': '999999999' },
+    }))
+    expect(response.status).toBe(413)
+    expect(service.uploadStream).not.toHaveBeenCalled()
+    expect(service.uploadedChunks).toEqual([])
+    expect(await response.text()).toBe('declared upload exceeds the configured byte limit')
+  })
+
+  it('rejects an unaccepted declared file type with 415 before reading the body', async () => {
+    const service = uploads(Promise.resolve({}))
+    service.admitUpload.mockImplementation(() => {
+      throw new AttachmentError('File type application/x-hostile is not accepted by this deployment.', 'UNSUPPORTED_FILE_TYPE')
+    })
+    const response = await handleFileUploadHttp(service, request({
+      sessionId: 's1',
+      contentType: 'application/octet-stream',
+      body: Uint8Array.of(1),
+      headers: { 'x-dsh-file-type': 'application/x-hostile' },
+    }))
+    expect(response.status).toBe(415)
+    expect(service.uploadStream).not.toHaveBeenCalled()
+    expect(await response.text()).toBe('declared file type is not accepted by this deployment')
+  })
+
+  it('forwards the declared length and file type and refuses an invalid Content-Length', async () => {
+    const service = uploads(Promise.resolve({}))
+    const declared = await handleFileUploadHttp(service, request({
+      sessionId: 's1',
+      contentType: 'application/octet-stream',
+      body: Uint8Array.of(1, 2),
+      headers: { 'content-length': '2', 'x-dsh-file-type': 'Application/PDF ' },
+    }))
+    expect(declared.status).toBe(200)
+    expect(service.admitUpload).toHaveBeenCalledWith({ bytes: 2, mediaType: 'application/pdf' })
+    expect(service.uploadStream.mock.calls[0]?.[0]).toMatchObject({ declaredBytes: 2, mediaType: 'application/pdf' })
+
+    const invalid = await handleFileUploadHttp(service, request({
+      sessionId: 's1',
+      contentType: 'application/octet-stream',
+      headers: { 'content-length': 'many' },
+    }))
+    expect(invalid.status).toBe(400)
+    expect(await invalid.text()).toBe('content-length must be a byte count')
+    expect(service.uploadStream).toHaveBeenCalledOnce()
+  })
+
+  it('propagates an unexpected admission failure instead of mapping it', async () => {
+    const service = uploads(Promise.resolve({}))
+    service.admitUpload.mockImplementation(() => {
+      throw new Error('attachment store unavailable')
+    })
+    await expect(handleFileUploadHttp(service, request({
+      sessionId: 's1', contentType: 'application/octet-stream',
+    }))).rejects.toThrow('attachment store unavailable')
+    expect(service.uploadStream).not.toHaveBeenCalled()
   })
 })

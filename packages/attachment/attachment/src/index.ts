@@ -7,6 +7,7 @@ import type {
   AdmittedPromptContentPart,
   AttachmentAdmissionPart,
   EncodedFileAttachment,
+  FileAdmissionLimits,
   FileAttachmentRef,
   ImageAttachmentLimits,
   ImageAttachmentRef,
@@ -17,20 +18,34 @@ import type {
   SaveImageAttachment,
   StoredImageAttachment,
 } from './types.ts'
+import { admitFileUpload, DEFAULT_ALLOWED_FILE_MIME_TYPES, DEFAULT_MAX_UPLOAD_BYTES } from './file-admission.ts'
 
 export { AttachmentId, ImageVariantId } from './brand.ts'
-export { AttachmentError, isAttachmentError, isImageAdmissionError } from './error.ts'
-export type { AttachmentErrorCode, ImageAdmissionErrorCode } from './error.ts'
+export { AttachmentError, isAttachmentError, isFileAdmissionError, isImageAdmissionError } from './error.ts'
+export type { AttachmentErrorCode, FileAdmissionErrorCode, ImageAdmissionErrorCode } from './error.ts'
+export {
+  admitFileUpload,
+  assertAllowedMediaTypes,
+  DEFAULT_ALLOWED_FILE_MIME_TYPES,
+  DEFAULT_MAX_UPLOAD_BYTES,
+  isFileMediaTypeAllowed,
+  resolveFileMediaType,
+  UNDECLARED_FILE_MEDIA_TYPE,
+} from './file-admission.ts'
 export { admitEncodedFile, admitEncodedImages } from './admission.ts'
 export { longEdgeDimensions, requestImageDimensions } from './request-projection.ts'
 export type { ProjectedDimensions } from './request-projection.ts'
 export type {
   AttachmentId as AttachmentIdType,
+  AttachmentStorageUsage,
   AdmittedPromptContentPart,
   AttachmentAdmissionPart,
   EncodedFileAttachment,
   EncodedImageAttachment,
+  FileAdmissionLimits,
   FileAttachmentRef,
+  GarbageCollectionRequest,
+  GarbageCollectionResult,
   ImageAttachmentLimits,
   ImageAttachmentRef,
   ImageRequestTarget,
@@ -139,6 +154,28 @@ export abstract class AttachmentStore extends Service {
   }
 
   /**
+   * Deployment-resolved admission policy for verbatim file uploads.
+   * Backends without verbatim file storage never consult it; a file-backed
+   * backend resolves it from its own configuration.
+   */
+  readonly fileAdmission: FileAdmissionLimits = Object.freeze({
+    maxUploadBytes: DEFAULT_MAX_UPLOAD_BYTES,
+    allowedMimeTypes: DEFAULT_ALLOWED_FILE_MIME_TYPES,
+  })
+
+  /**
+   * Admit one verbatim file upload against {@link fileAdmission} before any
+   * byte is written. Storage operations enforce the same policy on the exact
+   * byte count, so a caller that skips this check cannot bypass admission.
+   * @param declared - declared byte count and media type; an omitted value
+   * defers that check to the stream itself or to the undeclared default.
+   * @throws an AttachmentError with `FILE_TOO_LARGE` or `UNSUPPORTED_FILE_TYPE`.
+   */
+  admitFileUpload(declared: { readonly bytes?: number; readonly mediaType?: string }): void {
+    admitFileUpload(declared, this.fileAdmission)
+  }
+
+  /**
    * Identify a failure emitted by this attachment capability by its stable code.
    * @param error - value caught from an attachment operation.
    * @returns whether the value is an attachment failure.
@@ -179,9 +216,11 @@ export abstract class AttachmentStore extends Service {
 
   /**
    * Durably commit one file byte-for-byte before its owning session event is
-   * appended. Files carry no admission limits: any byte content and length is
-   * accepted, and the stored object is the exact submitted bytes. Backends
-   * without verbatim file storage keep this default rejection.
+   * appended. File admission rejects a declared byte count above
+   * `fileAdmission.maxUploadBytes` and a media type outside
+   * `fileAdmission.allowedMimeTypes` before any byte is written; the stored
+   * object is the exact submitted bytes. Backends without verbatim file
+   * storage keep this default rejection.
    * @param input - exact bytes and optional display name.
    * @returns the durable content-addressed file reference.
    */
@@ -196,7 +235,10 @@ export abstract class AttachmentStore extends Service {
   /**
    * Durably commit one file byte-for-byte from bounded chunks. Providers must
    * apply backpressure and must not collect the complete file in memory.
-   * Backends without streamed verbatim storage keep this default rejection.
+   * Providers enforce file admission while counting the stream, so an
+   * undeclared or under-declared length cannot bypass the byte limit or the
+   * disk budget. Backends without streamed verbatim storage keep this default
+   * rejection.
    * @param input - ordered exact bytes, optional cancellation, and display name.
    * @returns the durable content-addressed file reference.
    */

@@ -498,6 +498,17 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         throws: ['AttachmentError when the encoding or storage operation is refused.'],
       },
       {
+        signature: 'readonly fileAdmission: FileAdmissionLimits = Object.freeze({ maxUploadBytes: DEFAULT_MAX_UPLOAD_BYTES, allowedMimeTypes: DEFAULT_ALLOWED_FILE_MIME_TYPES, })',
+        description: 'Deployment-resolved admission policy for verbatim file uploads. Backends without verbatim file storage never consult it; a file-backed backend resolves it from its own configuration.',
+        parameters: [],
+      },
+      {
+        signature: 'admitFileUpload(declared: { readonly bytes?: number; readonly mediaType?: string }): void',
+        description: 'Admit one verbatim file upload against fileAdmission before any byte is written. Storage operations enforce the same policy on the exact byte count, so a caller that skips this check cannot bypass admission.',
+        parameters: [{ name: 'declared', description: 'declared byte count and media type; an omitted value defers that check to the stream itself or to the undeclared default.' }],
+        throws: ['an AttachmentError with `FILE_TOO_LARGE` or `UNSUPPORTED_FILE_TYPE`.'],
+      },
+      {
         signature: 'isAttachmentError(error: unknown): error is AttachmentError',
         description: 'Identify a failure emitted by this attachment capability by its stable code.',
         parameters: [{ name: 'error', description: 'value caught from an attachment operation.' }],
@@ -525,13 +536,13 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'saveFile(input: SaveFileAttachment): Promise<FileAttachmentRef>',
-        description: 'Durably commit one file byte-for-byte before its owning session event is appended. Files carry no admission limits: any byte content and length is accepted, and the stored object is the exact submitted bytes. Backends without verbatim file storage keep this default rejection.',
+        description: 'Durably commit one file byte-for-byte before its owning session event is appended. File admission rejects a declared byte count above `fileAdmission.maxUploadBytes` and a media type outside `fileAdmission.allowedMimeTypes` before any byte is written; the stored object is the exact submitted bytes. Backends without verbatim file storage keep this default rejection.',
         parameters: [{ name: 'input', description: 'exact bytes and optional display name.' }],
         returns: 'the durable content-addressed file reference.',
       },
       {
         signature: 'saveFileStream(input: SaveFileStreamAttachment): Promise<FileAttachmentRef>',
-        description: 'Durably commit one file byte-for-byte from bounded chunks. Providers must apply backpressure and must not collect the complete file in memory. Backends without streamed verbatim storage keep this default rejection.',
+        description: 'Durably commit one file byte-for-byte from bounded chunks. Providers must apply backpressure and must not collect the complete file in memory. Providers enforce file admission while counting the stream, so an undeclared or under-declared length cannot bypass the byte limit or the disk budget. Backends without streamed verbatim storage keep this default rejection.',
         parameters: [{ name: 'input', description: 'ordered exact bytes, optional cancellation, and display name.' }],
         returns: 'the durable content-addressed file reference.',
       },
@@ -940,15 +951,21 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'disposer removing this resolver.',
       },
       {
+        signature: 'admitUpload(declared: { readonly bytes?: number; readonly mediaType?: string }): void',
+        description: 'Admit one upload against the mounted attachment store\'s policy before any byte is read. The streaming route calls this so an over-limit declared length or an unaccepted declared file type becomes HTTP 413/415 instead of a stored partial object.',
+        parameters: [{ name: 'declared', description: 'declared byte count and file media type, each optional.' }],
+        throws: ['an AttachmentError with `FILE_TOO_LARGE` or `UNSUPPORTED_FILE_TYPE`.'],
+      },
+      {
         signature: '@Remote(\'upload\') upload(agent: Agent, request: EncodedFileUploadRequest, signal: AbortSignal): Promise<FileUploadValue>',
         description: 'Persist one encoded upload and stage it under the Agent receiver selected by Typert.',
         parameters: [{ name: 'agent', description: 'receiving Agent resolved from the Remote Agent scope.' }, { name: 'request', description: 'canonical base64 bytes and optional display name.' }, { name: 'signal', description: 'caller cancellation before storage begins.' }],
         returns: 'the staged receipt and durable file reference.',
       },
       {
-        signature: 'async uploadStream(request: { readonly sessionId: SessionId readonly data: AsyncIterable<Uint8Array> readonly signal?: AbortSignal readonly name?: string }): Promise<FileUploadValue>',
-        description: 'Persist raw chunks for one Session without aggregating the upload.',
-        parameters: [{ name: 'request', description: 'Session identity, ordered bytes, cancellation, and optional display name.' }],
+        signature: 'async uploadStream(request: { readonly sessionId: SessionId readonly data: AsyncIterable<Uint8Array> readonly signal?: AbortSignal readonly name?: string readonly declaredBytes?: number readonly mediaType?: string }): Promise<FileUploadValue>',
+        description: 'Persist raw chunks for one Session without aggregating the upload. The mounted attachment store enforces file admission while counting the stream, so an undeclared or under-declared length cannot bypass the byte limit or the disk budget.',
+        parameters: [{ name: 'request', description: 'Session identity, ordered bytes, cancellation, declared length and media type, and optional display name.' }],
         returns: 'the staged receipt and durable file reference.',
       },
       {
@@ -4799,6 +4816,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export const enum FiberState {\n    PENDING,\n    LOADING,\n    ACTIVE,\n    FAILED,\n    DISPOSED,\n    UNLOADING\n}',
   },
   {
+    name: 'FileAdmissionLimits',
+    declaration: 'export interface FileAdmissionLimits {\n    maxUploadBytes: number;\n    allowedMimeTypes: readonly string[];\n}',
+  },
+  {
     name: 'FileAttachmentRef',
     declaration: 'export interface FileAttachmentRef {\n    attachmentId: AttachmentId;\n    name: string;\n    bytes: number;\n}',
   },
@@ -5764,11 +5785,11 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SaveFileAttachment',
-    declaration: 'export interface SaveFileAttachment {\n    data: Uint8Array;\n    name?: string;\n}',
+    declaration: 'export interface SaveFileAttachment {\n    data: Uint8Array;\n    name?: string;\n    mediaType?: string;\n}',
   },
   {
     name: 'SaveFileStreamAttachment',
-    declaration: 'export interface SaveFileStreamAttachment {\n    data: AsyncIterable<Uint8Array>;\n    signal?: AbortSignal;\n    name?: string;\n}',
+    declaration: 'export interface SaveFileStreamAttachment {\n    data: AsyncIterable<Uint8Array>;\n    signal?: AbortSignal;\n    name?: string;\n    declaredBytes?: number;\n    mediaType?: string;\n}',
   },
   {
     name: 'SaveImageAttachment',

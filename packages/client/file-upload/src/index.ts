@@ -96,6 +96,18 @@ export class FileUploads extends TypertRemoteService {
   }
 
   /**
+   * Admit one upload against the mounted attachment store's policy before any
+   * byte is read. The streaming route calls this so an over-limit declared
+   * length or an unaccepted declared file type becomes HTTP 413/415 instead of
+   * a stored partial object.
+   * @param declared - declared byte count and file media type, each optional.
+   * @throws an AttachmentError with `FILE_TOO_LARGE` or `UNSUPPORTED_FILE_TYPE`.
+   */
+  admitUpload(declared: { readonly bytes?: number; readonly mediaType?: string }): void {
+    this.ctx.attachments.admitFileUpload(declared)
+  }
+
+  /**
    * Persist one encoded upload and stage it under the Agent receiver selected by Typert.
    * @param agent - receiving Agent resolved from the Remote Agent scope.
    * @param request - canonical base64 bytes and optional display name.
@@ -112,8 +124,11 @@ export class FileUploads extends TypertRemoteService {
   }
 
   /**
-   * Persist raw chunks for one Session without aggregating the upload.
-   * @param request - Session identity, ordered bytes, cancellation, and optional display name.
+   * Persist raw chunks for one Session without aggregating the upload. The
+   * mounted attachment store enforces file admission while counting the
+   * stream, so an undeclared or under-declared length cannot bypass the byte
+   * limit or the disk budget.
+   * @param request - Session identity, ordered bytes, cancellation, declared length and media type, and optional display name.
    * @returns the staged receipt and durable file reference.
    */
   async uploadStream(request: {
@@ -121,12 +136,16 @@ export class FileUploads extends TypertRemoteService {
     readonly data: AsyncIterable<Uint8Array>
     readonly signal?: AbortSignal
     readonly name?: string
+    readonly declaredBytes?: number
+    readonly mediaType?: string
   }): Promise<FileUploadValue> {
     const agent = await this.resolveAgent(request.sessionId)
     return this.commit(agent, async () => this.ctx.attachments.saveFileStream({
       data: request.data,
       ...(request.signal === undefined ? {} : { signal: request.signal }),
       ...(request.name === undefined ? {} : { name: request.name }),
+      ...(request.declaredBytes === undefined ? {} : { declaredBytes: request.declaredBytes }),
+      ...(request.mediaType === undefined ? {} : { mediaType: request.mediaType }),
     }))
   }
 

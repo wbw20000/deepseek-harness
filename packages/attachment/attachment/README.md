@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-Attach images and generic files to prompts and commands, then reuse them after restarting the same session, without extra setup in the shipped `dsh` composition. Images are validated and normalized before the message is accepted; PNG, JPEG, WebP, and GIF are supported within deployment limits. Other files are stored byte-for-byte without format or size limits, and models read them on demand through saved read-only paths instead of receiving their bytes. Durable session events exclude browser paths, provider URLs, local storage paths, and base64. Stored attachments are never deleted automatically; audio and video have no dedicated handling.
+Attach images and generic files to prompts and commands, then reuse them after a session restart, without extra setup in the shipped `dsh` composition. Images are validated and normalized before the message is accepted; PNG, JPEG, WebP, and GIF are supported within deployment limits. Other files are stored byte-for-byte under a deployment byte limit and media-type allowlist, and models read them on demand through saved read-only paths. Durable session events exclude browser paths, provider URLs, storage paths, and base64. Stored attachments are never deleted automatically; the storage backend exposes caller-triggered garbage collection, and audio and video have no dedicated handling.
 
 ## Table of Contents
 
@@ -37,7 +37,7 @@ Attach one or more images to a user prompt in the client UI. Each source is chec
 
 ### Attach any other file to a prompt
 
-Any non-image file attaches to a prompt as a generic file: the exact bytes are saved read-only under the harness home, the message records the file name, byte size, and content digest, and the model receives one line naming the saved path so it can read the content with its file tools only when needed. There is no file-type whitelist and no size limit; what you attach is stored verbatim.
+Any non-image file attaches to a prompt as a generic file: the exact bytes are saved read-only under the harness home, the message records the file name, byte size, and content digest, and the model receives one line naming the saved path so it can read the content with its file tools only when needed. The deployment admits uploads before any byte is stored: one file may use at most `maxUploadBytes` (300 MiB by default, the same bound the buffered request path enforces), and its declared media type must be in `allowedMimeTypes` — images, text, and common document formats by default, with a `*/*` entry opening the allowlist. What you attach within those limits is stored verbatim.
 
 ### Pass attachments to commands
 
@@ -49,7 +49,7 @@ Saved normalized images stay in conversation history and are projected into dete
 
 ### What can go wrong
 
-An image can be refused when you attach it — unsupported format, over the size, pixel, or dimension limits, or bytes that do not match their declared type — and the message then fails as a whole. Later, a history read can fail if the stored image was deleted or corrupted on disk. Failures carry stable codes so the client and protocol adapters can explain them in their own words.
+An image can be refused when you attach it — unsupported format, over the size, pixel, or dimension limits, or bytes that do not match their declared type — and the message then fails as a whole. A generic file can be refused before storage begins when it exceeds the deployment byte limit or declares a media type outside the allowlist, and while it streams when the actual bytes outgrow the limit or the disk budget. Later, a history read can fail if the stored image was deleted or corrupted on disk. Failures carry stable codes so the client and protocol adapters can explain them in their own words.
 
 -----
 
@@ -64,15 +64,15 @@ This section explains the design decisions behind the seam and the service opera
 ### Design decisions
 
 - **Normalize and persist before event.** Every source is prepared and verified before the batch publishes in order, so the session log never references a partial or failed normalization.
-- **Immutable and retention-neutral.** Objects are immutable once published; resumed and forked sessions may share them, so reference-aware garbage collection is deferred rather than tied to any one session's deletion.
+- **Immutable and retention-neutral.** Objects are immutable once published; resumed and forked sessions may share them, so collection decisions belong to the caller: `collectGarbage()` deletes only objects the caller's reference set does not name and only past a caller-chosen grace period.
 - **Verify on read.** Reads check bytes and metadata against the logged reference before returning them, and request projections fully decode cached bytes, so a missing, corrupted, or swapped object fails closed.
 - **Role-neutral image blocks.** The `ImageBlock` content block in `dsh-llm` carries an `ImageAttachmentRef`; provider adapters resolve it into deterministic request versions at an explicit route-chosen target size and byte target, while execution filesystems may map the immutable host object to a model-readable process path.
 - **Error routing by code.** `AttachmentError` re-implements the `HarnessError` shape instead of extending it because the base lives in `dsh-llm`, which depends on this package; consumers use `isAttachmentError` and route on `code`, never on the prototype chain.
-- **Files are verbatim, images are normalized.** `saveFile` commits an existing byte array, `saveFileStream` commits bounded chunks with backpressure and cancellation, `readFileStream` verifies and returns bounded chunks, and `fileHostPath` locates the stored object for read-on-demand projection; neither file write path applies admission limits. The image path keeps its separate normalization, limits, and request-version pipeline. The `FileBlock` content block in `dsh-llm` carries a `FileAttachmentRef`, and request assembly projects it to deterministic handle text for every route.
+- **Files are verbatim, images are normalized.** `saveFile` commits an existing byte array, `saveFileStream` commits bounded chunks with backpressure and cancellation, `readFileStream` verifies and returns bounded chunks, and `fileHostPath` locates the stored object for read-on-demand projection; both file write paths enforce the deployment's `fileAdmission` policy — a declared byte count above `maxUploadBytes` or a media type outside `allowedMimeTypes` is refused before any byte is written, and the stream itself is counted so an undeclared or under-declared length cannot bypass the limit or the disk budget. The image path keeps its separate normalization, limits, and request-version pipeline. The `FileBlock` content block in `dsh-llm` carries a `FileAttachmentRef`, and request assembly projects it to deterministic handle text for every route.
 
 ### Service operations
 
-The service family runs one admission-and-storage flow: every entry point enforces source batch limits and canonical base64, prepares provider-independent normalized attachments before publishing any member, and commits them durably in input order without partial results. Host prompt consumers pass ordered text, encoded images, and already resolved file references to `ctx.attachments.admitPromptContent()`; the method persists images and passes file references unchanged. Encoded protocol adapters call `ctx.attachments.admitEncodedFile()`, which checks canonical base64 before delegating to `saveFile`; adapters recognize attachment failures through `ctx.attachments.isAttachmentError()`. Generic-file callers choose `saveFile` for existing bytes or `saveFileStream` for a bounded asynchronous byte source; both return the same durable reference, while `readFileStream` verifies its digest and length during a bounded read. `readImageRequest` derives deterministic route-sized variants whose identity includes the attachment id, transform version, target dimensions, byte target, and encoder settings. The pure `requestImageDimensions` and `longEdgeDimensions` exports compute aspect-preserving dimensions from a total-pixel budget or an exact long edge, so routes and request pricing share one geometry. `imageHostPath` exposes an implementation-owned host location only to trusted same-process consumers that need execution-world mapping. Callers compose ordered batches while the implementation owns compression concurrency, caching, and singleflight. Reads, streamed writes, and projections preserve caller cancellation. Failures carry stable machine-readable codes, and the caller-correctable admission subset is recognizable at runtime so each protocol adapter maps its own vocabulary; the exact per-operation contracts live in [`src/index.ts`](src/index.ts) and [`src/error.ts`](src/error.ts).
+The service family runs one admission-and-storage flow: every entry point enforces source batch limits and canonical base64, prepares provider-independent normalized attachments before publishing any member, and commits them durably in input order without partial results. Host prompt consumers pass ordered text, encoded images, and already resolved file references to `ctx.attachments.admitPromptContent()`; the method persists images and passes file references unchanged. Encoded protocol adapters call `ctx.attachments.admitEncodedFile()`, which checks canonical base64 before delegating to `saveFile`; adapters recognize attachment failures through `ctx.attachments.isAttachmentError()`. Generic-file callers choose `saveFile` for existing bytes or `saveFileStream` for a bounded asynchronous byte source; both return the same durable reference, while `readFileStream` verifies its digest and length during a bounded read. `readImageRequest` derives deterministic route-sized variants whose identity includes the attachment id, transform version, target dimensions, byte target, and encoder settings. The pure `requestImageDimensions` and `longEdgeDimensions` exports compute aspect-preserving dimensions from a total-pixel budget or an exact long edge, so routes and request pricing share one geometry. `imageHostPath` exposes an implementation-owned host location only to trusted same-process consumers that need execution-world mapping. Callers compose ordered batches while the implementation owns compression concurrency, caching, and singleflight. Reads, streamed writes, and projections preserve caller cancellation. File uploads pass `admitFileUpload()` before storage, so a wire caller is refused by declared size or media type without writing bytes; the storage operations enforce the same policy on the exact byte count. Implementations may also expose storage maintenance: `usage()` reports stored bytes against the disk budget with its warning and over-budget flags, and `collectGarbage({ referenced, olderThanMs })` deletes objects the caller's reference set does not name once they are older than the grace period, returning the reclaimed bytes; triggering a pass stays the caller's decision because only the caller knows which sessions are live. Failures carry stable machine-readable codes, and the caller-correctable admission subset is recognizable at runtime so each protocol adapter maps its own vocabulary; the exact per-operation contracts live in [`src/index.ts`](src/index.ts) and [`src/error.ts`](src/error.ts).
 
 ### Source map
 
@@ -81,7 +81,8 @@ The service family runs one admission-and-storage flow: every entry point enforc
 | [`src/index.ts`](src/index.ts) | Plugin entry: abstract `AttachmentStore` service and re-exports |
 | [`src/types.ts`](src/types.ts) | Durable vocabulary: references, limits, upload and store payloads |
 | [`src/admission.ts`](src/admission.ts) | Canonical-base64 enforcement and store delegation for encoded image and file uploads |
-| [`src/error.ts`](src/error.ts) | `AttachmentError` class and the `isImageAdmissionError` runtime subset |
+| [`src/file-admission.ts`](src/file-admission.ts) | Write-ahead verbatim-file policy: byte limit, media-type allowlist, and deployment defaults |
+| [`src/error.ts`](src/error.ts) | `AttachmentError` class and the image and file admission runtime subsets |
 | [`src/brand.ts`](src/brand.ts) | `AttachmentId` branded opaque identifier |
 | — | No runtime invariant companion is published; this stateless seam owns types while implementations enforce immutable-store checks. |
 
@@ -116,8 +117,8 @@ Adding an image changes the provider request and therefore invalidates the affec
 
 These limits describe what attachments can and cannot do; they are current package constraints, not a task backlog.
 
-- **Raster image limits apply to images only** — PNG, JPEG, WebP, and GIF are accepted as images under deployment limits; every other file is stored verbatim with no type or size limit, and audio and video have no dedicated handling yet.
-- **Attachments are never deleted** — stored images and files are retained indefinitely; nothing removes them automatically.
+- **Raster image limits apply to images only** — PNG, JPEG, WebP, and GIF are accepted as images under deployment limits; every other file is admitted under the deployment byte limit and media-type allowlist and stored verbatim, and audio and video have no dedicated handling yet.
+- **Garbage collection needs the caller's reference set** — `collectGarbage()` deletes only what the caller's `referenced` set does not name; no component wires session references into collection today, so stored attachments are retained until a caller triggers a pass.
 - **Unsent drafts are not saved** — a composer draft stays in the browser until you submit the message.
 
 <a id="dev-note"></a>
@@ -128,9 +129,9 @@ These limits describe what attachments can and cannot do; they are current packa
 
 This Dev Note is working context for maintainers: undecided directions and open questions. It is explicitly non-authoritative — shipped behavior and limits live in the sections above and the package code.
 
-#### Future: reference-aware garbage collection
+#### Future: wiring session references into collection
 
-Resumed and forked sessions may share immutable objects, so any retention policy needs a reference model that accounts for session lineage before objects can be collected. No decision is recorded yet; the local backend currently retains everything.
+The `collectGarbage()` API owns deletion; no owner for the referenced-set side exists yet. Resumed and forked sessions may share immutable objects, so the caller that wires session references into a collection schedule must account for session lineage before objects can be collected. That wiring is undecided.
 
 #### Future: audio, video, and assistant-side output
 

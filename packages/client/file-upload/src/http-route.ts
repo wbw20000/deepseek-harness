@@ -14,10 +14,20 @@ type FileUploadHttpResult =
   }
 
 /**
+ * Header carrying the uploaded file's declared media type. The transport
+ * framing type stays `application/octet-stream`; this header declares what
+ * the bytes represent and is checked against the deployment allowlist.
+ */
+export const FILE_TYPE_HEADER = 'x-dsh-file-type'
+
+/**
  * Handle one authenticated raw-byte upload.
+ * A declared `Content-Length` above the deployment byte limit or a declared
+ * file type outside the deployment allowlist is rejected before any byte is
+ * read or stored.
  * @param service - Host upload service receiving streamed bytes.
  * @param request - authenticated HTTP request from Connection.
- * @returns JSON result using HTTP status 200 after request validation.
+ * @returns JSON result using HTTP status 200 after request validation, or 413/415 from write-ahead admission.
  */
 export async function handleFileUploadHttp(service: FileUploads, request: Request): Promise<Response> {
   if (request.method !== 'POST') {
@@ -32,6 +42,19 @@ export async function handleFileUploadHttp(service: FileUploads, request: Reques
   if (sessionId === null || sessionId === '') {
     return new Response('sessionId is required', { status: 400 })
   }
+  const declaredType = request.headers.get(FILE_TYPE_HEADER)?.trim().toLowerCase() || undefined
+  const declaredBytes = declaredContentLength(request.headers.get('content-length'))
+  if (declaredBytes === 'invalid') {
+    return new Response('content-length must be a byte count', { status: 400 })
+  }
+  try {
+    service.admitUpload({
+      ...(declaredType === undefined ? {} : { mediaType: declaredType }),
+      ...(declaredBytes === undefined ? {} : { bytes: declaredBytes }),
+    })
+  } catch (error) {
+    return admissionFailure(error)
+  }
   const name = url.searchParams.get('name') ?? undefined
   let result: FileUploadHttpResult
   try {
@@ -41,6 +64,8 @@ export async function handleFileUploadHttp(service: FileUploads, request: Reques
         sessionId: brandString<SessionId>(sessionId),
         data: requestBodyChunks(request.body),
         signal: request.signal,
+        ...(declaredType === undefined ? {} : { mediaType: declaredType }),
+        ...(declaredBytes === undefined ? {} : { declaredBytes }),
         ...(name === undefined ? {} : { name }),
       }),
     }
@@ -64,6 +89,34 @@ export async function handleFileUploadHttp(service: FileUploads, request: Reques
       'cache-control': 'no-store',
     },
   })
+}
+
+/**
+ * Map one write-ahead admission failure to its HTTP status.
+ * @param error - failure raised by {@link FileUploads.admitUpload}.
+ * @returns the refusal response; unexpected failures propagate.
+ */
+function admissionFailure(error: unknown): Response {
+  const code = (error as { code?: unknown }).code
+  if (code === 'FILE_TOO_LARGE') {
+    return new Response('declared upload exceeds the configured byte limit', { status: 413 })
+  }
+  if (code === 'UNSUPPORTED_FILE_TYPE') {
+    return new Response('declared file type is not accepted by this deployment', { status: 415 })
+  }
+  throw error
+}
+
+/**
+ * Parse the declared request byte count.
+ * @param value - raw `Content-Length` header value.
+ * @returns the declared byte count, `undefined` when the header is absent, or `invalid`.
+ */
+function declaredContentLength(value: string | null): number | undefined | 'invalid' {
+  if (value === null) return undefined
+  const parsed = Number(value)
+  if (!Number.isSafeInteger(parsed) || parsed < 0) return 'invalid'
+  return parsed
 }
 
 async function* requestBodyChunks(body: ReadableStream<Uint8Array> | null): AsyncIterable<Uint8Array> {

@@ -3,9 +3,19 @@
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { AttachmentStore } from '@deepseek-ai/dsh-attachment'
+import { AttachmentError, AttachmentStore } from '@deepseek-ai/dsh-attachment'
+import {
+  assertAllowedMediaTypes,
+  DEFAULT_ALLOWED_FILE_MIME_TYPES,
+  DEFAULT_MAX_UPLOAD_BYTES,
+} from '@deepseek-ai/dsh-attachment'
 import type {
+  AttachmentStorageUsage,
+  AttachmentId,
+  FileAdmissionLimits,
   FileAttachmentRef,
+  GarbageCollectionRequest,
+  GarbageCollectionResult,
   ImageAttachmentLimits,
   ImageAttachmentRef,
   ImageRequestTarget,
@@ -23,6 +33,11 @@ import {
   readFileStreamVerbatim, saveFileStreamVerbatim, saveFileVerbatim, storedFilePath,
 } from './file-store.ts'
 import { readRequestImageFile, requestImageVariantId } from './request-image.ts'
+import { StorageBudget } from './budget.ts'
+import { collectUnreferencedObjects } from './gc.ts'
+
+/** Caller-registered source of attachment ids some session still references. */
+export type GarbageReferenceSource = () => Iterable<AttachmentId> | undefined
 
 export { canPassThroughNormalization, normalizeImage } from './normalization.ts'
 export type { NormalizedImage, NormalizationPolicy } from './normalization.ts'
@@ -56,6 +71,8 @@ export const DEFAULT_NORMALIZED_IMAGE_MAX_BYTES = 4 * 1024 * 1024
 export const DEFAULT_IMAGE_COMPRESSION_CONCURRENCY = 2
 /** Maximum configurable native image transformations per store. */
 export const MAX_IMAGE_COMPRESSION_CONCURRENCY = 8
+/** Default grace period the garbage-collection timer applies to unreferenced objects. */
+export const DEFAULT_GC_GRACE_PERIOD_MS = 24 * 60 * 60 * 1000
 
 /** Local attachment backend configuration. */
 export interface Config {
@@ -82,6 +99,22 @@ export interface Config {
   normalizedImageMaxBytes?: number
   /** Maximum simultaneous normalization or request-image transformations in this service instance. */
   imageCompressionConcurrency?: number
+  /** Maximum bytes accepted for one verbatim file upload. Default: 300 MiB, matching the buffered request-body cap. */
+  maxUploadBytes?: number
+  /**
+   * Media types accepted for verbatim file uploads; exact types, `type/*`
+   * wildcards, and the match-all wildcard are honored. Default: images, text,
+   * and common document formats.
+   */
+  allowedMimeTypes?: string[]
+  /** Durable attachment disk budget in bytes; 0 removes the budget. Default: 0. */
+  diskBudgetBytes?: number
+  /** Budget fraction at or above which one debounced warning fires; greater than 0 and at most 1. Default: 0.8. */
+  budgetWarnRatio?: number
+  /** Garbage-collection timer interval in milliseconds; 0 disables the timer. Default: 0. */
+  gcIntervalMs?: number
+  /** Grace period the garbage-collection timer applies to unreferenced objects. Default: 24 hours. */
+  gcGracePeriodMs?: number
 }
 
 function abortReason(signal: AbortSignal): Error {
@@ -157,18 +190,34 @@ export class LocalAttachmentStore extends AttachmentStore {
     normalizedImageMaxBytes: z.number().step(1).min(1).default(DEFAULT_NORMALIZED_IMAGE_MAX_BYTES),
     imageCompressionConcurrency: z.number().step(1).min(1).max(MAX_IMAGE_COMPRESSION_CONCURRENCY)
       .default(DEFAULT_IMAGE_COMPRESSION_CONCURRENCY),
+    maxUploadBytes: z.number().step(1).min(1).default(DEFAULT_MAX_UPLOAD_BYTES),
+    allowedMimeTypes: z.array(z.string()).default([...DEFAULT_ALLOWED_FILE_MIME_TYPES]),
+    diskBudgetBytes: z.number().step(1).min(0).default(0),
+    // schemastery bounds are inclusive, so the exclusive lower bound rides a
+    // transform; the constructor keeps the same rule for direct construction.
+    budgetWarnRatio: z.transform(z.number().min(0).max(1), (value) => {
+      if (value > 0) return value
+      throw new TypeError(`expected budgetWarnRatio greater than 0 but got ${value}`)
+    }).default(0.8),
+    gcIntervalMs: z.number().step(1).min(0).default(0),
+    gcGracePeriodMs: z.number().step(1).min(1).default(DEFAULT_GC_GRACE_PERIOD_MS),
   })
 
   /** Absolute versioned storage root. */
   readonly root: string
   readonly imageLimits: ImageAttachmentLimits
+  override readonly fileAdmission: FileAdmissionLimits
   /** Resolved provider-independent normalization policy. */
   readonly normalizationPolicy: Readonly<NormalizationPolicy>
   /** Resolved instance-level compression limit. */
   readonly imageCompressionConcurrency: number
+  /** Grace period the garbage-collection timer applies to unreferenced objects. */
+  readonly gcGracePeriodMs: number
   private readonly cacheRoot: string
   private readonly compression: CompressionLimiter
+  private readonly budget: StorageBudget
   private readonly requestInflight = new Map<string, SharedRequest<RequestImageAttachment>>()
+  private garbageReferenceSource: GarbageReferenceSource | undefined
 
   constructor(ctx: Context, config: Config) {
     super(ctx)
@@ -182,6 +231,29 @@ export class LocalAttachmentStore extends AttachmentStore {
       maxImagePixels: config.maxImagePixels ?? DEFAULT_MAX_IMAGE_PIXELS,
       maxImageDimension: config.maxImageDimension ?? DEFAULT_MAX_IMAGE_DIMENSION,
       mediaTypes: Object.freeze(['image/png', 'image/jpeg', 'image/webp', 'image/gif'] as const),
+    })
+    this.fileAdmission = Object.freeze({
+      maxUploadBytes: config.maxUploadBytes ?? DEFAULT_MAX_UPLOAD_BYTES,
+      allowedMimeTypes: Object.freeze([...(config.allowedMimeTypes ?? DEFAULT_ALLOWED_FILE_MIME_TYPES)]),
+    })
+    assertAllowedMediaTypes(this.fileAdmission.allowedMimeTypes)
+    const budgetWarnRatio = config.budgetWarnRatio ?? 0.8
+    if (!(budgetWarnRatio > 0) || budgetWarnRatio > 1) {
+      throw new Error('attachment-local: budgetWarnRatio must be greater than 0 and at most 1')
+    }
+    this.gcGracePeriodMs = config.gcGracePeriodMs ?? DEFAULT_GC_GRACE_PERIOD_MS
+    this.budget = new StorageBudget(
+      this.root,
+      config.diskBudgetBytes ?? 0,
+      budgetWarnRatio,
+      (message) => {
+        this.ctx.logger.warn(message)
+      },
+    )
+    // Startup orphan cleanup runs whether or not the budget is enabled, so a
+    // crash cannot leave staging files behind on a budgetless deployment.
+    void this.budget.sweepOrphans().catch((error: unknown) => {
+      this.ctx.logger.warn(`attachment-local: startup orphan cleanup failed: ${String(error)}`)
     })
     this.normalizationPolicy = Object.freeze({
       maxPixels: config.normalizedImageMaxPixels ?? DEFAULT_NORMALIZED_IMAGE_MAX_PIXELS,
@@ -198,6 +270,20 @@ export class LocalAttachmentStore extends AttachmentStore {
     }
     this.imageCompressionConcurrency = compressionConcurrency
     this.compression = new CompressionLimiter(compressionConcurrency)
+    const gcIntervalMs = config.gcIntervalMs ?? 0
+    if (gcIntervalMs > 0) {
+      ctx.effect(() => {
+        const timer = setInterval(() => {
+          this.collectGarbageScheduled().catch((error: unknown) => {
+            this.ctx.logger.warn(`attachment-local: scheduled garbage collection failed: ${String(error)}`)
+          })
+        }, gcIntervalMs)
+        timer.unref()
+        return () => {
+          clearInterval(timer)
+        }
+      }, 'attachment-local: garbage-collection timer')
+    }
   }
 
   async validateImage(input: SaveImageAttachment): Promise<void> {
@@ -210,7 +296,15 @@ export class LocalAttachmentStore extends AttachmentStore {
       () => prepareImageFile(input, this.imageLimits, this.normalizationPolicy),
     )))
     const refs: ImageAttachmentRef[] = []
-    for (const image of prepared) refs.push(await commitPreparedImageFile(this.root, image))
+    for (const image of prepared) {
+      const reservation = await this.budget.reserve(image.data.byteLength)
+      try {
+        refs.push(await commitPreparedImageFile(this.root, image))
+      } finally {
+        await reservation.release()
+      }
+    }
+    await this.afterSave()
     return refs
   }
 
@@ -218,7 +312,14 @@ export class LocalAttachmentStore extends AttachmentStore {
     const prepared = await this.compression.run(
       () => prepareImageFile(input, this.imageLimits, this.normalizationPolicy),
     )
-    return commitPreparedImageFile(this.root, prepared)
+    const reservation = await this.budget.reserve(prepared.data.byteLength)
+    try {
+      const ref = await commitPreparedImageFile(this.root, prepared)
+      await this.afterSave()
+      return ref
+    } finally {
+      await reservation.release()
+    }
   }
 
   async readImage(ref: ImageAttachmentRef, signal?: AbortSignal): Promise<StoredImageAttachment> {
@@ -230,11 +331,127 @@ export class LocalAttachmentStore extends AttachmentStore {
   }
 
   override async saveFile(input: SaveFileAttachment): Promise<FileAttachmentRef> {
-    return saveFileVerbatim(this.root, input)
+    this.admitFileUpload({
+      bytes: input.data.byteLength,
+      ...(input.mediaType === undefined ? {} : { mediaType: input.mediaType }),
+    })
+    const reservation = await this.budget.reserve(input.data.byteLength)
+    try {
+      const ref = await saveFileVerbatim(this.root, input)
+      await this.afterSave()
+      return ref
+    } finally {
+      await reservation.release()
+    }
   }
 
   override async saveFileStream(input: SaveFileStreamAttachment): Promise<FileAttachmentRef> {
-    return saveFileStreamVerbatim(this.root, input)
+    this.admitFileUpload({
+      ...(input.declaredBytes === undefined ? {} : { bytes: input.declaredBytes }),
+      ...(input.mediaType === undefined ? {} : { mediaType: input.mediaType }),
+    })
+    const reservation = await this.budget.reserve(input.declaredBytes ?? 0)
+    try {
+      const ref = await saveFileStreamVerbatim(this.root, {
+        ...input,
+        data: this.limitStream(input.data, reservation),
+      })
+      await this.afterSave()
+      return ref
+    } finally {
+      await reservation.release()
+    }
+  }
+
+  /**
+   * Wrap one upload stream with byte counting. The running total refuses
+   * uploads above the byte limit and keeps the disk-budget reservation in
+   * step with an undeclared stream, so a lying or missing Content-Length
+   * cannot bypass admission.
+   * @param data - exact upload bytes in order.
+   * @param reservation - the upload's disk-budget reservation.
+   * @returns counted bytes in order.
+   */
+  private async *limitStream(
+    data: AsyncIterable<Uint8Array>,
+    reservation: Awaited<ReturnType<StorageBudget['reserve']>>,
+  ): AsyncIterable<Uint8Array> {
+    let total = 0
+    for await (const chunk of data) {
+      total += chunk.byteLength
+      if (total > this.fileAdmission.maxUploadBytes) {
+        throw new AttachmentError('File upload exceeds the configured byte limit.', 'FILE_TOO_LARGE')
+      }
+      await reservation.grow(total)
+      yield chunk
+    }
+  }
+
+  /**
+   * Refresh the stored-bytes snapshot after a successful save, which also
+   * re-evaluates the budget warning.
+   */
+  private async afterSave(): Promise<void> {
+    await this.budget.refresh()
+  }
+
+  /**
+   * Report durable attachment storage consumption against the disk budget.
+   * The snapshot reflects a fresh scan of the durable object trees.
+   * @returns a read-only usage snapshot.
+   */
+  async usage(): Promise<AttachmentStorageUsage> {
+    await this.budget.prepare()
+    await this.budget.refresh()
+    return this.budget.usage()
+  }
+
+  /**
+   * Delete durable attachment objects that no session references and whose
+   * last modification is older than the grace period. Triggering a pass is the
+   * caller's decision; the caller also owns the referenced set, because only
+   * it knows which sessions are live.
+   * @param request - currently referenced attachment ids and the grace period.
+   * @returns bytes and object count reclaimed by this pass.
+   */
+  async collectGarbage(request: GarbageCollectionRequest): Promise<GarbageCollectionResult> {
+    if (!(request.olderThanMs >= 0)) {
+      throw new Error('attachment-local: olderThanMs must be a non-negative number of milliseconds')
+    }
+    return this.budget.prepare().then(async () => collectUnreferencedObjects(
+      this.root,
+      request.referenced,
+      request.olderThanMs,
+    )).then(async (result) => {
+      await this.budget.refresh()
+      return result
+    })
+  }
+
+  /**
+   * Register the source the garbage-collection timer consults for referenced
+   * attachment ids. The timer skips a run while no source returns a set.
+   * @param source - source returning the referenced attachment ids, or `undefined` when references are not yet readable.
+   * @returns disposer removing this source.
+   */
+  setGarbageReferenceSource(source: GarbageReferenceSource): () => void {
+    this.garbageReferenceSource = source
+    this.budget.resetGarbageSourceWarning()
+    return () => {
+      if (this.garbageReferenceSource === source) this.garbageReferenceSource = undefined
+    }
+  }
+
+  /** Run one timer-driven collection pass against the registered reference source. */
+  private async collectGarbageScheduled(): Promise<void> {
+    const source = this.garbageReferenceSource
+    if (source === undefined) {
+      this.budget.warnMissingGarbageSource()
+      return
+    }
+    const referenced = source()
+    if (referenced === undefined) return
+    await this.collectGarbage({ referenced, olderThanMs: this.gcGracePeriodMs })
   }
 
   override readFileStream(ref: FileAttachmentRef, signal?: AbortSignal): AsyncIterable<Uint8Array> {

@@ -334,10 +334,26 @@ export interface Config {
   normalizedImageMaxBytes?: number
   /** Maximum simultaneous normalization or request-image transformations in this service instance. */
   imageCompressionConcurrency?: number
+  /** Maximum bytes accepted for one verbatim file upload. Default: 300 MiB, matching the buffered request-body cap. */
+  maxUploadBytes?: number
+  /**
+   * Media types accepted for verbatim file uploads; exact types, `type/*`
+   * wildcards, and the match-all wildcard are honored. Default: images, text,
+   * and common document formats.
+   */
+  allowedMimeTypes?: string[]
+  /** Durable attachment disk budget in bytes; 0 removes the budget. Default: 0. */
+  diskBudgetBytes?: number
+  /** Budget fraction at or above which one debounced warning fires; greater than 0 and at most 1. Default: 0.8. */
+  budgetWarnRatio?: number
+  /** Garbage-collection timer interval in milliseconds; 0 disables the timer. Default: 0. */
+  gcIntervalMs?: number
+  /** Grace period the garbage-collection timer applies to unreferenced objects. Default: 24 hours. */
+  gcGracePeriodMs?: number
 }
 ```
 
-来源：[`packages/attachment/attachment-local/src/index.ts:61`](../packages/attachment/attachment-local/src/index.ts)
+来源：[`packages/attachment/attachment-local/src/index.ts:78`](../packages/attachment/attachment-local/src/index.ts)
 
 <a id="deepseek-aidsh-bash-local"></a>
 
