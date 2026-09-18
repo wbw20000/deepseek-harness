@@ -55,6 +55,7 @@ Every package lives in exactly one group; new packages join existing groups, and
 | [`experimental/`](experimental/README.md) | Pre-stable prototypes with explicit private exceptions |
 | [`workflow/`](workflow/README.md) | Workflow seam, PTC process engine, and model-facing `workflow`/`ralph` tools |
 | [`webhook/`](webhook/README.md) | Verified external events, trusted rules, and fire-and-forget Workspace Sessions |
+| [`notify/`](notify/README.md) | Outbound device notifications: the push-registry Remote endpoints and the session-event outbound dispatcher |
 | [`web/`](web/README.md) | Web capability family: seam, search/fetch providers, model-facing web tools |
 | [`document/`](document/README.md) | Shared Host Office-to-PDF conversion |
 | [`attachment/`](attachment/README.md) | Durable attachment identity, validation, local content-addressed storage |

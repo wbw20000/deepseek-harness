@@ -1,6 +1,6 @@
 # Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
-#   pnpm run verify-translation-pairing --write docs/event-producer-consumer.md
-event-producer-consumer.md: 58b62544503afcf2532723451562b6c1295eb72b
-event-producer-consumer.zh.md: 24e7bfeef59a02607c91e0d157ad7ac56017a493
+#   pnpm run verify-translation-pairing --write /Users/mima0000/Documents/ChatGPT/dsh-stream-p2-notify/docs/subsystems/notify.md
+notify.md: ebe25d83697c55c7182c2589d395db7ff4b98204
+notify.zh.md: 92fefa8242c6cb4c854a1d539cb4d17476eced34

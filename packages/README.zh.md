@@ -55,6 +55,7 @@ harness 由 `packages/` 下的 npm 包组装而成，按能力系列分组：会
 | [`experimental/`](experimental/README.zh.md) | 预稳定原型，包含显式私有例外 |
 | [`workflow/`](workflow/README.zh.md) | 工作流 seam、PTC 进程引擎、面向模型的 `workflow`／`ralph` 工具 |
 | [`webhook/`](webhook/README.zh.md) | 已验证外部事件、受信规则与即发即弃 Workspace 会话 |
+| [`notify/`](notify/README.zh.md) | 出站设备通知：push-registry Remote 端点与会话事件出站派发器 |
 | [`web/`](web/README.zh.md) | Web 能力系列：seam、搜索／获取提供方、面向模型的 Web 工具 |
 | [`document/`](document/README.zh.md) | 共享宿主 Office 到 PDF 转换 |
 | [`attachment/`](attachment/README.zh.md) | 持久附件标识、校验、本地内容寻址存储 |
