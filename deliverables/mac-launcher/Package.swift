@@ -7,11 +7,15 @@ import PackageDescription
 // executable runner using the main run loop; run it with `swift run LauncherTests`.
 // `RecoveryApp` is the independent opt-in recovery shell, built and packaged
 // by `tools/build-recovery.sh`; `RecoveryTests` is its private no-GUI runner.
+// `UpgradeTransaction` holds the M6 upgrade/restore transaction state machine;
+// `dsh-upgrade` is its plain CLI (upgrade, restore, resume); `UpgradeTests` is
+// its private no-GUI runner.
 let package = Package(
     name: "DeepSeekHarnessLauncher",
     platforms: [.macOS(.v13)],
     targets: [
         .target(name: "LauncherCore"),
+        .target(name: "UpgradeTransaction"),
         .executableTarget(
             name: "LauncherApp",
             dependencies: ["LauncherCore"]
@@ -27,6 +31,14 @@ let package = Package(
         .executableTarget(
             name: "RecoveryTests",
             dependencies: ["LauncherCore"]
+        ),
+        .executableTarget(
+            name: "dsh-upgrade",
+            dependencies: ["UpgradeTransaction"]
+        ),
+        .executableTarget(
+            name: "UpgradeTests",
+            dependencies: ["UpgradeTransaction"]
         ),
     ]
 )

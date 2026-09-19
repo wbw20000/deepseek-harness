@@ -12,6 +12,7 @@
 - [构建候选包](#build-a-candidate)
 - [冻结候选包](#frozen-candidate)
 - [恢复 App](#recovery-apps)
+- [升级与恢复事务（`dsh-upgrade`）](#upgrade-transaction)
 - [测试](#tests)
 - [源码链接限制](#source-linked-limitation)
 - [标识与诊断](#identity-and-diagnostics)
@@ -83,6 +84,35 @@ zsh deliverables/mac-launcher/tools/build-recovery.sh \
 
 冻结后端启动前，`BackendController` 会在数据目录上获取 OS `flock` 锁。普通冻结启动器与两个恢复 App 共用此规则；锁被占用时，在创建进程之前拒绝启动。尚未确认子进程退出时继续持锁，App 等待确认退出后再关闭。该锁是协作性的；启动器被强制杀死时锁会释放，即使后端仍存活，因此强制退出后必须先检查残留后端再打开。它不是孤儿进程监督器。元数据哈希检测意外不一致，不能防止同用户恶意改写。恢复入口不执行发布事务，也不还原备份。
 
+<a id="upgrade-transaction"></a>
+
+## 升级与恢复事务（`dsh-upgrade`）
+
+把获批候选安装到正式位置、以及回退到上一个版本，都是桌面流程中用户的显式动作，通过 `dsh-upgrade` 命令行执行（状态机在 `Sources/UpgradeTransaction`，纯命令行入口在 `Sources/dsh-upgrade`）。没有任何自动触发：没有启动器钩子、没有 launchd 任务、没有定时器，也永不需要 root、不改 launchd。`dsh-upgrade` 与测试入口一样从本包构建运行；它不会被打进任何 App bundle。
+
+```sh
+swift build --package-path deliverables/mac-launcher
+.build/debug/dsh-upgrade upgrade \
+  --candidate-root <absolute managed-trial root> \
+  --identity <absolute candidate-identity.json> \
+  --trial-record <absolute trial-record.json> \
+  --production-app <absolute production .app> \
+  --production-data-home <absolute production data directory> \
+  [--backups-root <dir>] [--transaction-dir <dir>] [--verify-command <cmd> [args...]]
+.build/debug/dsh-upgrade restore (--from-backup <backup dir> | --from-last-good <recovery-last-good.json>) \
+  --production-app <absolute production .app> --production-data-home <absolute production data directory>
+.build/debug/dsh-upgrade resume --transaction-dir <dir>
+.build/debug/dsh-upgrade make-trial-record --candidate-identity <absolute candidate-identity.json> \
+  --approved-by <name> --result-digest <64 lowercase hex> --out <absolute output json>
+```
+
+在动第一个字节之前，`upgrade` 先绑定精确输入：候选安装内的 `recovery-last-good.json` 必须指向候选 App，且两个摘要与 identity 完全一致；候选 bundle 内的 `frozen-launcher-config.json` 与 `runtime-inventory.json` 必须重新哈希一致；试用记录（schema `self-development-review.trial-record/1`，含非空 `approvedBy` 与格式合法的 `resultDigest`）必须指向同一候选。`approvedBy` 与 `resultDigest` 为必填：升级必须绑定已记录的试用批准。正常来源是核心 `recordTrialApproval` 流程（`trial/approved`），其 `resultDigest` 未来由稳定侧门面导出。M1 时代没有 `resultDigest` 的人工试用记录不能直接升级：先人工核对候选摘要（可人工复核的值：`frozen-launcher-config.json`、`runtime-inventory.json`、可执行文件）算出摘要，用 `dsh-upgrade make-trial-record` 补录成合规记录——该子命令只做格式化与身份绑定校验（原样复制 identity 的字段，写盘后重读工件，candidate 段与 identity 完全一致才接受，不猜测任何数值）——再用补录后的记录执行升级。补录记录带 `"trialRecordSource": "manual-bridge"` 并被复制进事务记录，因此人工批准始终区别于核心记录的批准；其他来源值一律拒绝。正式 App 与数据目录必须存在，且正式 App 不能就是候选本身。任何一项检查失败都会拒绝执行，且不改动任何文件。
+
+每个入口——`upgrade`、`restore`、`resume`——在读或写任何事务文件之前，都先取得事务目录 `upgrade-transaction.lock` 上的独占 `flock`；锁被占用时整次运行（包括对中断事务的处置）被直接拒绝，且被拒绝的运行不改动任何内容。事务状态机把每一步原子落盘（临时文件 + fsync + `rename(2)`，目录随后 fsync）到事务目录（默认：正式 App 所在目录）的 `upgrade-transaction.json`：`planned → backed-up → staged → switched → verified → committed`，任一步失败进入 `rolled-back` 或 `needs-manual`。状态之外还有一份副作用台账：备份、暂存复制、App 交换、数据版本标记、恢复入口安装每完成一步就落盘一次，且总在下一个不可逆步骤之前落盘；因此回滚——或崩溃恢复——只撤销台账记录的步骤，并按逆序执行。`backed-up` 是正式 App、正式数据目录与既有恢复入口 App 的成对备份，位于 `<backups-root>/<UTC 时间戳>-<被替换版本>/`（默认 `<事务目录>/upgrade-backups`；同一秒内两个事务时加后缀），其可读的 `manifest.json` 记录每个文件的路径、大小、SHA-256 与被替换版本；备份先通过哈希校验才进入 `staged`，中途失败的备份会被整体删除、绝不留下半成品。切换先把候选 App 复制到正式 App 旁的隐藏暂存目录、重新哈希其冻结元数据，再用两次原子 rename 交换；交换完成后立即落盘 `switched`，然后把成对的 `data-version.json` 标记（程序版本与数据版本一起）写进正式数据目录，且先前的标记字节先读取、先落盘。`verified` 之前已运行注入的 `--verify-command`（默认：安装后的 bundle 自身可执行文件加 `--version`；子进程输出边运行边读，输出再多也不会塞满管道导致阻塞）；退出码 0 提交，其余任何结果都回滚事务：已安装的恢复入口恢复为备份里的字节（升级前不存在则移除）、先前标记还原、旧 App 用 rename 快路径或备份慢路径放回，并在记录 `rolled-back` 之前把恢复后的 App 逐文件与备份 manifest 断言一致。回滚自身也失败——或恢复后的 App 与备份不符、或事务记录无法落盘——时进入 `needs-manual`，并打印可读的处理步骤；回滚记录写不进去时如实报告，绝不谎称已记录 `rolled-back`。提交成功的升级会把候选的恢复入口 App 原样复制到正式 App 旁，保持既有 opt-in 恢复语义；入口 App 保留自己的密封，只恢复它构建时绑定的安装，也不是数据还原工具。
+
+崩溃留下的中间状态记录会在下一次 `upgrade`、`restore` 或显式 `resume` 时被处置——始终持有事务锁：副作用台账（无台账的旧记录则看正式 App 旁的 `.replaced` 残留）判定切换是否已经发生；已切换的事务从记录的备份回滚，更早的只做清理，而且待执行的操作绝不在同一次运行中启动，因此副作用绝不重复。`restore` 以相反方向运行同一状态机：`--from-backup` 先复核成对备份的 manifest，把正式 App 回到被备份的版本；`--from-last-good` 重新哈希一条 `recovery-last-good.json` 并安装它指向的 App。两者都会在切换前为当前状态创建自己的成对备份，并用 manifest 校验恢复结果。
+
+限制：这些摘要检测意外不一致，不能防范改写记录与负载的同用户攻击者。`data-version.json` 是元数据配对；事务不迁移数据，安装后的 App 仍使用其冻结配置记录的数据目录。事务从不删除备份。校验命令有运行时限（默认 120 秒），其输出仅供参考。
 <a id="tests"></a>
 
 ## 测试
@@ -90,11 +120,14 @@ zsh deliverables/mac-launcher/tools/build-recovery.sh \
 ```sh
 swift run --package-path deliverables/mac-launcher LauncherTests
 swift run --package-path deliverables/mac-launcher RecoveryTests
+swift run --package-path deliverables/mac-launcher UpgradeTests
 zsh deliverables/mac-launcher/tests/run-build-tests.sh
 node --test deliverables/mac-launcher/tests/freeze-runtime.test.mjs
 ```
 
 `RecoveryTests` 是恢复核心的独立无 GUI 测试入口。它覆盖 last-good 选择（有效记录、损坏与不受支持的 schema、超长、硬链接与 FIFO 记录元数据、穿越与符号链接逃逸、摘要不一致、缺失 bundle 或数据目录部分、超过 64 KiB 的清单、超过 32 MiB 清单的拒绝、密封安装加载，以及数据目录包含关系：安装之外、与所选 App 重叠、`..` 与符号链接组件、被接受的显式嵌套发布路径）、恢复锁（进程内互斥、释放、缺失与链接的数据目录），以及自有控制器（密封可启动 fixture 的启动与停止、独立进程租约争用在任何进程被启动之前失败）。显式运行 `swift run --package-path deliverables/mac-launcher RecoveryTests --fixture-install <已存在目录>` 会在该目录内构建一个私有 fixture 安装，并执行选择、完整负载完整性校验和真实自有 `BackendController` 的启动与停止；仅 fixture，无凭据。测试夹具都是私有的临时目录，且明确仅用于测试；fixture 记录绝不是真实的 last-good 批准。`build-recovery.sh` 的构建期拒绝（用法、相对或缺失的安装根目录、既有目标）针对真实脚本验证；完整打包流程需要允许 SwiftPM manifest 沙箱的主机。
+
+`UpgradeTests` 是升级事务的无 GUI 测试入口。它在私有临时目录中覆盖：绑定拒绝（identity 摘要不一致、被篡改的 bundle 元数据、指向其他候选的试用记录、外来的 last-good 记录、把候选安装到它自己上——每一项都在任何文件被改动之前拒绝）、提交路径（记录历史中每个状态可读、正式 App 运行候选字节、成对的 data-version 标记、被安装的恢复入口、可独立复验的备份 manifest）、校验命令失败时的自动回滚、`staged` 与 `switched` 的中断演练及其后的 `resume` 处置、从成对备份与从 last-good 记录的恢复，以及单进程与真实双进程的事务锁拒绝。K3 审查回归从失败一侧覆盖同样的规则：切换之后 marker 写入失败会回滚 App 并如实记录副作用台账；持锁期间（同进程第二把句柄与真实第二进程）的 `resume`/`upgrade` 被拒绝且不触碰进行中的事务；中途失败的备份不留半成品目录；装到一半的恢复入口从备份回滚（既有入口恢复旧字节、新增入口被移除）；回滚记录写不进去时报告 needs-manual 而非谎报 `rolled-back`；以及 `make-trial-record` 桥（正常路径、非法摘要、既有目标、未知来源标记）。`--hold-lock` 持锁模式与演练用的 `stopAfter` 选项都只是测试入口；出厂的命令行绝不会在无显式触发时运行任何事务。
 
 `LauncherTests` 覆盖就绪解析、脱敏、认证探测、配置与数据目录重叠规则、冻结标识选择、自有子进程生命周期和冻结运行时完整性拒绝行为。它在私有目录中创建测试子进程，并绑定临时回环监听端口；请运行这个可执行测试入口，而不是 `swift test`。构建套件不会启动后端。Node 套件使用独立构建工具 fixture（测试前置数据）检查文件复制；fixture 通过不等于真实运行时试用通过。
 
