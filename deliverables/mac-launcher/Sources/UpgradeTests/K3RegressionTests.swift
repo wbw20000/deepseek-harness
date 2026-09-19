@@ -311,40 +311,94 @@ struct RollbackRecordFailureTests {
 /// `make-trial-record` formats a manual trial record, binds it to the
 /// identity file, and marks it `manual-bridge`; the upgrade engine accepts
 /// it and copies the source marker into the transaction record. An unknown
-/// source marker or a malformed digest is refused.
+/// source marker or a malformed digest is refused. Every functional
+/// assertion runs in-process through `MakeTrialRecordCommand`, so the suite
+/// passes on a clean `.build` where the `dsh-upgrade` executable is not
+/// built; one real-CLI smoke runs when the binary exists and is recorded as
+/// an explicit skip with its reason when it does not.
 @MainActor
 struct ManualBridgeTests {
 
+    /// The real `dsh-upgrade` binary, when it was built. `swift run
+    /// UpgradeTests` builds the test target and its library dependencies
+    /// only, never the `dsh-upgrade` executable target.
+    private static let cliExecutableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+        .deletingLastPathComponent()
+        .appendingPathComponent("dsh-upgrade")
+
+    /// Bound on every CLI wait; no path in this suite can block forever.
+    private static let cliTimeout: TimeInterval = 60
+
+    /// Runs the real `dsh-upgrade` binary and returns its exit code and
+    /// combined stdout/stderr text. Never blocks indefinitely: a failed
+    /// `process.run()` returns a nonzero code with the error text instead of
+    /// reading a pipe no child will write, and both the output read and the
+    /// exit wait carry a 60 s timeout — on timeout the child is terminated
+    /// and the invocation is judged failed.
     private func runCLI(_ arguments: [String]) -> (code: Int32, output: String) {
+        final class LockedBuffer {
+            private let lock = NSLock()
+            private var data = Data()
+
+            func append(_ chunk: Data) {
+                lock.lock(); data.append(chunk); lock.unlock()
+            }
+
+            var text: String {
+                lock.lock(); defer { lock.unlock() }
+                return String(data: data, encoding: .utf8) ?? ""
+            }
+        }
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
-            .deletingLastPathComponent()
-            .appendingPathComponent("dsh-upgrade")
+        process.executableURL = Self.cliExecutableURL
         process.arguments = arguments
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = output
-        try? process.run()
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        return (process.terminationStatus, String(data: data, encoding: .utf8) ?? "")
+        let outputPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = outputPipe
+        let buffer = LockedBuffer()
+        let readFinished = DispatchSemaphore(value: 0)
+        outputPipe.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            if chunk.isEmpty {
+                handle.readabilityHandler = nil
+                readFinished.signal()
+            } else {
+                buffer.append(chunk)
+            }
+        }
+        do {
+            try process.run()
+        } catch {
+            outputPipe.fileHandleForReading.readabilityHandler = nil
+            return (1, "dsh-upgrade could not start: \(error)")
+        }
+        let exitFinished = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            process.waitUntilExit()
+            exitFinished.signal()
+        }
+        let timedOut = readFinished.wait(timeout: .now() + Self.cliTimeout) == .timedOut
+            || exitFinished.wait(timeout: .now() + Self.cliTimeout) == .timedOut
+        if timedOut {
+            process.terminate()
+            _ = exitFinished.wait(timeout: .now() + 5)
+            outputPipe.fileHandleForReading.readabilityHandler = nil
+            return (-1, "dsh-upgrade did not exit within \(Int(Self.cliTimeout)) s and was "
+                + "terminated; output so far: \(buffer.text)")
+        }
+        outputPipe.fileHandleForReading.readabilityHandler = nil
+        return (process.terminationStatus, buffer.text)
     }
 
     func run(_ runner: UpgradeTestRunner) {
-        runner.check(FileManager.default.isExecutableFile(atPath: URL(fileURLWithPath:
-            CommandLine.arguments[0]).deletingLastPathComponent()
-            .appendingPathComponent("dsh-upgrade").path),
-            "the dsh-upgrade CLI is built next to the test executable")
-
-        // Happy path: the bridge writes a bound, marked record and the
-        // upgrade accepts it.
+        // Happy path in-process: the bridge writes a bound, marked record
+        // and the upgrade accepts it.
         let root = TempDir.make("bridge")
         defer { TempDir.remove(root) }
         let fixture = UpgradeFixture.make("bridge", in: root)
         let outURL = root.appendingPathComponent("bridged-trial-record.json")
         let digest = UpgradeFixture.sha256Hex(Data("manual candidate summary".utf8))
-        let (code, output) = runCLI([
-            "make-trial-record",
+        let (code, output) = MakeTrialRecordCommand.run([
             "--candidate-identity", fixture.identityURL.path,
             "--approved-by", "tester (manual bridge regression)",
             "--result-digest", digest,
@@ -382,8 +436,7 @@ struct ManualBridgeTests {
         defer { TempDir.remove(badRoot) }
         let badFixture = UpgradeFixture.make("bridge-bad-digest", in: badRoot)
         let badOut = badRoot.appendingPathComponent("never-written.json")
-        let (badCode, _) = runCLI([
-            "make-trial-record",
+        let (badCode, _) = MakeTrialRecordCommand.run([
             "--candidate-identity", badFixture.identityURL.path,
             "--approved-by", "tester",
             "--result-digest", "not-a-digest",
@@ -395,8 +448,7 @@ struct ManualBridgeTests {
 
         // An existing destination is never overwritten.
         UpgradeFixture.write(Data("sentinel".utf8), to: badOut)
-        let (overwriteCode, _) = runCLI([
-            "make-trial-record",
+        let (overwriteCode, _) = MakeTrialRecordCommand.run([
             "--candidate-identity", badFixture.identityURL.path,
             "--approved-by", "tester",
             "--result-digest", digest,
@@ -429,5 +481,37 @@ struct ManualBridgeTests {
                          $0.contains("unsupported trial-record source")
                      }),
                      "an unknown trial-record source is refused before any file change")
+
+        // One real-CLI smoke: only when the dsh-upgrade binary was built.
+        // On a clean `.build` it is absent; the smoke is then an explicit
+        // skip with the reason, never a silent pass, a failure, or a hang.
+        guard FileManager.default.isExecutableFile(atPath: Self.cliExecutableURL.path) else {
+            runner.skip("the dsh-upgrade CLI smoke: skipped — the dsh-upgrade binary was not built "
+                + "(`swift run UpgradeTests` builds only the test target and its library dependencies; "
+                + "run `swift build --product dsh-upgrade` to enable the smoke). "
+                + "The same make-trial-record assertions ran in-process through MakeTrialRecordCommand")
+            return
+        }
+        runner.check(true, "the dsh-upgrade CLI is built next to the test executable")
+        let smokeRoot = TempDir.make("bridge-cli")
+        defer { TempDir.remove(smokeRoot) }
+        let smokeFixture = UpgradeFixture.make("bridge-cli", in: smokeRoot)
+        let smokeOut = smokeRoot.appendingPathComponent("cli-trial-record.json")
+        let (smokeCode, smokeOutput) = runCLI([
+            "make-trial-record",
+            "--candidate-identity", smokeFixture.identityURL.path,
+            "--approved-by", "tester (CLI smoke)",
+            "--result-digest", digest,
+            "--out", smokeOut.path,
+        ])
+        runner.check(smokeCode == 0,
+                     "the real dsh-upgrade CLI make-trial-record succeeds (\(smokeCode)): \(smokeOutput)")
+        if let data = try? Data(contentsOf: smokeOut),
+           let record = try? JSONDecoder().decode(TrialRecord.self, from: data) {
+            runner.check(record.trialRecordSource == TrialRecord.manualBridgeSource,
+                         "the CLI-written record carries the manual-bridge source")
+        } else {
+            runner.check(false, "the CLI-written record is readable JSON")
+        }
     }
 }

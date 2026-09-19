@@ -473,6 +473,45 @@ else
   pass_test
 fi
 
+# --- dsh-upgrade CLI smoke -----------------------------------------------------
+# `swift run UpgradeTests` builds only the test target and its library
+# dependencies, so its make-trial-record assertions run in-process through
+# MakeTrialRecordCommand and the real-CLI smoke is skipped when the binary is
+# absent. This script builds the executable target explicitly and exercises
+# the shipped CLI once, so the command-line path stays covered here.
+
+begin "dsh-upgrade builds and answers a real make-trial-record invocation"
+upgrade_build_log="$fixture_root/dsh-upgrade-build.log"
+# SwiftPM's manifest sandbox is a host property, not a test input. The default
+# keeps it on and the build fails loudly on a host that blocks sandbox-exec
+# (the same refusal build.sh reports); a host that knowingly runs SwiftPM with
+# --disable-sandbox can set SWIFT_BUILD_DISABLE_SANDBOX=1 to do so explicitly.
+typeset -a swift_build_flags=()
+[[ -n ${SWIFT_BUILD_DISABLE_SANDBOX:-} ]] && swift_build_flags=(--disable-sandbox)
+if swift build --package-path "$launcher_dir" $swift_build_flags --product dsh-upgrade >"$upgrade_build_log" 2>&1 \
+  && upgrade_bin_dir=$(swift build --package-path "$launcher_dir" $swift_build_flags --show-bin-path 2>/dev/null) \
+  && [[ -x "$upgrade_bin_dir/dsh-upgrade" ]]; then
+  smoke_root="$fixture_root/dsh-upgrade-smoke"
+  smoke_app="$smoke_root/Fixture.app"
+  mkdir -p "$smoke_app"
+  print -r -- "{ \"sourceRevision\": \"smoke-rev\", \"frozenConfigSHA256\": \"$(printf 'a%.0s' {1..64})\", \"runtimeInventorySHA256\": \"$(printf 'b%.0s' {1..64})\", \"app\": \"$smoke_app\" }" > "$smoke_root/candidate-identity.json"
+  if "$upgrade_bin_dir/dsh-upgrade" make-trial-record \
+      --candidate-identity "$smoke_root/candidate-identity.json" \
+      --approved-by "run-build-tests CLI smoke" \
+      --result-digest "$(printf 'c%.0s' {1..64})" \
+      --out "$smoke_root/trial-record.json" >"$smoke_root/output.log" 2>&1 \
+    && test -f "$smoke_root/trial-record.json" \
+    && grep -q "manual-bridge" "$smoke_root/trial-record.json"; then
+    pass_test
+  else
+    fail_test "the dsh-upgrade CLI make-trial-record smoke failed"
+    print -u2 "  the CLI said: $(cat "$smoke_root/output.log" 2>/dev/null)"
+  fi
+else
+  fail_test "swift build --product dsh-upgrade failed before the CLI smoke"
+  print -u2 "  swift build said: $(tail -3 "$upgrade_build_log" 2>/dev/null)"
+fi
+
 # Recovery build script refusals run before any SwiftPM build, so they are
 # exercised here without a host that permits SwiftPM's manifest sandbox.
 # run_recovery_build mirrors run_build_in for the recovery script.
