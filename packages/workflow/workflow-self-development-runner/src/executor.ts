@@ -37,7 +37,7 @@ import { spawn } from 'node:child_process'
 import type { SpawnOptionsWithStdioTuple } from 'node:child_process'
 import { StringDecoder } from 'node:string_decoder'
 import { SelfDevelopmentRunnerError } from './runtime.ts'
-import { assertProcessGroupSupport, finishProcessGroup } from './process-group.ts'
+import { assertProcessGroupSupport, finishProcessGroup, readGroupLeaderStartedAt } from './process-group.ts'
 import type { RunnerConfig } from './types.ts'
 
 /** One supervised headless execution request. */
@@ -97,6 +97,14 @@ export interface ExecutorRun {
    * and final text reflect only what fit before the cap fired.
    */
   readonly stdoutTruncated: boolean
+  /**
+   * Whether final cleanup observed `EPERM` on the group signal while the
+   * spawned group leader (pid plus `ps` start-time fingerprint) no longer
+   * existed: the numeric pgid was probably reassigned after our group exited,
+   * so the cleanup cannot signal a group it does not own. That state is
+   * recorded instead of failing the run. Absent on a run that never spawned.
+   */
+  readonly pgidReused?: boolean
 }
 
 /** Byte bound of the retained stderr tail. */
@@ -154,6 +162,12 @@ export async function runHeadlessExecutor(config: RunnerConfig, request: Executo
     stdio: ['ignore', 'pipe', 'pipe'],
   }
   const child = spawn(config.nodeBinary, [config.dshBin, '--profile', 'headless', '--json', request.task], options)
+  // Fingerprint the group leader now, before its `exit` event can reap it and
+  // free the pgid for reuse. The read never rejects; a missing fingerprint
+  // leaves the caller's own exit observation to separate a reused pgid from a
+  // live leader during final cleanup.
+  /* v8 ignore next -- a POSIX spawn that yields no pid has no process; its 'error' reject path never reads the leader record. */
+  const leaderStartedAt = child.pid === undefined ? undefined : readGroupLeaderStartedAt(child.pid)
 
   return await new Promise((resolve, reject) => {
     let stepsUsed = 0
@@ -304,7 +318,16 @@ export async function runHeadlessExecutor(config: RunnerConfig, request: Executo
         stderrTail: stderrTail.toString('utf8'),
         stdoutTruncated,
       }
-      void finishProcessGroup(child.pid, config.killGraceMs).then(() => { resolve(result) }, reject)
+      void (async () => {
+        // `close` fires only after the leader exited and Node reaped it, so
+        // the record always says `exited: true` here.
+        /* v8 ignore next 3 -- a POSIX spawn that yields no pid has no process; its 'error' reject path never reaches the cleanup. */
+        const leader = child.pid === undefined
+          ? undefined
+          : { pid: child.pid, exited: true, startedAt: await leaderStartedAt }
+        const groupExit = await finishProcessGroup(child.pid, config.killGraceMs, leader)
+        resolve({ ...result, pgidReused: groupExit.pgidReused })
+      })().then(undefined, reject)
     })
 
     child.on('error', (error: Error) => {
