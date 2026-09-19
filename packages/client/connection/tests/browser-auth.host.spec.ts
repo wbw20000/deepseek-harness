@@ -4,6 +4,7 @@ import { createHmac } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CredentialProvider, CredentialRecord } from '@deepseek-ai/dsh-credentials'
 import { BrowserAuth } from '../src/browser-auth.ts'
+import { resolveMtlsClientCertificatePolicy, type MtlsClientCertificatePolicy } from '../src/client-certificate.ts'
 import type { RegisteredSession } from '../src/session-registry.ts'
 import type { ConnectionIndexRequest, ConnectionIndexResponse } from '../src/rpc.ts'
 import {
@@ -77,13 +78,24 @@ function createAuth(
   maxAgeDays = 30,
   processOwner: object = {},
   cookieSecure = false,
+  mtlsPolicy?: MtlsClientCertificatePolicy,
 ): Promise<BrowserAuth> {
-  return BrowserAuth.create(processOwner, credentials(store), maxAgeDays, cookieSecure)
+  return mtlsPolicy === undefined
+    ? BrowserAuth.create(processOwner, credentials(store), maxAgeDays, cookieSecure)
+    : BrowserAuth.create(processOwner, credentials(store), maxAgeDays, cookieSecure, mtlsPolicy)
 }
+
+/** Serial-header policy trusting Caddy on the loopback, the shipped VPS deployment shape. */
+const MTLS_POLICY = resolveMtlsClientCertificatePolicy({
+  mtlsClientSerialHeader: 'X-DSH-Client-Serial',
+  mtlsTrustedProxies: ['127.0.0.1'],
+})
 
 function request(url: string, authority = '127.0.0.1:3080', init?: {
   cookie?: string
   method?: string
+  serial?: string
+  remoteAddress?: string
 }): ConnectionIndexRequest {
   return {
     method: init?.method ?? 'GET',
@@ -91,18 +103,27 @@ function request(url: string, authority = '127.0.0.1:3080', init?: {
     headers: {
       host: authority,
       ...init?.cookie === undefined ? {} : { cookie: init.cookie },
+      ...init?.serial === undefined ? {} : { 'x-dsh-client-serial': init.serial },
     },
+    remoteAddress: init?.remoteAddress,
   }
 }
 
 function exchange(
   auth: BrowserAuth,
   authority = '127.0.0.1:3080',
+  init?: {
+    serial?: string
+    remoteAddress?: string
+  },
 ): { cookie: string; launchUrl: string; state: ResponseState } {
   const launchUrl = auth.authenticatedUrl(`http://${authority}`)
   const target = new URL(launchUrl)
   const res = response()
-  expect(auth.authorizeIndex(request(`${target.pathname}${target.search}`, authority), res.value)).toBe(false)
+  expect(auth.authorizeIndex(
+    request(`${target.pathname}${target.search}`, authority, init),
+    res.value,
+  )).toBe(false)
   const setCookie = res.state.headers?.['set-cookie']
   if (setCookie === undefined) throw new Error('token exchange did not set a cookie')
   return { cookie: setCookie.split(';', 1)[0]!, launchUrl, state: res.state }
@@ -493,5 +514,83 @@ describe('BrowserAuth', () => {
 
     await expect(createAuth(new RecordCredentials(), Number.MAX_SAFE_INTEGER))
       .rejects.toThrow(/safe timestamp range/u)
+  })
+
+  it('binds the trusted certificate serial at exchange and requires it on every later request', async () => {
+    const store = new RecordCredentials()
+    const auth = await createAuth(store, 30, {}, false, MTLS_POLICY)
+    const { cookie } = exchange(auth, '127.0.0.1:3080', {
+      serial: '1A2B3C4D',
+      remoteAddress: '127.0.0.1',
+    })
+    expect(await firstSession(auth)).toMatchObject({ certificateSerial: '1a2b3c4d' })
+
+    // The same device (same serial, via the trusted proxy) authenticates.
+    expect(auth.isAuthenticated(request('/', '127.0.0.1:3080', {
+      cookie, serial: '1a2b3c4d', remoteAddress: '127.0.0.1',
+    }))).toBe(true)
+    // Caddy's decimal rendering of the same serial is accepted.
+    expect(auth.isAuthenticated(request('/', '127.0.0.1:3080', {
+      cookie, serial: '439041101', remoteAddress: '127.0.0.1',
+    }))).toBe(true)
+    // A copied cookie pair on a device with another certificate is refused.
+    expect(auth.isAuthenticated(request('/', '127.0.0.1:3080', {
+      cookie, serial: 'ffffffffffffffff', remoteAddress: '127.0.0.1',
+    }))).toBe(false)
+    // A trusted proxy that forwards no serial is equally refused.
+    expect(auth.isAuthenticated(request('/', '127.0.0.1:3080', { cookie }))).toBe(false)
+    // A serial header from any other peer is ignored, so the bound session fails closed.
+    expect(auth.isAuthenticated(request('/', '127.0.0.1:3080', {
+      cookie, serial: '1a2b3c4d', remoteAddress: '192.168.1.9',
+    }))).toBe(false)
+    expect(auth.isAuthenticated(request('/', '127.0.0.1:3080', {
+      cookie, serial: '1a2b3c4d',
+    }))).toBe(false)
+
+    // A session issued without a bound serial keeps the cookie-only behavior.
+    const unbound = exchange(auth)
+    expect(auth.isAuthenticated(request('/', '127.0.0.1:3080', { cookie: unbound.cookie }))).toBe(true)
+
+    // Revoking the certificate invalidates every session bound to its serial
+    // at once and leaves the unbound session alone.
+    expect(await auth.revokeCertificate('1a2b3c4d')).toBe(1)
+    expect(await auth.revokeCertificate('1a2b3c4d')).toBe(0)
+    expect(auth.isAuthenticated(request('/', '127.0.0.1:3080', {
+      cookie, serial: '1a2b3c4d', remoteAddress: '127.0.0.1',
+    }))).toBe(false)
+    expect(auth.isAuthenticated(request('/', '127.0.0.1:3080', { cookie: unbound.cookie }))).toBe(true)
+    await expect(auth.revokeCertificate('NOT-HEX')).rejects.toThrow(/certificateSerial/u)
+  })
+
+  it('binds the serial to pairing-token sessions as well', async () => {
+    const store = new RecordCredentials()
+    const auth = await createAuth(store, 30, {}, false, MTLS_POLICY)
+    const minted = auth.pairingUrl('http://127.0.0.1:3080', 60_000, 'phone')
+    const target = new URL(minted.authenticatedUrl)
+    const login = response()
+    expect(auth.authorizeIndex(request(`${target.pathname}${target.search}`, '127.0.0.1:3080', {
+      serial: '1a2b3c4d',
+      remoteAddress: '127.0.0.1',
+    }), login.value)).toBe(false)
+    const setCookie = login.state.headers?.['set-cookie']
+    if (setCookie === undefined) throw new Error('pairing exchange did not set a cookie')
+    const cookie = setCookie.split(';', 1)[0]!
+    expect(await firstSession(auth)).toMatchObject({ deviceLabel: 'phone', certificateSerial: '1a2b3c4d' })
+    expect(auth.isAuthenticated(request('/', '127.0.0.1:3080', {
+      cookie, serial: '1a2b3c4d', remoteAddress: '127.0.0.1',
+    }))).toBe(true)
+    expect(auth.isAuthenticated(request('/', '127.0.0.1:3080', { cookie }))).toBe(false)
+  })
+
+  it('keeps cookie-only behavior when no serial header is configured', async () => {
+    const store = new RecordCredentials()
+    const auth = await createAuth(store)
+    const { cookie } = exchange(auth, '127.0.0.1:3080', {
+      serial: '1a2b3c4d',
+      remoteAddress: '127.0.0.1',
+    })
+    // The header is never read, and the session registers unbound.
+    expect(await firstSession(auth)).toMatchObject({ certificateSerial: undefined })
+    expect(auth.isAuthenticated(request('/', '127.0.0.1:3080', { cookie }))).toBe(true)
   })
 })

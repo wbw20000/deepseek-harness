@@ -433,6 +433,26 @@ export interface ConnectionConfig {
   cookieSecure?: boolean
   /** Maximum buffered JSON body for every `/api` request. Default: 300 MiB. */
   maxRequestBodyBytes?: number
+  /**
+   * HTTP header carrying the client certificate's serial number, as forwarded
+   * by the mTLS-terminating reverse proxy (Caddy:
+   * `header_up X-DSH-Client-Serial {http.request.tls.client.serial}`). Default:
+   * undefined — no serial header is trusted and sessions stay cookie-only. A
+   * header without any `mtlsTrustedProxies` entry fails plugin load. When
+   * configured, every token exchange binds the trusted serial to the new
+   * session, and a bound session authenticates only from requests whose
+   * trusted proxy forwards the same serial, so a copied cookie pair is inert
+   * on another device.
+   */
+  mtlsClientSerialHeader?: string
+  /**
+   * Remote socket addresses (IP literals) of the proxies allowed to forward
+   * the `mtlsClientSerialHeader` — for Caddy on the same host, `127.0.0.1`
+   * (frp terminates locally, Caddy proxies over the loopback). Default: empty.
+   * A trusted proxy that forwards no serial, or a malformed serial, never
+   * authenticates a certificate-bound session.
+   */
+  mtlsTrustedProxies?: string[]
 }
 
 /** Timing for generation readiness and automatic reconnection. */
@@ -453,7 +473,7 @@ export interface ConnectionRecoveryConfig {
 }
 ```
 
-来源： [`packages/client/connection/src/index.ts:104`](../packages/client/connection/src/index.ts)
+来源： [`packages/client/connection/src/index.ts:116`](../packages/client/connection/src/index.ts)
 
 <a id="deepseek-aidsh-client-hmr"></a>
 

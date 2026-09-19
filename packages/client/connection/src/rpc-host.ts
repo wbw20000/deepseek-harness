@@ -128,6 +128,16 @@ export class HostConnectionService extends Service implements HostConnectionHand
   }
 
   /**
+   * Revoke every session bound to one client-certificate serial.
+   * @param serial - lowercase hexadecimal certificate serial.
+   * @returns the number of previously valid sessions this call revoked.
+   * @throws when the serial is not a well-formed certificate serial.
+   */
+  revokeCertificate(serial: string): Promise<number> {
+    return this.browserAuth.revokeCertificate(serial)
+  }
+
+  /**
    * Mint one single-use pairing login URL.
    * @param baseUrl - canonical browser origin for the one-shot URL.
    * @param ttlMs - pairing-token time to live between 1 ms and ten minutes.

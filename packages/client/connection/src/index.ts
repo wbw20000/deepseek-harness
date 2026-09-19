@@ -10,6 +10,11 @@ import { API_PATH } from './api-path.ts'
 import { bridge, DEFAULT_MAX_REQUEST_BODY_BYTES } from './http-bridge.ts'
 import { assertTrustedAuthority } from './api-request-trust.ts'
 import { BrowserAuth } from './browser-auth.ts'
+import {
+  parseCertificateSerial,
+  resolveMtlsClientCertificatePolicy,
+  type MtlsClientCertificatePolicy,
+} from './client-certificate.ts'
 import { DEFAULT_PAIRING_TTL_MS } from './pairing.ts'
 import { HostConnectionService } from './rpc-host.ts'
 import { ConnectionRecoveryConfigSchema, resolveConnectionConfig, type ConnectionRecoveryConfig } from './recovery-config.ts'
@@ -46,6 +51,11 @@ export {
 export { HostConnectionService } from './rpc-host.ts'
 export type { RegisteredSession, SessionRegistryStore } from './session-registry.ts'
 export {
+  MAX_CERTIFICATE_SERIAL_HEX_LENGTH,
+  parseCertificateSerial,
+  type MtlsClientCertificatePolicy,
+} from './client-certificate.ts'
+export {
   MAX_PAIRING_DEVICE_LABEL_LENGTH,
   MAX_PAIRING_TTL_MS,
   MAX_PENDING_PAIRING_TOKENS,
@@ -62,6 +72,8 @@ export const SESSIONS_REVOKE_ROUTE_PATH = '/api/connection.sessions.revoke'
 export const PAIRING_MINT_ROUTE_PATH = '/api/connection.pairing.mint'
 /** Exact Fetch route revoking the caller's own browser session. */
 export const LOGOUT_ROUTE_PATH = '/api/connection.logout'
+/** Exact Fetch route revoking every session bound to one client-certificate serial. */
+export const CERTIFICATES_REVOKE_ROUTE_PATH = '/api/connection.certificates.revoke'
 
 /** Stable Cordis plugin name. */
 export const name = 'client-connection'
@@ -124,6 +136,26 @@ export interface ConnectionConfig {
   cookieSecure?: boolean
   /** Maximum buffered JSON body for every `/api` request. Default: 300 MiB. */
   maxRequestBodyBytes?: number
+  /**
+   * HTTP header carrying the client certificate's serial number, as forwarded
+   * by the mTLS-terminating reverse proxy (Caddy:
+   * `header_up X-DSH-Client-Serial {http.request.tls.client.serial}`). Default:
+   * undefined — no serial header is trusted and sessions stay cookie-only. A
+   * header without any `mtlsTrustedProxies` entry fails plugin load. When
+   * configured, every token exchange binds the trusted serial to the new
+   * session, and a bound session authenticates only from requests whose
+   * trusted proxy forwards the same serial, so a copied cookie pair is inert
+   * on another device.
+   */
+  mtlsClientSerialHeader?: string
+  /**
+   * Remote socket addresses (IP literals) of the proxies allowed to forward
+   * the `mtlsClientSerialHeader` — for Caddy on the same host, `127.0.0.1`
+   * (frp terminates locally, Caddy proxies over the loopback). Default: empty.
+   * A trusted proxy that forwards no serial, or a malformed serial, never
+   * authenticates a certificate-bound session.
+   */
+  mtlsTrustedProxies?: string[]
 }
 
 export const Config: z<ConnectionConfig> = z.object({
@@ -132,6 +164,11 @@ export const Config: z<ConnectionConfig> = z.object({
   cookieMaxAgeDays: z.natural().min(1).default(30),
   cookieSecure: z.boolean().default(false),
   maxRequestBodyBytes: z.natural().min(1).default(DEFAULT_MAX_REQUEST_BODY_BYTES),
+  // mtlsClientSerialHeader stays a runtime-only declared field: the vendored
+  // schema language has no optional-string node, and an unset header (the
+  // default) must stay distinguishable from an empty one. resolve-apply reads
+  // it straight from the config object.
+  mtlsTrustedProxies: z.array(String).default([]),
 })
 
 /**
@@ -152,11 +189,14 @@ export async function apply(ctx: Context, config?: ConnectionConfig): Promise<vo
   // Config boundary: a malformed entry fails the load loudly here rather than
   // silently authorizing its hostname prefix at request time.
   for (const entry of trustedHosts) assertTrustedAuthority(entry)
+  // Config boundary: a malformed serial-header policy fails the load loudly
+  // instead of trusting a header from the wrong peer or trusting nothing.
+  const mtlsPolicy: MtlsClientCertificatePolicy = resolveMtlsClientCertificatePolicy(config ?? {})
   assertImageBodyCapacity(ctx, maxRequestBodyBytes)
   const connection = new HostConnectionService(
     ctx,
     trustedHosts,
-    await BrowserAuth.create(ctx.root, ctx.credentials, cookieMaxAgeDays, cookieSecure),
+    await BrowserAuth.create(ctx.root, ctx.credentials, cookieMaxAgeDays, cookieSecure, mtlsPolicy),
   )
   ctx.inject(['webServer'], (webCtx) => {
     assertImageBodyCapacity(webCtx, maxRequestBodyBytes)
@@ -290,4 +330,22 @@ function registerConnectionRoutes(
       )
     },
   }), 'client-connection: /api/connection.logout route')
+  owner.effect(() => connection.fetch.register({
+    path: CERTIFICATES_REVOKE_ROUTE_PATH,
+    methods: ['POST'],
+    requestBody: 'buffered',
+    fetch: async (request) => {
+      const body = await readJsonObject(request)
+      // Both notations are accepted: the proxy forwards the serial as a
+      // decimal integer (Caddy), while the CA index lists hexadecimal.
+      const serial = parseCertificateSerial(body?.serial)
+      if (serial === undefined) {
+        return plainResponse(400, 'connection: serial must be a hexadecimal or decimal certificate serial')
+      }
+      return Response.json(
+        { revoked: await connection.revokeCertificate(serial) },
+        { headers: { 'cache-control': 'no-store' } },
+      )
+    },
+  }), 'client-connection: /api/connection.certificates.revoke route')
 }

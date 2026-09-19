@@ -9,6 +9,7 @@
 import { randomBytes } from 'node:crypto'
 import { credentialKey } from '@deepseek-ai/dsh-credentials'
 import type { CredentialProvider } from '@deepseek-ai/dsh-credentials'
+import { MAX_CERTIFICATE_SERIAL_HEX_LENGTH } from './client-certificate.ts'
 import { encodeBase64Url } from './token-encoding.ts'
 
 /** Version of the persisted registry snapshot. */
@@ -32,6 +33,13 @@ export interface RegisteredSession {
   readonly expiresAt: number
   /** Revocation time, or undefined while the session is still valid. */
   readonly revokedAt: number | undefined
+  /**
+   * Lowercase hexadecimal serial of the client certificate bound to this
+   * session at token exchange, or undefined when the session is not
+   * certificate-bound. A bound session authenticates only from requests
+   * presenting the same serial (see `client-certificate.ts`).
+   */
+  readonly certificateSerial: string | undefined
 }
 
 /** JSON snapshot of the registry, persisted beside the browser-session signing secret. */
@@ -93,6 +101,30 @@ function isRegisteredSession(value: unknown): value is RegisteredSession {
     && Number.isSafeInteger(value.issuedAt)
     && Number.isSafeInteger(value.expiresAt)
     && (value.revokedAt === undefined || Number.isSafeInteger(value.revokedAt))
+    && isValidCertificateSerial(value.certificateSerial)
+}
+
+/**
+ * Whether a value is a well-formed bound certificate serial: lowercase
+ * hexadecimal of at most {@link MAX_CERTIFICATE_SERIAL_HEX_LENGTH} characters.
+ * @param serial - the stored or proposed serial.
+ * @returns true when the serial is absent (unbound) or a valid lowercase hex serial.
+ */
+export function isValidCertificateSerial(serial: unknown): serial is string | undefined {
+  if (serial === undefined) return true
+  return typeof serial === 'string'
+    && serial.length > 0
+    && serial.length <= MAX_CERTIFICATE_SERIAL_HEX_LENGTH
+    && /^[0-9a-f]+$/.test(serial)
+}
+
+function assertCertificateSerial(serial: string | undefined): void {
+  if (!isValidCertificateSerial(serial)) {
+    throw new Error(
+      'connection: session certificateSerial must be lowercase hexadecimal of at most '
+      + `${String(MAX_CERTIFICATE_SERIAL_HEX_LENGTH)} characters`,
+    )
+  }
 }
 
 /** Whether a loaded value is a structurally valid snapshot; anything else is corrupt and never trusted. */
@@ -150,12 +182,17 @@ export class SessionRegistry {
    * Register a new session and persist it before resolving.
    * @param deviceLabel - label recorded for the new session.
    * @param expiresAt - absolute Unix-millisecond expiry after the issue time.
+   * @param certificateSerial - lowercase hexadecimal client-certificate serial to bind, or undefined for an unbound session.
    * @returns the registered session.
    * @throws when the arguments are invalid, or when the persisted write fails
    * (the session is already registered in memory).
    */
-  async issue(deviceLabel: string, expiresAt: number): Promise<RegisteredSession> {
-    const session = this.issueSync(deviceLabel, expiresAt)
+  async issue(
+    deviceLabel: string,
+    expiresAt: number,
+    certificateSerial?: string,
+  ): Promise<RegisteredSession> {
+    const session = this.issueSync(deviceLabel, expiresAt, certificateSerial)
     await this.writeSnapshot()
     return session
   }
@@ -168,15 +205,21 @@ export class SessionRegistry {
    * silently.
    * @param deviceLabel - label recorded for the new session.
    * @param expiresAt - absolute Unix-millisecond expiry after the issue time.
+   * @param certificateSerial - lowercase hexadecimal client-certificate serial to bind, or undefined for an unbound session.
    * @returns the registered session, already visible to {@link lookup}.
    */
-  issueSync(deviceLabel: string, expiresAt: number): RegisteredSession {
+  issueSync(
+    deviceLabel: string,
+    expiresAt: number,
+    certificateSerial?: string,
+  ): RegisteredSession {
     // Surface a previously failed durable write instead of layering new
     // sessions on a registry that may not be persisting at all.
     this.raisePersistFailure()
     const issuedAt = Date.now()
     assertDeviceLabel(deviceLabel)
     assertExpiresAt(expiresAt, issuedAt)
+    assertCertificateSerial(certificateSerial)
     this.pruneExpired(issuedAt)
     const session: RegisteredSession = {
       sessionId: encodeBase64Url(randomBytes(SESSION_ID_BYTES)),
@@ -184,6 +227,7 @@ export class SessionRegistry {
       issuedAt,
       expiresAt,
       revokedAt: undefined,
+      certificateSerial,
     }
     this.sessions.set(session.sessionId, session)
     void this.writeQueued().catch(() => {
@@ -223,6 +267,28 @@ export class SessionRegistry {
     this.sessions.set(sessionId, { ...session, revokedAt: Date.now() })
     await this.writeSnapshot()
     return true
+  }
+
+  /**
+   * Revoke every session bound to one certificate serial: revoking a device
+   * invalidates all of its sessions' cookies at once.
+   * @param serial - the lowercase hexadecimal certificate serial to revoke.
+   * @returns the number of previously valid sessions this call revoked. The
+   * in-memory revocations stand even when the persisted write fails and the
+   * failure is raised.
+   * @throws when the serial is not a well-formed certificate serial.
+   */
+  async revokeBySerial(serial: string): Promise<number> {
+    assertCertificateSerial(serial)
+    const revokedAt = Date.now()
+    let revoked = 0
+    for (const [sessionId, session] of this.sessions) {
+      if (session.certificateSerial !== serial || session.revokedAt !== undefined) continue
+      this.sessions.set(sessionId, { ...session, revokedAt })
+      revoked += 1
+    }
+    if (revoked > 0) await this.writeSnapshot()
+    return revoked
   }
 
   /**

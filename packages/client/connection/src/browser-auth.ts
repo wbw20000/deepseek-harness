@@ -4,6 +4,10 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypt
 import { credentialKey } from '@deepseek-ai/dsh-credentials'
 import type { CredentialProvider, CredentialRecord } from '@deepseek-ai/dsh-credentials'
 import { PairingTokens } from './pairing.ts'
+import {
+  trustedClientCertificateSerial,
+  type MtlsClientCertificatePolicy,
+} from './client-certificate.ts'
 import { SessionRegistry, credentialSessionRegistryStore, type RegisteredSession } from './session-registry.ts'
 import { decodeBase64Url, encodeBase64Url, tokenMatches } from './token-encoding.ts'
 import type {
@@ -194,6 +198,10 @@ export class BrowserAuth {
     maxAgeDays: number,
     private readonly cookieSecure: boolean,
     private readonly registry: SessionRegistry,
+    private readonly mtlsPolicy: MtlsClientCertificatePolicy = {
+      serialHeader: undefined,
+      trustedProxies: [],
+    },
   ) {
     this.launchToken = processLaunchToken(processOwner)
     this.maxAgeMilliseconds = maxAgeDays * DAY_MILLISECONDS
@@ -210,6 +218,7 @@ export class BrowserAuth {
    * @param credentials - persistent credential provider for the Web profile.
    * @param maxAgeDays - positive absolute browser-cookie lifetime in days.
    * @param cookieSecure - add the `Secure` cookie attribute; enable only behind an HTTPS-terminating reverse proxy.
+   * @param mtlsPolicy - client-certificate serial-header policy; the default never trusts a serial header.
    * @returns initialized authentication owner with the process owner's launch token.
    */
   static async create(
@@ -217,6 +226,7 @@ export class BrowserAuth {
     credentials: CredentialProvider,
     maxAgeDays: number,
     cookieSecure = false,
+    mtlsPolicy: MtlsClientCertificatePolicy = { serialHeader: undefined, trustedProxies: [] },
   ): Promise<BrowserAuth> {
     const registry = new SessionRegistry(credentialSessionRegistryStore(credentials))
     await registry.loaded
@@ -226,6 +236,7 @@ export class BrowserAuth {
       maxAgeDays,
       cookieSecure,
       registry,
+      mtlsPolicy,
     )
   }
 
@@ -288,7 +299,15 @@ export class BrowserAuth {
         const deviceLabel = this.exchangeToken(singleToken)
         const authority = requestAuthority(req.headers)
         if (deviceLabel !== undefined && authority !== undefined) {
-          this.writeSessionCookie(res, authority, deviceLabel)
+          // Both token kinds (process launch and pairing) bind the trusted
+          // client-certificate serial of the exchanging request, so the
+          // registered session only authenticates from that device.
+          this.writeSessionCookie(
+            res,
+            authority,
+            deviceLabel,
+            trustedClientCertificateSerial(req, this.mtlsPolicy),
+          )
           return false
         }
       }
@@ -314,9 +333,14 @@ export class BrowserAuth {
     res: ConnectionIndexResponse,
     authority: string,
     deviceLabel: string,
+    certificateSerial: string | undefined,
   ): void {
     try {
-      const session = this.registry.issueSync(deviceLabel, Date.now() + this.maxAgeMilliseconds)
+      const session = this.registry.issueSync(
+        deviceLabel,
+        Date.now() + this.maxAgeMilliseconds,
+        certificateSerial,
+      )
       const value = encodeCookie({
         version: COOKIE_PAYLOAD_VERSION,
         authority,
@@ -362,6 +386,14 @@ export class BrowserAuth {
     if (payload === undefined || payload.authority !== authority) return false
     const session = this.registry.lookup(payload.sessionId)
     if (session === undefined || session.revokedAt !== undefined) return false
+    // A certificate-bound session authenticates only from a request whose
+    // trusted proxy forwards the same certificate serial, so a copied cookie
+    // pair is inert on any other device. Unbound sessions keep the previous
+    // cookie-only behavior.
+    if (session.certificateSerial !== undefined
+      && trustedClientCertificateSerial(request, this.mtlsPolicy) !== session.certificateSerial) {
+      return false
+    }
     const now = Date.now()
     return session.expiresAt > now
       && payload.issuedAt <= now
@@ -403,6 +435,17 @@ export class BrowserAuth {
    */
   revokeSession(sessionId: string): Promise<boolean> {
     return this.registry.revoke(sessionId)
+  }
+
+  /**
+   * Revoke every session bound to one client-certificate serial: the device
+   * certificate becomes unusable, and all of its cookies stop authenticating.
+   * @param serial - lowercase hexadecimal certificate serial.
+   * @returns the number of previously valid sessions this call revoked.
+   * @throws when the serial is not a well-formed certificate serial.
+   */
+  async revokeCertificate(serial: string): Promise<number> {
+    return this.registry.revokeBySerial(serial)
   }
 
   private writeUnauthorized(req: ConnectionIndexRequest, res: ConnectionIndexResponse): void {
