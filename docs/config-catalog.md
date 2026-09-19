@@ -3887,7 +3887,7 @@ export interface RemoteConfig {
 }
 ```
 
-Source: [`packages/workflow/workflow-self-development-remote/src/types.ts:35`](../packages/workflow/workflow-self-development-remote/src/types.ts)
+Source: [`packages/workflow/workflow-self-development-remote/src/types.ts:63`](../packages/workflow/workflow-self-development-remote/src/types.ts)
 
 <a id="deepseek-aidsh-workflow-self-development-runner"></a>
 

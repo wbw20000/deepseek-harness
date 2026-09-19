@@ -1720,7 +1720,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
   {
     key: 'selfDevelopmentRemote',
     summary: 'Stable-side Remote facade.',
-    description: 'Stable-side Remote facade. The supervised runner is optional: every method that needs it refuses with a facade code when the runner plugin is not loaded, and the read paths work against the task-control service alone.',
+    description: 'Stable-side Remote facade. The supervised runner is optional: every method that needs it refuses with a facade code when the runner plugin is not loaded, and the read paths work against the task-control service alone. The connection service is optional too and is read with `ctx.get`, per the repository\'s optional-service rule: a deployment without the phone channel mounts no connection service, and every caller is then the stable host.',
     methods: [
       {
         signature: '@Remote(\'listTasks\') async listTasks(): Promise<readonly TaskSummary[]>',
@@ -1748,7 +1748,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Create one task from a TaskSpec. The actor is the spec\'s `createdBy` field; it is checked against `allowedActors` when that list is non-empty.',
         parameters: [{ name: 'spec', description: 'TaskSpec in wire form.' }, { name: 'expectedRevision', description: 'revision the caller observed; a new task is at revision 0.' }],
         returns: 'the operation id the facade generated plus the core\'s result.',
-        throws: ['SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED`, `SELF_DEV_REMOTE_CONFIG_INVALID`, or `SELF_DEV_REMOTE_ACTOR_FORBIDDEN`.', 'whatever the task-control service rejects with, verbatim.'],
+        throws: ['SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED`, `SELF_DEV_REMOTE_CONFIG_INVALID`, `SELF_DEV_REMOTE_ACTOR_FORBIDDEN`, or `SELF_DEV_REMOTE_HOST_ONLY_FIELD` from a non-host caller: the spec fixes `stableBaselineDigest` and `allowedModificationScope`, which are isolation settings the phone whitelist may not set.', 'whatever the task-control service rejects with, verbatim.'],
       },
       {
         signature: '@Remote(\'authorizePlanning\') async authorizePlanning(taskId: string, expectedRevision: number, authorizedBy: string): Promise<RemoteOperationResult>',
@@ -1797,7 +1797,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Launch one supervised attempt. The facade assembles the `PresenceConfirmation` from the request and the frozen plan, and refuses unless the caller explicitly passed `presenceAcknowledged: true` — a UI must never default that acknowledgement. Requires the runner plugin.',
         parameters: [{ name: 'request', description: 'the supervised attempt request in wire form.' }],
         returns: 'the runner\'s outcome plus the operation id the facade generated.',
-        throws: ['SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED`, `SELF_DEV_REMOTE_CONFIG_INVALID`, `SELF_DEV_REMOTE_ACTOR_FORBIDDEN`, `SELF_DEV_REMOTE_PRESENCE_UNCONFIRMED` when `presenceAcknowledged` is not exactly `true`, or `SELF_DEV_REMOTE_RUNNER_UNAVAILABLE` when the runner plugin is not loaded.', 'whatever the core or the runner rejects with, verbatim.'],
+        throws: ['SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED`, `SELF_DEV_REMOTE_CONFIG_INVALID`, `SELF_DEV_REMOTE_ACTOR_FORBIDDEN`, `SELF_DEV_REMOTE_PRESENCE_UNCONFIRMED` when `presenceAcknowledged` is not exactly `true`, `SELF_DEV_REMOTE_HOST_ONLY_FIELD` from a non-host caller (the launch assigns the worktree, acceptance, and artifact isolation settings, and a non-host request may not set the host-only `dataHome`), or `SELF_DEV_REMOTE_RUNNER_UNAVAILABLE` when the runner plugin is not loaded.', 'whatever the core or the runner rejects with, verbatim.'],
       },
       {
         signature: '@Remote(\'activeTasks\') async activeTasks(): Promise<readonly string[]>',

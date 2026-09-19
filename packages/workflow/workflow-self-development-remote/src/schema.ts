@@ -81,6 +81,104 @@ const runAttemptSchema = zod.strictObject({
 })
 
 /**
+ * Host-only field paths per wire schema, keyed by schema name. Populated only
+ * through {@link registerHostOnlyFields} so the paths always come from the
+ * schemas' `hostOnly` metadata, never from a second hand-written list.
+ */
+const hostOnlyFieldsBySchema = new Map<string, readonly string[]>()
+
+/**
+ * Read the `hostOnly` marker of one wire-schema node, looking through the
+ * wrapper the schema carries it under (`.meta({ hostOnly: true }).optional()`
+ * stores the marker on the inner schema, `.optional().meta(...)` on the
+ * wrapper itself).
+ * @param schema - schema node as it appears in the wire schema.
+ * @returns whether the node is marked host-only.
+ */
+function nodeIsHostOnly(schema: zod.ZodType): boolean {
+  const meta = zod.globalRegistry.get(schema) as { readonly hostOnly?: boolean } | undefined
+  if (meta?.hostOnly === true) return true
+  const inner = schema as Partial<{ unwrap?: () => zod.ZodType }>
+  if (typeof inner.unwrap !== 'function') return false
+  return nodeIsHostOnly(inner.unwrap())
+}
+
+/**
+ * Collect the dotted paths of every field a wire schema marks `hostOnly`,
+ * recursing into nested objects. New host-only fields are picked up by
+ * marking them with `.meta({ hostOnly: true })`; nothing else to update.
+ * @param schema - wire schema to scan.
+ * @param prefix - dotted path prefix of `schema` inside its root schema.
+ * @returns the collected field paths, in schema order.
+ */
+function collectHostOnlyFieldPaths(schema: zod.ZodType, prefix = ''): readonly string[] {
+  const paths: string[] = []
+  const shape = (schema as Partial<{ shape?: Record<string, zod.ZodType> }>).shape
+  if (shape === undefined) return paths
+  for (const [key, value] of Object.entries(shape)) {
+    const path = prefix === '' ? key : `${prefix}.${key}`
+    if (nodeIsHostOnly(value)) {
+      paths.push(path)
+      continue
+    }
+    paths.push(...collectHostOnlyFieldPaths(value, path))
+  }
+  return paths
+}
+
+/**
+ * Register a wire schema's host-only fields under the name its facade method
+ * checks with. Every schema carrying a `hostOnly` field registers here.
+ * @param schemaName - name the facade's `assertHostOnlyFields` call addresses.
+ * @param schema - wire schema whose `hostOnly` markers define the fields.
+ */
+export function registerHostOnlyFields(schemaName: string, schema: zod.ZodType): void {
+  hostOnlyFieldsBySchema.set(schemaName, collectHostOnlyFieldPaths(schema))
+}
+
+registerHostOnlyFields('runAttempt', runAttemptSchema)
+
+/**
+ * Read a parsed wire value at one dotted field path.
+ * @param input - parsed value as it will reach the core or runner.
+ * @param path - dotted field path collected from the schema's metadata.
+ * @returns the value at the path; `undefined` when absent or when an
+ *   intermediate object is absent.
+ */
+function readPath(input: unknown, path: string): unknown {
+  let current: unknown = input
+  for (const segment of path.split('.')) {
+    if (typeof current !== 'object' || current === null) return undefined
+    current = (current as Record<string, unknown>)[segment]
+  }
+  return current
+}
+
+/**
+ * Refuse a request that carries any host-only field from a non-host caller.
+ * Runs after wire parsing and before the core or runner is touched, so an
+ * isolation-setting field from a phone caller never reaches either.
+ * @param schemaName - name the wire schema was registered under.
+ * @param input - parsed request value to inspect.
+ * @param callerIsHost - whether the caller counts as the stable host.
+ * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_HOST_ONLY_FIELD` when `callerIsHost` is
+ *   `false` and any registered host-only field of the schema is set to a
+ *   non-`undefined` value.
+ */
+export function assertHostOnlyFields(schemaName: string, input: unknown, callerIsHost: boolean): void {
+  if (callerIsHost) return
+  const fields = hostOnlyFieldsBySchema.get(schemaName)
+  if (fields === undefined) return
+  for (const field of fields) {
+    if (readPath(input, field) === undefined) continue
+    throw new SelfDevelopmentRemoteError(
+      `${schemaName}.${field} is host-only; a non-host caller must omit it`,
+      'SELF_DEV_REMOTE_HOST_ONLY_FIELD',
+    )
+  }
+}
+
+/**
  * Parse one wire value against a schema and re-throw as a facade error, so a
  * malformed Remote argument rejects with one boundary error type.
  * @param schema - schema the value must satisfy.

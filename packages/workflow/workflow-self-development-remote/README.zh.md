@@ -29,7 +29,7 @@ kind: "package-reference"
 <a id="service"></a>
 ## 服务
 
-`SelfDevelopmentRemote`（默认导出，Cordis 服务 `selfDevelopmentRemote`，线上命名空间 `selfDevelopmentRemote`）注入任务控制服务并可选解析受监督 runner：runner 插件未加载时，所有与试验相关的方法以 `SELF_DEV_REMOTE_RUNNER_UNAVAILABLE` 拒绝；读路径与停止的回退路径仅依赖任务控制服务。
+`SelfDevelopmentRemote`（默认导出，Cordis 服务 `selfDevelopmentRemote`，线上命名空间 `selfDevelopmentRemote`）注入任务控制服务，可选解析受监督 runner——runner 插件未加载时，所有与试验相关的方法以 `SELF_DEV_REMOTE_RUNNER_UNAVAILABLE` 拒绝，读路径与停止的回退路径仅依赖任务控制服务——并在连接服务已挂载时用 `ctx.get` 读取其调用方上下文（见权限模型）。
 
 | Config 字段 | 含义 |
 |---|---|
@@ -52,14 +52,14 @@ kind: "package-reference"
 | `listTasks()` | 只读 | 扫描 `<controlDirectory>/tasks/*`，每个任务一行：`taskId`、`status`、`revision`、`title`（requirement 前 80 字）。尚无任务时返回 `[]`；该读路径从不创建任务日志目录。 |
 | `getTask(taskId)` | 只读 | 返回任务的 `TaskProjection` 与 `card`（只读确认卡视图）。任务尚无日志时以 `SELF_DEV_REMOTE_TASK_UNKNOWN` 拒绝。 |
 | `recentEvents()` | 只读 | 返回事件消费方的标题级通知缓冲（从旧到新）；事件消费方插件未加载时返回 `[]`。 |
-| `createTask(spec, expectedRevision)` | `createTask` | 按 TaskSpec 线上形式创建任务。actor 为 `spec.createdBy`。返回门面生成的 `operationId`。 |
+| `createTask(spec, expectedRevision)` | `createTask` | 按 TaskSpec 线上形式创建任务。actor 为 `spec.createdBy`。返回门面生成的 `operationId`。仅限宿主：非宿主调用方以 `SELF_DEV_REMOTE_HOST_ONLY_FIELD` 拒绝，因为 spec 固化了 `stableBaselineDigest` 与 `allowedModificationScope`。 |
 | `authorizePlanning(taskId, expectedRevision, authorizedBy)` | `authorizePlanning` | 授予独立的规划授权；它不批准开发，也不消耗轮数。 |
 | `submitPlanDraft(taskId, expectedRevision, draft)` | `submitPlanDraft` | 提交草拟计划，等待人工确认。 |
 | `confirmPlan(taskId, expectedRevision, plan, actor)` | `confirmPlan` | 冻结人工确认的计划。actor 为显式的 `actor` 参数。 |
 | `approveBudget(taskId, expectedRevision, approval)` | `approveBudget` | 记录或替换人工预算批准。actor 为 `approval.approvedBy`；已用轮数与时间从不清零。 |
 | `stop(taskId, expectedRevision, reason?)` | runner `stop`，否则核心 `stop` | 停止任务。runner 已加载时，其拥有的进程组与证据写入完成后才返回结果；未加载时只执行核心停止。 |
 | `recordTrialApproval(taskId, expectedRevision, approvedBy)` | `recordTrialApproval` | 记录绑定当前已验证结果的人工试用批准。actor 为 `approvedBy`。 |
-| `runAttempt(request)` | runner `runAttempt` | 启动一个受监督试验。门面组装 `PresenceConfirmation`：`confirmedAt` 取当下的一次可信时钟观测，`taskId`、`testPlanDigest` 取冻结计划，`acceptanceDefinitionDigest` 取定义字节摘要，`artifactPaths` 去重升序，acknowledgement 固定为 `supervised-not-unattended`。要求显式传入 `presenceAcknowledged: true`。请求中可选的 `dataHome` 仅限宿主侧，并转发为 runner 的每次尝试 `dshHome`；手机端调用必须省略该字段。返回 runner 结果与 `operationId`。 |
+| `runAttempt(request)` | runner `runAttempt` | 启动一个受监督试验。门面组装 `PresenceConfirmation`：`confirmedAt` 取当下的一次可信时钟观测，`taskId`、`testPlanDigest` 取冻结计划，`acceptanceDefinitionDigest` 取定义字节摘要，`artifactPaths` 去重升序，acknowledgement 固定为 `supervised-not-unattended`。要求显式传入 `presenceAcknowledged: true`。仅限宿主：非宿主调用方以 `SELF_DEV_REMOTE_HOST_ONLY_FIELD` 拒绝——试验启动会指定 worktree、验收与产物等隔离设置——且非宿主请求不得设置仅限宿主的 `dataHome`，该字段由稳定宿主转发为 runner 的每次尝试 `dshHome`。返回 runner 结果与 `operationId`。 |
 | `activeTasks()` | runner `activeTasks` | 返回 runner 当前拥有的试验的任务 id；无 runner 时为 `[]`。 |
 
 每个变更方法用 `randomUUID()` 生成 `operationId` 并返回给调用方；需要核心重放语义的重试必须带回该 id。所有参数先在门面校验，核心与 runner 的拒绝原样透传，保留属主包的机器可路由 code。
@@ -67,19 +67,22 @@ kind: "package-reference"
 <a id="permission-model"></a>
 ## 权限模型
 
-门面在连接层鉴权之上只加两个部署侧闸门：
+门面在连接层鉴权之上只加三个闸门：
 
 - **`enabled`** — `false` 时所有方法以 `SELF_DEV_REMOTE_DISABLED` 拒绝，因此仅挂载插件不会启用任何能力。
-- **`allowedActors`** — 为空表示不限制；非空时约束携带 actor 的操作：`createTask`（`spec.createdBy`）、`confirmPlan`（`actor` 参数）、`approveBudget`（`approval.approvedBy`）、`recordTrialApproval`（`approvedBy`）、`runAttempt`（`confirmedBy`）。进度读取、规划授权、草拟与停止对任何调用方开放，因为看进度、插话与停止正是手机白名单面向的低风险操作。
+- **`allowedActors`** — 为空表示不限制；非空时约束携带 actor 的操作：`createTask`（`spec.createdBy`）、`confirmPlan`（`actor` 参数）、`approveBudget`（`approval.approvedBy`）、`recordTrialApproval`（`approvedBy`）、`runAttempt`（`confirmedBy`）。进度读取、规划授权、草拟与停止对任何 actor 开放，因为看进度、插话与停止正是手机白名单面向的低风险操作。
+- **调用方来源** — 门面读取可选连接服务的调用方上下文（`ctx.connection.caller.current()`，即冻结的 `ConnectionCaller` 契约），仅当请求携带回环 Host 头、或完全没有调用方上下文时视为稳定宿主；非回环 Host 头即手机调用方。`runAttempt` 与 `createTask` 会指定隔离设置——试验启动的 worktree、验收路径、产物路径与 `dataHome`；任务的 `stableBaselineDigest` 与 `allowedModificationScope`——因此手机调用方调用二者时，门面在触碰核心或 runner 之前即以 `SELF_DEV_REMOTE_HOST_ONLY_FIELD` 拒绝。读方法、`authorizePlanning`、`submitPlanDraft`、`confirmPlan`、`approveBudget`、`stop` 与 `recordTrialApproval` 对手机保持可用。
+
+未挂载连接服务、或调用发生在任何 `@Remote` 请求之外时，没有调用方上下文，该调用按宿主处理：这是本机直连与测试语义。这也意味着门面自身不会硬化手机通道——必须挂载连接服务，调用方来源闸门才会生效。
 
 人工在场确认永不被推断：请求未字面携带 `presenceAcknowledged: true` 时，`runAttempt` 以 `SELF_DEV_REMOTE_PRESENCE_UNCONFIRMED` 拒绝；UI 不得默认勾选、预选或暗示该字段。
 
-`runAttempt` 的 `dataHome` 在线上 schema 中标记为仅宿主侧（host-only），只接受来自稳定宿主的调用：每任务的数据目录由工作区服务的 `allocate` 结果分配，稳定侧把该 `dataHome` 转发为 runner 的 `dshHome`；手机端请求必须省略该字段——schema 的 `hostOnly` 标记为未来的手机通道记录了这一约束。
+`runAttempt` 的 `dataHome` 在线上 schema 中标记为 `hostOnly`：每任务的数据目录由工作区服务的 `allocate` 结果分配，稳定侧把该 `dataHome` 转发为 runner 的 `dshHome`，手机端请求必须省略该字段。wire 层按 schema 元数据自动收集所有 `hostOnly` 字段并检查解析后的请求（`assertHostOnlyFields`），因此未来新增仅限宿主的字段只需标记 `.meta({ hostOnly: true })`，不需要新的拒绝代码。
 
 <a id="phone-whitelist-mapping"></a>
 ## 手机白名单对照
 
-人工审核确认卡允许手机操作：看进度、插话、确认计划与预算、停止、审批继续/驳回；不允许升级批准、访问试验版、修改隔离与凭据设置。
+人工审核确认卡允许手机操作：看进度、插话、确认计划与预算、停止、审批继续/驳回；不允许发起任务或试验、升级批准、访问试验版、修改隔离与凭据设置。
 
 | 手机能力 | 门面方法 |
 |---|---|
@@ -87,11 +90,13 @@ kind: "package-reference"
 | 插话 | `submitPlanDraft`、`authorizePlanning` |
 | 确认计划与预算 | `confirmPlan`、`approveBudget` |
 | 停止 | `stop` |
-| 审批继续/驳回 | `runAttempt`、`recordTrialApproval` |
+| 审批继续/驳回 | `recordTrialApproval` |
+| 创建任务 | 仅限宿主。`createTask` 固化 `stableBaselineDigest` 与 `allowedModificationScope`；手机调用方以 `SELF_DEV_REMOTE_HOST_ONLY_FIELD` 拒绝。 |
+| 发起试验 | 仅限宿主。`runAttempt` 指定 worktree、验收与产物等隔离设置；手机调用方以 `SELF_DEV_REMOTE_HOST_ONLY_FIELD` 拒绝。 |
 | 升级批准 | **本门面不存在。** 没有任何方法记录升级、发布或安装批准；发布审核表在本包之外。 |
 | 访问试验版 | 不暴露。门面只在 `runAttempt` 结果中返回证据路径；没有方法读取试验产物。 |
 | 修改隔离与凭据设置 | 不暴露。门面配置不含隔离或凭据字段，也没有方法修改 runner 配置。 |
-| 指定任务数据目录 | 手机端不可指定。`runAttempt` 的 `dataHome` 仅限宿主侧：稳定侧传入工作区 `allocate` 结果的 `dataHome`；手机端请求必须省略该字段。 |
+| 指定任务数据目录 | 手机端不可指定。`runAttempt` 的 `dataHome` 仅限宿主：稳定侧传入工作区 `allocate` 结果的 `dataHome`；设置该字段的非宿主请求被拒绝。 |
 
 <a id="error-codes"></a>
 ## 错误码
@@ -103,6 +108,7 @@ kind: "package-reference"
 | `SELF_DEV_REMOTE_CONFIG_INVALID` | 服务配置或 Remote 参数在门面边界未通过形状校验。 |
 | `SELF_DEV_REMOTE_DISABLED` | 门面未开启；所有方法拒绝。 |
 | `SELF_DEV_REMOTE_ACTOR_FORBIDDEN` | 操作的 actor 不在配置的白名单内。 |
+| `SELF_DEV_REMOTE_HOST_ONLY_FIELD` | 非宿主调用方调用了 `runAttempt` 或 `createTask`，或设置了标记 `hostOnly` 的线上字段（当前为 `runAttempt.dataHome`）。 |
 | `SELF_DEV_REMOTE_PRESENCE_UNCONFIRMED` | `runAttempt` 未收到 `presenceAcknowledged: true`。 |
 | `SELF_DEV_REMOTE_RUNNER_UNAVAILABLE` | 试验相关方法需要受监督 runner 插件，但插件未加载。 |
 | `SELF_DEV_REMOTE_TASK_UNKNOWN` | 读路径寻址的任务没有日志目录。 |
