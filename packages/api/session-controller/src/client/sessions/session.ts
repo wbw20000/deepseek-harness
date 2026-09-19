@@ -16,6 +16,7 @@ import type {
   SessionAssistantStreamBaseline,
   SessionProjectionBaseline,
   SessionRequestId,
+  SessionStopAllValue,
 } from '../../types.ts'
 import type {
   BeginSubmissionInput, PendingSubmissionRetirement, SessionFace, SubmissionHandle,
@@ -343,6 +344,39 @@ export class Session implements SessionFace {
       this.notifier.markDirty()
     }
     return result
+  }
+
+  /**
+   * Stop the session completely — cancel the active turn without preserving
+   * inbox work, discard every pending queue occurrence, and hold automatic
+   * continuations off until the next explicit user message; failures land in
+   * promptError (same error-strip display slot). A subagent address routes
+   * through `subagents.interruptByParent`, like {@link cancel}: the interrupt
+   * receipt carries no queue facts of the addressed child, so its discard
+   * list is empty.
+   * @returns the discarded pending identities plus acceptance.
+   */
+  async stopAll(): Promise<RemoteResult<SessionStopAllValue>> {
+    const address = this.address
+    if (address !== undefined) {
+      const result = await this.remote.subagents.interruptByParent(
+        address.childSessionId,
+        address.parentSessionId,
+        'continuable',
+      )
+      return result.ok
+        ? { ok: true, value: { accepted: true, discardedItemIds: [] } }
+        : this.stopFailure(result.error)
+    }
+    const result = await this.remote.session.stopAll({ sessionId: this.sessionId })
+    return result.ok ? { ok: true, value: result.value } : this.stopFailure(result.error)
+  }
+
+  /** Publish a full-stop failure into promptError and hand the failure back. */
+  private stopFailure(error: RemoteFailure): RemoteResult<SessionStopAllValue> {
+    this.promptError = { op: 'stop', error }
+    this.notifier.markDirty()
+    return { ok: false, error }
   }
 
   /**

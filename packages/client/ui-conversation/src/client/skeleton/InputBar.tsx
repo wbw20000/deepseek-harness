@@ -17,7 +17,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent, KeyboardEvent, MouseEvent } from 'react'
 import clsx from 'clsx'
 import {
-  IconPlusOutline16, IconWarningOutline16, Toast, Tooltip,
+  IconCloseOutline16, IconPlusOutline16, IconWarningOutline16, RiskConfirmation, Toast, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 // Type-only: the `plan` projection key merge (the TodoDock posture — the
 // composer reads a host-computed value; the domain owns the key).
@@ -44,7 +44,7 @@ export type InputBarProps = ComposerBarProps
 export const InputBar = memo(function InputBar({
   useSession, useInput, inputActions, keyboard, addFiles, removeAttachment, resolveDraftAttachments,
   retryFileUpload,
-  toggleCommandMenu, stop, t,
+  toggleCommandMenu, stop, stopAll, t,
   renderSlot, useBusyEnter, useFileUploads, useNotices, useLexicon, useMenuLauncher,
   useProjection, sessionId, variant, disabled: inert = false, blocked,
   workspacePickerOpen = false, onRequestWorkspace,
@@ -144,6 +144,18 @@ export const InputBar = memo(function InputBar({
   const steeringAvailable = subagent === null || subagent.address.mode === 'continuable'
   const canSteerQueue = !locked && !machineBusy && !commandMenuOpen && empty && running && steeringAvailable
     && input.queue.length > 0
+
+  // Full stop (the host `stopAll` gate): available while a turn is active or
+  // the queue holds messages; the banner mirrors the durable gate until the
+  // next send clears it or the user dismisses it. Dismissal resets whenever
+  // the gate re-arms, so a later full stop re-announces itself.
+  const fullyStopped = useProjection('stopAll', view => view?.stopped === true)
+  const queueCount = input?.queue.length ?? 0
+  const stopAllAvailable = live && (running || queueCount > 0)
+  const [stopAllDialogOpen, setStopAllDialogOpen] = useState(false)
+  const [stopAllAcknowledged, setStopAllAcknowledged] = useState(false)
+  const [stopAllBannerDismissed, setStopAllBannerDismissed] = useState(false)
+  useEffect(() => { setStopAllBannerDismissed(false) }, [fullyStopped])
 
   useEffect(() => {
     if (input === undefined || inputActions === undefined) return
@@ -311,6 +323,25 @@ export const InputBar = memo(function InputBar({
     if (!empty && !disabled && !machineBusy && !uploadsPending) keyboard.submit(primarySubmitMode)
   }
 
+  const onOpenStopAll = (): void => {
+    setStopAllAcknowledged(false)
+    setStopAllDialogOpen(true)
+  }
+
+  const onStopAllConfirm = (): void => {
+    setStopAllDialogOpen(false)
+    if (stopAll === undefined) return
+    stopAll()
+      .then((discarded) => {
+        showToast(discarded > 0
+          ? t('input.stopAll.done', { count: discarded })
+          : t('input.stopAll.done.none'))
+      })
+      .catch(() => {
+        // Full-stop failure is published through Session promptError.
+      })
+  }
+
   // Claim ghost hint: rendered by CSS as generated content after the last
   // paragraph while the claim's args are blank (a hint implies a single-line
   // token draft). The translated per-command hint wins over the claim's own.
@@ -355,6 +386,19 @@ export const InputBar = memo(function InputBar({
       {notice?.level === 'info' && (
         <div className={css.notice} role="status">
           {notice.text}
+        </div>
+      )}
+      {sessionId !== undefined && fullyStopped && !stopAllBannerDismissed && (
+        <div className={css.stopAllBanner} role="status">
+          <span>{t('stopAll.banner')}</span>
+          <button
+            type="button"
+            className={css.stopAllBannerClose}
+            aria-label={t('stopAll.banner.close')}
+            onClick={() => { setStopAllBannerDismissed(true) }}
+          >
+            <IconCloseOutline16 size={12} />
+          </button>
         </div>
       )}
       {/* Trigger clicks land on the card, not the editor: the toolbar row's
@@ -458,6 +502,24 @@ export const InputBar = memo(function InputBar({
                 </button>
               </Tooltip>
             )}
+            {sessionId !== undefined && input !== undefined && (
+              <Tooltip label={t('input.stopAll')} side="top" delayMs={500}>
+                <button
+                  type="button"
+                  className={css.stopAll}
+                  aria-label={t('input.stopAll')}
+                  disabled={!stopAllAvailable}
+                  onMouseDown={keepFocus}
+                  onClick={onOpenStopAll}
+                >
+                  {/* The ring distinguishes the whole-session stop from the primary turn stop. */}
+                  <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden>
+                    <circle cx="8" cy="8" r="6.75" fill="none" stroke="currentColor" strokeWidth="1.5" />
+                    <rect x="4.5" y="4.5" width="7" height="7" rx="2" fill="currentColor" />
+                  </svg>
+                </button>
+              </Tooltip>
+            )}
             <Tooltip label={primaryLabel} side="top" delayMs={500} disabled={primaryDisabled}>
               <button
                 type="button"
@@ -487,6 +549,21 @@ export const InputBar = memo(function InputBar({
           : null}
         <ContextMeter useProjection={useProjection} t={t} />
       </div>
+      <RiskConfirmation
+        open={stopAllDialogOpen}
+        title={t('input.stopAll.title')}
+        description={queueCount > 0
+          ? t('input.stopAll.description.queued', { count: queueCount })
+          : t('input.stopAll.description.empty')}
+        acknowledgeLabel={t('input.stopAll.acknowledge')}
+        cancelLabel={t('input.stopAll.cancel')}
+        closeLabel={t('input.stopAll.close')}
+        confirmLabel={t('input.stopAll.confirm')}
+        acknowledged={stopAllAcknowledged}
+        onAcknowledgedChange={setStopAllAcknowledged}
+        onCancel={() => { setStopAllDialogOpen(false) }}
+        onConfirm={onStopAllConfirm}
+      />
     </div>
   )
 })

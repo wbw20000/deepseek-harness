@@ -13,6 +13,7 @@ import {
   type ConversationSessionHeaderInjected, type ConversationSessionInjected, type ViewTab,
 } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import { MessageId } from '@deepseek-ai/dsh-llm/brand'
 import type { WorkspaceId } from '@deepseek-ai/dsh-workspace/types'
 import { createConversationStore } from '../src/client/stores.ts'
 import { RemoteError } from '@deepseek-ai/dsh-client-test-runtime'
@@ -29,6 +30,7 @@ function sessionFakeFor() {
     loadOlder: vi.fn<ISession['loadOlder']>(() => Promise.resolve()),
     prompt: vi.fn<ISession['prompt']>(() => Promise.resolve({ ok: true, value: { accepted: true } })),
     cancel: vi.fn<ISession['cancel']>(() => Promise.resolve({ ok: true, value: { accepted: true } })),
+    stopAll: vi.fn<ISession['stopAll']>(() => Promise.resolve({ ok: true, value: { accepted: true, discardedItemIds: [] } })),
   } satisfies SessionBehaviorOverrides
 }
 
@@ -297,6 +299,18 @@ describe('Conversation inject API', () => {
     })
     b.composerApi(ROOT).stop!()
     await vi.waitFor(() => { expect(b.sessionFake.cancel).toHaveBeenCalledOnce() })
+    await b.runtime.dispose()
+  })
+
+  it('drives the composer stopAll callback through the scoped conversation service', async () => {
+    const b = await bench()
+    expect(b.composerApi(undefined).stopAll).toBeUndefined()
+
+    b.sessionFake.stopAll.mockResolvedValueOnce({
+      ok: true, value: { accepted: true, discardedItemIds: [MessageId('i1')] },
+    })
+    await expect(b.composerApi(ROOT).stopAll!()).resolves.toBe(1)
+    expect(b.sessionFake.stopAll).toHaveBeenCalledOnce()
     await b.runtime.dispose()
   })
 

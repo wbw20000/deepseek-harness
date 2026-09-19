@@ -42,6 +42,40 @@
   line-height: 18px;
 }
 
+/* Full-stop banner above the card: same strip chrome as .notice, plus a
+   dismiss action. Wraps instead of truncating so narrow viewports keep the
+   full sentence and the close control reachable. */
+.stopAllBanner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  width: 100%;
+  max-width: var(--dsh-composer-card-max-width);
+  margin-bottom: 6px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.stopAllBannerClose {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin-left: auto;
+  border: none;
+  border-radius: 4px;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
 .card {
   box-sizing: border-box;
   position: relative; /* overlay anchor positioning context */
@@ -397,4 +431,30 @@
   color: inherit;
   font-size: 12px;
   cursor: pointer;
+}
+
+/* Full stop (whole session): 28px outlined ring beside the primary stop —
+   the outline distinguishes the whole-session stop from the turn stop. */
+.stopAll {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 999px;
+  corner-shape: round;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+}
+
+.stopAll:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover-solid);
+  color: var(--dsw-alias-label-primary);
+}
+
+.stopAll:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
