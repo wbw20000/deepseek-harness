@@ -303,4 +303,33 @@ describe.skipIf(process.platform === 'win32')('headless executor', () => {
     await expect(runHeadlessExecutor(config, req('ok')))
       .rejects.toMatchObject({ code: 'SELF_DEV_RUNNER_EXECUTOR_FAILED' })
   }, 20_000)
+
+  it('records pgidReused when the group signal answers EPERM after the child exited', async () => {
+    const killOriginal = process.kill.bind(process)
+    vi.spyOn(process, 'kill').mockImplementation((pid: number, signal?: string | number) => {
+      // The reassigned group refuses our signal; a plain pid probe stays real.
+      if (pid < 0) throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' })
+      return killOriginal(pid, signal)
+    })
+    const run = await runHeadlessExecutor(await makeConfig(), req('ok'))
+    expect(run).toMatchObject({ exitCode: 0, signal: null, pgidReused: true })
+  }, 20_000)
+
+  // Real-subprocess loop over the whole spawn → stream → teardown → group-exit
+  // confirmation path: it catches pgid-reuse teardown failures that only
+  // appear under load, so it must not assert anything the OS does not
+  // guarantee, and the timeout stays far above one contended run.
+  const smokeRuns = Array.from({ length: 20 }, (_, index) => [index + 1] as const)
+  it.each(smokeRuns)('spawns, runs, and confirms group exit repeatedly: run %i', async () => {
+    const run = await runHeadlessExecutor(await makeConfig(), req('ok'))
+    expect(run).toMatchObject({
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+      cancelled: false,
+      stepsUsed: 3,
+      stepCapHit: false,
+      pgidReused: false,
+    })
+  }, 20_000)
 })

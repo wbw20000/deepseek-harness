@@ -13,7 +13,8 @@ import { resolve } from 'node:path'
 import type { CaseResult, FrozenTestPlan } from '@deepseek-ai/dsh-workflow-self-development'
 import { isInsideReal, staysInside } from './path-containment.ts'
 import { SelfDevelopmentRunnerError } from './runtime.ts'
-import { assertProcessGroupSupport, finishProcessGroup } from './process-group.ts'
+import { assertProcessGroupSupport, finishProcessGroup, readGroupLeaderStartedAt } from './process-group.ts'
+import type { ProcessGroupLeader } from './process-group.ts'
 import type { RunnerConfig } from './types.ts'
 
 /** One assertion a case's process must satisfy after it exits. */
@@ -49,6 +50,13 @@ export interface AcceptanceRun {
   readonly timedOut: boolean
   /** Whether the request signal aborted the run before it finished. */
   readonly cancelled: boolean
+  /**
+   * Whether any case's final cleanup observed `EPERM` on the group signal
+   * while its spawned group leader (pid plus `ps` start-time fingerprint) no
+   * longer existed: the numeric pgid was probably reassigned after the case's
+   * group exited.
+   */
+  readonly pgidReused?: boolean
   /** Wall-clock duration of the whole run in milliseconds. */
   readonly durationMs: number
 }
@@ -205,6 +213,7 @@ export async function runAcceptance(
   let cancelled = false
   let signalName: string | null = null
   let failingExitCode: number | undefined
+  let pgidReused = false
   for (const testCase of req.cases) {
     if (req.signal.aborted) {
       cancelled = true
@@ -214,6 +223,7 @@ export async function runAcceptance(
     const outcome = await runCase(config, req.worktree, testCase, req.signal, req.dshHome)
     timedOut = timedOut || outcome.timedOut
     cancelled = cancelled || outcome.cancelled
+    pgidReused = pgidReused || outcome.pgidReused
     if (outcome.signal !== null) signalName = outcome.signal
     if (outcome.exitCode !== null && outcome.exitCode !== 0 && failingExitCode === undefined) {
       failingExitCode = outcome.exitCode
@@ -228,6 +238,7 @@ export async function runAcceptance(
     signal: signalName,
     timedOut,
     cancelled,
+    pgidReused,
     durationMs: Date.now() - startedAt,
   }
 }
@@ -347,6 +358,8 @@ interface CaseOutcome {
   readonly stdout: string
   /** Whether stdout grew past `STDOUT_MAX_BYTES` and its tail was dropped. */
   readonly stdoutTruncated: boolean
+  /** Whether final cleanup judged the case's numeric pgid reassigned. */
+  readonly pgidReused: boolean
 }
 
 /**
@@ -384,7 +397,7 @@ async function runCase(
   // not an adversarial TOCTOU isolation claim, but the spawn itself must never
   // receive a directory outside the worktree.
   if (testCase.cwd !== undefined) await assertCwdInsideWorktree(worktree, testCase.cwd, testCase.caseId)
-  if (signal.aborted) return { exitCode: null, signal: null, timedOut: false, cancelled: true, stdout: '', stdoutTruncated: false }
+  if (signal.aborted) return { exitCode: null, signal: null, timedOut: false, cancelled: true, stdout: '', stdoutTruncated: false, pgidReused: false }
   return new Promise((resolveCase, rejectCase) => {
     const command = program === 'node' ? config.nodeBinary : program
     // Ambient provider credentials and proxy variables are not inherited.
@@ -399,6 +412,13 @@ async function runCase(
     // A spawn that fails before creating the process (ENOENT, EACCES) assigns
     // no pid and reports through the 'error' event; there is no group to tear down.
     const groupPid = child.pid
+    // Fingerprint the group leader now, before its `exit` event can reap it
+    // and free the pgid for reuse. The read never rejects; a missing
+    // fingerprint leaves the caller's own exit observation to separate a
+    // reused pgid from a live leader during final cleanup.
+    /* v8 ignore next 2 -- a POSIX spawn that yields no pid has no process; its 'error' reject path never reads the leader record. */
+    const leaderStartedAt: Promise<string | undefined> | undefined =
+      groupPid === undefined ? undefined : readGroupLeaderStartedAt(groupPid)
     let stdout = ''
     let stdoutTruncated = false
     let timedOut = false
@@ -466,10 +486,16 @@ async function runCase(
     })
     child.on('close', (exitCode, terminatingSignal) => {
       cleanup()
-      void finishProcessGroup(groupPid, config.killGraceMs).then(
-        () => { resolveCase({ exitCode, signal: terminatingSignal, timedOut, cancelled, stdout, stdoutTruncated }) },
-        rejectCase,
-      )
+      void (async () => {
+        // `close` fires only after the leader exited and Node reaped it, so
+        // the record always says `exited: true` here.
+        /* v8 ignore next 3 -- a POSIX spawn that yields no pid has no process; its 'error' reject path never reaches the cleanup. */
+        const leader: ProcessGroupLeader | undefined = groupPid === undefined
+          ? undefined
+          : { pid: groupPid, exited: true, startedAt: await leaderStartedAt }
+        const groupExit = await finishProcessGroup(groupPid, config.killGraceMs, leader)
+        resolveCase({ exitCode, signal: terminatingSignal, timedOut, cancelled, stdout, stdoutTruncated, pgidReused: groupExit.pgidReused })
+      })().then(undefined, rejectCase)
     })
   })
 }

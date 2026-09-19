@@ -321,6 +321,21 @@ describe.skipIf(process.platform === 'win32')('runAcceptance', () => {
     expect(kill.mock.calls.filter(([, signal]) => signal === 'SIGTERM')).toHaveLength(1)
   }, 20_000)
 
+  it('records pgidReused when the group signal answers EPERM after the case group exited', async () => {
+    const { config, worktree } = await makeFixture()
+    const killOriginal = process.kill.bind(process)
+    const kill = vi.spyOn(process, 'kill').mockImplementation((pid: number, signal?: string | number) => {
+      // The reassigned group refuses our signal; a plain pid probe stays real.
+      if (pid < 0) throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' })
+      return killOriginal(pid, signal)
+    })
+    const result = await runAcceptance(config, { worktree, cases: [exitCase('reused', 0, 0)], signal: new AbortController().signal })
+    expect(result).toMatchObject({ exitCode: 0, cancelled: false })
+    expect(result.pgidReused).toBe(true)
+    // No signal may reach the group that now owns the reassigned pgid.
+    expect(kill.mock.calls.filter(([pid]) => pid < 0).every(([, signal]) => signal === 0)).toBe(true)
+  }, 20_000)
+
   it('fails file assertions when a command creates an outside ancestor link', async () => {
     const { config, worktree } = await makeFixture()
     const outside = join(fixtureRoot(), 'outside')
