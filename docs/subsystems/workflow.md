@@ -129,7 +129,7 @@ The top-level `dsh-tool-workflow` consumer projects display facts into its calli
 
 ## Self-development task control and the supervised runner
 
-The workflow group also owns the opt-in self-development trio, which lives outside the script seam. [dsh-workflow-self-development](../../packages/workflow/workflow-self-development/README.md) owns one durable lifecycle per task — versioned spec, frozen test plan, human budget approval, verified attempt results, trial approval — in a private control directory, and caches one serialized controller per task. [dsh-workflow-self-development-runner](../../packages/workflow/workflow-self-development-runner/README.md) composes one supervised attempt against that controller: the trusted clock, human-presence evidence, the operation-bound launch record, the headless executor, the independent acceptor, and durable attempt evidence with its terminal outcome. Every launch requires a recorded human confirmation and a finite budget; the trio provides supervised testing with recorded limits, never unattended operation. [dsh-workflow-self-development-remote](../../packages/workflow/workflow-self-development-remote/README.md) exposes the stable Remote face the M4 UI and the phone whitelist call: read-only progress views, the confirmation card, and the explicit planning, budget, stop, and trial-approval operations; it is disabled until enabled and mounts no upgrade approval. The services appear in the [Cordis API](#cordis-surface) as `ctx.selfDevelopmentTasks`, `ctx.selfDevelopmentRunner`, and `ctx.selfDevelopmentRemote`, and [dsh-workflow-self-development-events](../../packages/workflow/workflow-self-development-events/README.md) folds the committed task events into unified notification events for human consumers.
+The workflow group also owns the opt-in self-development pair, which lives outside the script seam. [dsh-workflow-self-development](../../packages/workflow/workflow-self-development/README.md) owns one durable lifecycle per task — versioned spec, frozen test plan, human budget approval, verified attempt results, trial approval — in a private control directory, and caches one serialized controller per task. [dsh-workflow-self-development-runner](../../packages/workflow/workflow-self-development-runner/README.md) composes one supervised attempt against that controller: the trusted clock, human-presence evidence, the operation-bound launch record, the headless executor, the independent acceptor, and durable attempt evidence with its terminal outcome. Every launch requires a recorded human confirmation and a finite budget; the pair provides supervised testing with recorded limits, never unattended operation. A third opt-in sibling, [dsh-workflow-self-development-workspaces](../../packages/workflow/workflow-self-development-workspaces/README.md), allocates one git worktree, branch, and copied data home per task under a durable registry and integrates finished task branches back to the project baseline serially. Every launch requires a recorded human confirmation and a finite budget; the three packages provide supervised testing with recorded limits, never unattended operation. All three services appear in the [Cordis API](#cordis-surface) as `ctx.selfDevelopmentTasks`, `ctx.selfDevelopmentRunner`, and `ctx.selfDevelopmentWorkspaces`.
 
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
@@ -392,6 +392,64 @@ isJournalHandoff(error: unknown): boolean
 ```
 
 Source: [`packages/workflow/workflow-self-development/src/index.ts`](../../packages/workflow/workflow-self-development/src/index.ts)
+
+<a id="ctxselfdevelopmentworkspaces--selfdevelopmentworkspaces"></a>
+
+### `ctx.selfDevelopmentWorkspaces` — `SelfDevelopmentWorkspaces`
+
+Cordis service composing workspace allocation, release, and serialized integration.
+
+```ts cordis-catalog
+/**
+ * Allocate the workspace for one task, or return the workspace a previous
+ * allocation registered for the same task id. Allocation is refused — not
+ * queued — once the configured concurrency limit is reached, because a
+ * queued task behind live worktrees would not run in parallel. Allocations
+ * and releases against one experiments root serialize in memory, so the
+ * limit check and the registry write are exact within this process; across
+ * processes the deployment keeps one writer per experiments root.
+ * @param req - task id, project root, and optional baseline commit.
+ * @returns the task's workspace record.
+ * @throws SelfDevelopmentWorkspacesError with the codes documented on
+ *   {@link allocateWorkspace}.
+ */
+allocate(req: AllocateRequest): Promise<TaskWorkspace>
+
+/**
+ * Release one task's workspace: remove its worktree, delete its data home,
+ * and drop the registry entry. Only registered paths are touched.
+ * @param taskId - the task whose workspace is released.
+ * @throws SelfDevelopmentWorkspacesError with the codes documented on
+ *   {@link releaseWorkspace}.
+ */
+release(taskId: string): Promise<void>
+
+/**
+ * List the currently allocated workspaces from the durable registry.
+ * @returns the registry's workspace records; later allocation changes are
+ *   not reflected in a returned snapshot.
+ * @throws SelfDevelopmentWorkspacesError with `SELF_DEV_WORKSPACE_REGISTRY_INVALID` when
+ *   the registry file cannot be read or parsed.
+ */
+async list(): Promise<readonly TaskWorkspace[]>
+
+/**
+ * Integrate one allocated task's worktree into a project branch. Calls on
+ * one service instance serialize in memory; calls across processes
+ * serialize on the experiments root's integration lock. Git failures inside
+ * the integration are reported as a `failed` result, never thrown.
+ * @param req - task id, target branch, and actor.
+ * @returns the integration outcome.
+ * @throws SelfDevelopmentWorkspacesError with `SELF_DEV_WORKSPACE_TASK_UNKNOWN` when the
+ *   task has no allocated workspace, and with `SELF_DEV_WORKSPACE_INTEGRATION_BUSY`
+ *   when a live cross-process lock holder does not release in time. The
+ *   in-memory chain itself has no busy bound: a call waits indefinitely
+ *   behind a serialized callback that never settles.
+ */
+integrate(req: IntegrationRequest): Promise<IntegrationResult>
+```
+
+Source: [`packages/workflow/workflow-self-development-workspaces/src/index.ts`](../../packages/workflow/workflow-self-development-workspaces/src/index.ts)
 
 <a id="ctxworkflowengine--workflowengine-abstract-seam"></a>
 

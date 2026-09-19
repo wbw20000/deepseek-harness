@@ -504,6 +504,7 @@
       "@deepseek-ai/dsh-workflow-self-development-events": ["./packages/workflow/workflow-self-development-events/src"],
       "@deepseek-ai/dsh-workflow-self-development-remote": ["./packages/workflow/workflow-self-development-remote/src"],
       "@deepseek-ai/dsh-workflow-self-development-runner": ["./packages/workflow/workflow-self-development-runner/src"],
+      "@deepseek-ai/dsh-workflow-self-development-workspaces": ["./packages/workflow/workflow-self-development-workspaces/src"],
       "@deepseek-ai/dsh-workspace": ["./packages/workspace/workspace/src"],
       "@deepseek-ai/dsh-workspace/invariant": ["./packages/workspace/workspace/src/invariant.ts"],
       "@deepseek-ai/dsh-workspace-changes": ["./packages/deliverables/workspace-changes/src"]

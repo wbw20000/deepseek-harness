@@ -572,6 +572,13 @@ const SERVICE_ROLES: ServiceRole[] = [
     note: 'Opt-in event projection over committed task events: unified title-level notification events, a bounded in-memory recent buffer, in-process subscribers, and an optional macOS local-notification command; it registers no tool, prompt, or durable store.',
   },
   {
+    key: 'selfDevelopmentWorkspaces',
+    pkg: 'workflow-self-development-workspaces',
+    title: 'Self-development workspaces',
+    mode: 'core',
+    note: 'Opt-in per-task workspace allocation: one git worktree, branch, and copied data home per task under a durable registry, and serialized fast-forward integration back to the project baseline; directory separation, not a sandbox.',
+  },
+  {
     key: 'ssh',
     pkg: 'ssh',
     title: 'POSIX SSH connection owner',

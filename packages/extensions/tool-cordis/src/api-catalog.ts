@@ -1844,6 +1844,40 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'selfDevelopmentWorkspaces',
+    summary: 'Cordis service composing workspace allocation, release, and serialized integration.',
+    description: 'Cordis service composing workspace allocation, release, and serialized integration.',
+    methods: [
+      {
+        signature: 'allocate(req: AllocateRequest): Promise<TaskWorkspace>',
+        description: 'Allocate the workspace for one task, or return the workspace a previous allocation registered for the same task id. Allocation is refused — not queued — once the configured concurrency limit is reached, because a queued task behind live worktrees would not run in parallel. Allocations and releases against one experiments root serialize in memory, so the limit check and the registry write are exact within this process; across processes the deployment keeps one writer per experiments root.',
+        parameters: [{ name: 'req', description: 'task id, project root, and optional baseline commit.' }],
+        returns: 'the task\'s workspace record.',
+        throws: ['SelfDevelopmentWorkspacesError with the codes documented on {@link allocateWorkspace}.'],
+      },
+      {
+        signature: 'release(taskId: string): Promise<void>',
+        description: 'Release one task\'s workspace: remove its worktree, delete its data home, and drop the registry entry. Only registered paths are touched.',
+        parameters: [{ name: 'taskId', description: 'the task whose workspace is released.' }],
+        throws: ['SelfDevelopmentWorkspacesError with the codes documented on {@link releaseWorkspace}.'],
+      },
+      {
+        signature: 'async list(): Promise<readonly TaskWorkspace[]>',
+        description: 'List the currently allocated workspaces from the durable registry.',
+        parameters: [],
+        returns: 'the registry\'s workspace records; later allocation changes are not reflected in a returned snapshot.',
+        throws: ['SelfDevelopmentWorkspacesError with `SELF_DEV_WORKSPACE_REGISTRY_INVALID` when the registry file cannot be read or parsed.'],
+      },
+      {
+        signature: 'integrate(req: IntegrationRequest): Promise<IntegrationResult>',
+        description: 'Integrate one allocated task\'s worktree into a project branch. Calls on one service instance serialize in memory; calls across processes serialize on the experiments root\'s integration lock. Git failures inside the integration are reported as a `failed` result, never thrown.',
+        parameters: [{ name: 'req', description: 'task id, target branch, and actor.' }],
+        returns: 'the integration outcome.',
+        throws: ['SelfDevelopmentWorkspacesError with `SELF_DEV_WORKSPACE_TASK_UNKNOWN` when the task has no allocated workspace, and with `SELF_DEV_WORKSPACE_INTEGRATION_BUSY` when a live cross-process lock holder does not release in time. The in-memory chain itself has no busy bound: a call waits indefinitely behind a serialized callback that never settles.'],
+      },
+    ],
+  },
+  {
     key: 'sessionController',
     summary: 'Host service backing the generated `ctx.remote.session` namespace.',
     description: 'Host service backing the generated `ctx.remote.session` namespace.',
@@ -4259,6 +4293,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type AgentStatus = \'idle\' | \'running\';',
   },
   {
+    name: 'AllocateRequest',
+    declaration: 'export interface AllocateRequest {\n    readonly taskId: string;\n    readonly projectRoot: string;\n    readonly baseCommit?: string;\n}',
+  },
+  {
     name: 'ApiKeyRecord',
     declaration: 'export interface ApiKeyRecord {\n    readonly kind: \'api-key\';\n    readonly key?: string;\n    readonly env?: Readonly<Record<string, string>>;\n}',
   },
@@ -5141,6 +5179,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'InstallSpecKind',
     declaration: 'export type InstallSpecKind = \'registry\' | \'path\' | \'git\' | \'tarball\';',
+  },
+  {
+    name: 'IntegrationRequest',
+    declaration: 'export interface IntegrationRequest {\n    readonly taskId: string;\n    readonly targetBranch: string;\n    readonly actor: string;\n}',
+  },
+  {
+    name: 'IntegrationResult',
+    declaration: 'export type IntegrationResult = {\n    status: \'integrated\';\n    commit: string;\n} | {\n    status: \'conflict\';\n    files: readonly string[];\n    baseMoved: true;\n} | {\n    status: \'failed\';\n    reason: string;\n};',
   },
   {
     name: 'InvariantFailure',
@@ -6937,6 +6983,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'TaskSummary',
     declaration: 'export interface TaskSummary {\n    readonly taskId: string;\n    readonly status: TaskStatus;\n    readonly revision: number;\n    readonly title: string;\n}',
+  },
+  {
+    name: 'TaskWorkspace',
+    declaration: 'export interface TaskWorkspace {\n    readonly taskId: string;\n    readonly projectRoot: string;\n    readonly baseCommit: string;\n    readonly worktree: string;\n    readonly branch: string;\n    readonly dataHome: string;\n    readonly allocatedAt: number;\n}',
   },
   {
     name: 'TeamId',

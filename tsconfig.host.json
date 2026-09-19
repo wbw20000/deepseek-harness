@@ -376,6 +376,7 @@
     { "path": "./packages/workflow/workflow-self-development-events" },
     { "path": "./packages/workflow/workflow-self-development-runner" },
     { "path": "./packages/workflow/workflow-self-development-remote" },
+    { "path": "./packages/workflow/workflow-self-development-workspaces" },
     { "path": "./packages/workflow/workflow-ptc" },
     { "path": "./packages/workflow/tool-workflow" },
     { "path": "./packages/workflow/tool-ralph" },

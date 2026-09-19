@@ -3917,6 +3917,29 @@ export interface RunnerConfig {
 
 来源： [`packages/workflow/workflow-self-development-runner/src/types.ts:8`](../packages/workflow/workflow-self-development-runner/src/types.ts)
 
+
+<a id="deepseek-aidsh-workflow-self-development-workspaces"></a>
+
+## `@deepseek-ai/dsh-workflow-self-development-workspaces`
+
+```ts config-catalog
+/** Deployment configuration for the workspace allocation service. */
+export interface WorkspacesConfig {
+  /** Absolute path of the parent directory that holds every task worktree and data home. */
+  readonly experimentsRoot: string
+  /**
+   * Absolute path of the template directory copied into each task's
+   * `DSH_HOME`; `sessions/` and `attachments/` subtrees and `*.lock` files are
+   * excluded from the copy.
+   */
+  readonly dataHomeTemplate: string
+  /** Maximum number of workspaces this service keeps allocated at once. */
+  readonly maxConcurrentTasks: number
+}
+```
+
+来源： [`packages/workflow/workflow-self-development-workspaces/src/types.ts:9`](../packages/workflow/workflow-self-development-workspaces/src/types.ts)
+
 <a id="deepseek-aidsh-workspace-changes"></a>
 
 ## `@deepseek-ai/dsh-workspace-changes`
