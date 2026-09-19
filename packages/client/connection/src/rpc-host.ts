@@ -9,7 +9,9 @@ import {
 } from './rpc.ts'
 import { clientRequestSchema } from './rpc-schema.ts'
 import { bridge } from './http-bridge.ts'
-import { isTrustedApiRequest } from './api-request-trust.ts'
+import { isTrustedApiRequest, parseAuthority, requestHeader } from './api-request-trust.ts'
+import { isLoopbackHostname } from './loopback-hostname.ts'
+import { ConnectionCallerContext, type ConnectionCaller } from './caller-context.ts'
 import { API_PATH } from './api-path.ts'
 import type { BrowserAuth } from './browser-auth.ts'
 import type { RegisteredSession } from './session-registry.ts'
@@ -27,6 +29,7 @@ import type {
   ConnectionTrustRequest,
   HostConnectionHandle,
   HostConnectionRpc,
+  SessionsRevokedListener,
 } from './rpc.ts'
 
 const INVALID_REQUEST_RPC_ID = RpcId('invalid-request')
@@ -61,6 +64,10 @@ declare module '@deepseek-ai/cordis' {
 export class HostConnectionService extends Service implements HostConnectionHandle {
   private readonly interceptors = new Map<string, ConnectionRpcInterceptor>()
   private readonly fetchRoutes = new Map<string, RegisteredFetchRoute>()
+  private readonly revokeListeners = new Set<SessionsRevokedListener>()
+
+  /** Ambient caller identity installed around every request and stream dispatch. */
+  readonly caller = new ConnectionCallerContext()
 
   /**
    * Provide the Host half over the active HTTP server.
@@ -100,6 +107,55 @@ export class HostConnectionService extends Service implements HostConnectionHand
     return this.browserAuth.isAuthenticated(request) ? undefined : 401
   }
 
+  /**
+   * Derive the caller identity of one request. The `host` is the raw `Host`
+   * header lowercased (port included), and `loopback` follows that header, not
+   * the socket: phone traffic forwarded by frp/Caddy arrives on a loopback
+   * socket while naming an FQDN. Identity comes from the verified cookie and
+   * the session registry; an unauthenticated request carries `undefined`
+   * session facts.
+   * @param request - request or upgrade headers carrying Host and Cookie.
+   * @returns the caller identity of this request.
+   */
+  callerOf(request: ConnectionTrustRequest): ConnectionCaller {
+    const host = (requestHeader(request.headers, 'host') ?? '').toLowerCase()
+    const hostUrl = parseAuthority(host)
+    const session = this.browserAuth.authenticatedSession(request)
+    return {
+      host,
+      loopback: hostUrl !== undefined && isLoopbackHostname(hostUrl.hostname),
+      sessionId: session?.sessionId,
+      certificateSerial: session?.certificateSerial,
+    }
+  }
+
+  /**
+   * Subscribe to browser-session revocations across all three routes:
+   * `sessions.revoke`, `certificates.revoke`, and `logout` each notify with
+   * the session ids they actually revoked. A listener that throws never
+   * fails the revocation that notified it.
+   * @param listener - callback receiving the revoked session ids.
+   * @returns disposer removing this listener.
+   */
+  onSessionsRevoked(listener: SessionsRevokedListener): () => void {
+    this.revokeListeners.add(listener)
+    return () => { this.revokeListeners.delete(listener) }
+  }
+
+  /** Notify every listener with the revoked ids; listener failures stay contained. */
+  private emitSessionsRevoked(sessionIds: readonly string[]): void {
+    if (sessionIds.length === 0) return
+    for (const listener of [...this.revokeListeners]) {
+      try {
+        listener(sessionIds)
+      } catch (error) {
+        // A listener failure must not abort the remaining listeners or the
+        // revocation itself, so the error stays contained here.
+        void error
+      }
+    }
+  }
+
   /** Authenticate an index request through the process-token exchange or cookie. */
   authorizeIndex(request: ConnectionIndexRequest, response: ConnectionIndexResponse): boolean {
     return this.browserAuth.authorizeIndex(request, response)
@@ -123,8 +179,10 @@ export class HostConnectionService extends Service implements HostConnectionHand
    * @param sessionId - registration to revoke.
    * @returns false when it was unknown or already revoked, otherwise true.
    */
-  revokeSession(sessionId: string): Promise<boolean> {
-    return this.browserAuth.revokeSession(sessionId)
+  async revokeSession(sessionId: string): Promise<boolean> {
+    const revoked = await this.browserAuth.revokeSession(sessionId)
+    if (revoked) this.emitSessionsRevoked([sessionId])
+    return revoked
   }
 
   /**
@@ -133,8 +191,10 @@ export class HostConnectionService extends Service implements HostConnectionHand
    * @returns the number of previously valid sessions this call revoked.
    * @throws when the serial is not a well-formed certificate serial.
    */
-  revokeCertificate(serial: string): Promise<number> {
-    return this.browserAuth.revokeCertificate(serial)
+  async revokeCertificate(serial: string): Promise<number> {
+    const revoked = await this.browserAuth.revokeCertificate(serial)
+    this.emitSessionsRevoked(revoked)
+    return revoked.length
   }
 
   /**
@@ -158,8 +218,12 @@ export class HostConnectionService extends Service implements HostConnectionHand
    * @returns the cookie-clearing `Set-Cookie` value, or undefined when no
    * cookie signed for this authority is present.
    */
-  logoutSession(request: ConnectionTrustRequest): Promise<string | undefined> {
-    return this.browserAuth.logout(request)
+  async logoutSession(request: ConnectionTrustRequest): Promise<string | undefined> {
+    const outcome = await this.browserAuth.logout(request)
+    if (outcome.revoked && outcome.sessionId !== undefined) {
+      this.emitSessionsRevoked([outcome.sessionId])
+    }
+    return outcome.clearCookie
   }
 
   /**
@@ -177,14 +241,20 @@ export class HostConnectionService extends Service implements HostConnectionHand
       },
       fetch: (request) => {
         const pathname = new URL(request.url).pathname
-        const route = this.fetchRoutes.get(pathname)
-        if (route?.methods.has(request.method) === true) return route.fetch(request)
-        const endpoint = endpointFromPath(channel, pathname)
-        const interceptor = this.interceptors.get(channel)
-        if (endpoint === undefined || interceptor === undefined || !interceptor.matches(endpoint)) {
-          return Promise.resolve(new Response('not found', { status: 404 }))
-        }
-        return interceptor.fetchHandler.fetch(request)
+        // Every Fetch dispatch — exact routes and shared-channel RPC alike —
+        // runs inside the caller identity derived from this request, so
+        // handlers read `ctx.connection.caller.current()` instead of
+        // re-parsing headers.
+        return this.caller.run(this.callerOf(request), () => {
+          const route = this.fetchRoutes.get(pathname)
+          if (route?.methods.has(request.method) === true) return route.fetch(request)
+          const endpoint = endpointFromPath(channel, pathname)
+          const interceptor = this.interceptors.get(channel)
+          if (endpoint === undefined || interceptor === undefined || !interceptor.matches(endpoint)) {
+            return Promise.resolve(new Response('not found', { status: 404 }))
+          }
+          return interceptor.fetchHandler.fetch(request)
+        })
       },
     }
   }

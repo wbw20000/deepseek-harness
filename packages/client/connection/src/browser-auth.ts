@@ -180,6 +180,24 @@ async function initializeSecret(credentials: CredentialProvider): Promise<Buffer
   return secret
 }
 
+/** Verified identity of the browser session one request's cookie names. */
+export interface AuthenticatedSession {
+  /** Id of the registered, unrevoked, unexpired session. */
+  readonly sessionId: string
+  /** Lowercase hexadecimal serial of the certificate bound to the session, or undefined when unbound. */
+  readonly certificateSerial: string | undefined
+}
+
+/** Outcome of revoking the session presented by one request's cookie. */
+export interface SessionLogout {
+  /** Session id carried by the decoded cookie payload, or undefined when no cookie signed for the request authority was present. */
+  readonly sessionId: string | undefined
+  /** Whether this call actually revoked a still-valid session; a repeated logout leaves this false. */
+  readonly revoked: boolean
+  /** Cookie-clearing `Set-Cookie` value, or undefined when no cookie signed for the request authority was present. */
+  readonly clearCookie: string | undefined
+}
+
 /**
  * Process launch-token and one-shot pairing-token exchange, persistent
  * signed-cookie verification, and server-side session revocation. Connection
@@ -377,38 +395,17 @@ export class BrowserAuth {
    * @returns true only for an unexpired cookie naming an unrevoked registered session.
    */
   isAuthenticated(request: ConnectionTrustRequest): boolean {
-    const authority = requestAuthority(request.headers)
-    const rawCookie = header(request.headers, 'cookie')
-    if (authority === undefined || rawCookie === undefined) return false
-    const value = cookieValue(rawCookie, cookieName(authority))
-    if (value === undefined) return false
-    const payload = decodeCookie(value, this.secret)
-    if (payload === undefined || payload.authority !== authority) return false
-    const session = this.registry.lookup(payload.sessionId)
-    if (session === undefined || session.revokedAt !== undefined) return false
-    // A certificate-bound session authenticates only from a request whose
-    // trusted proxy forwards the same certificate serial, so a copied cookie
-    // pair is inert on any other device. Unbound sessions keep the previous
-    // cookie-only behavior.
-    if (session.certificateSerial !== undefined
-      && trustedClientCertificateSerial(request, this.mtlsPolicy) !== session.certificateSerial) {
-      return false
-    }
-    const now = Date.now()
-    return session.expiresAt > now
-      && payload.issuedAt <= now
-      && payload.expiresAt > now
-      && payload.expiresAt > payload.issuedAt
-      && payload.expiresAt - payload.issuedAt <= this.maxAgeMilliseconds
+    return this.authenticatedSession(request) !== undefined
   }
 
   /**
-   * Revoke the session presented by this request's cookie.
+   * Verify the presented cookie and return the registered session it names.
    * @param request - request headers carrying Host and Cookie.
-   * @returns the cookie-clearing `Set-Cookie` value, or undefined when the
-   * request carries no cookie signed for this authority.
+   * @returns the verified session identity, or undefined when the cookie is
+   * missing, unsigned for this authority, expired, revoked, or naming a
+   * certificate-bound session whose trusted-proxy serial does not match.
    */
-  async logout(request: ConnectionTrustRequest): Promise<string | undefined> {
+  authenticatedSession(request: ConnectionTrustRequest): AuthenticatedSession | undefined {
     const authority = requestAuthority(request.headers)
     const rawCookie = header(request.headers, 'cookie')
     if (authority === undefined || rawCookie === undefined) return undefined
@@ -416,8 +413,53 @@ export class BrowserAuth {
     if (value === undefined) return undefined
     const payload = decodeCookie(value, this.secret)
     if (payload === undefined || payload.authority !== authority) return undefined
-    await this.registry.revoke(payload.sessionId)
-    return clearSessionCookie(cookieName(authority), this.cookieSecure)
+    const session = this.registry.lookup(payload.sessionId)
+    if (session === undefined || session.revokedAt !== undefined) return undefined
+    // A certificate-bound session authenticates only from a request whose
+    // trusted proxy forwards the same certificate serial, so a copied cookie
+    // pair is inert on any other device. Unbound sessions keep the previous
+    // cookie-only behavior.
+    if (session.certificateSerial !== undefined
+      && trustedClientCertificateSerial(request, this.mtlsPolicy) !== session.certificateSerial) {
+      return undefined
+    }
+    const now = Date.now()
+    const valid = session.expiresAt > now
+      && payload.issuedAt <= now
+      && payload.expiresAt > now
+      && payload.expiresAt > payload.issuedAt
+      && payload.expiresAt - payload.issuedAt <= this.maxAgeMilliseconds
+    if (!valid) return undefined
+    return { sessionId: session.sessionId, certificateSerial: session.certificateSerial }
+  }
+
+  /**
+   * Revoke the session presented by this request's cookie.
+   * @param request - request headers carrying Host and Cookie.
+   * @returns the revoked session id, whether this call actually revoked it,
+   * and the cookie-clearing `Set-Cookie` value; `clearCookie` is undefined
+   * when the request carries no cookie signed for this authority.
+   */
+  async logout(request: ConnectionTrustRequest): Promise<SessionLogout> {
+    const authority = requestAuthority(request.headers)
+    const rawCookie = header(request.headers, 'cookie')
+    if (authority === undefined || rawCookie === undefined) {
+      return { sessionId: undefined, revoked: false, clearCookie: undefined }
+    }
+    const value = cookieValue(rawCookie, cookieName(authority))
+    if (value === undefined) {
+      return { sessionId: undefined, revoked: false, clearCookie: undefined }
+    }
+    const payload = decodeCookie(value, this.secret)
+    if (payload === undefined || payload.authority !== authority) {
+      return { sessionId: undefined, revoked: false, clearCookie: undefined }
+    }
+    const revoked = await this.registry.revoke(payload.sessionId)
+    return {
+      sessionId: payload.sessionId,
+      revoked,
+      clearCookie: clearSessionCookie(cookieName(authority), this.cookieSecure),
+    }
   }
 
   /**
@@ -441,10 +483,10 @@ export class BrowserAuth {
    * Revoke every session bound to one client-certificate serial: the device
    * certificate becomes unusable, and all of its cookies stop authenticating.
    * @param serial - lowercase hexadecimal certificate serial.
-   * @returns the number of previously valid sessions this call revoked.
+   * @returns the ids of the previously valid sessions this call revoked.
    * @throws when the serial is not a well-formed certificate serial.
    */
-  async revokeCertificate(serial: string): Promise<number> {
+  async revokeCertificate(serial: string): Promise<readonly string[]> {
     return this.registry.revokeBySerial(serial)
   }
 

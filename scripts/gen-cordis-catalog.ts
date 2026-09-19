@@ -748,6 +748,10 @@ export const FOUNDATION_TYPE_NAMES: ReadonlySet<string> = new Set([
 /** Project types deliberately documented outside the subsystems catalog. */
 export const TYPE_LINK_EXEMPTIONS: Readonly<Record<string, string>> = {
   ConnectionFetchHandler: 'shared Fetch dispatch is owned by packages/client/connection/src/rpc.ts',
+  ConnectionCaller: 'caller identity contract is owned by packages/client/connection/src/rpc.ts',
+  ConnectionCallerContext: 'caller identity scope is owned by packages/client/connection/src/caller-context.ts',
+  ConnectionCallerScope: 'structural caller scope is owned by packages/client/connection/src/rpc.ts',
+  SessionsRevokedListener: 'revocation listener contract is owned by packages/client/connection/src/rpc.ts',
   ConnectionRequestRejection: 'transport rejection status is owned by packages/client/connection/src/rpc.ts',
   ConnectionTrustRequest: 'transport authentication input is owned by packages/client/connection/src/rpc.ts',
   ConnectionIndexRequest: 'frontend authentication request is owned by packages/client/connection/src/rpc.ts',

@@ -273,21 +273,21 @@ export class SessionRegistry {
    * Revoke every session bound to one certificate serial: revoking a device
    * invalidates all of its sessions' cookies at once.
    * @param serial - the lowercase hexadecimal certificate serial to revoke.
-   * @returns the number of previously valid sessions this call revoked. The
-   * in-memory revocations stand even when the persisted write fails and the
-   * failure is raised.
+   * @returns the ids of the previously valid sessions this call revoked, in
+   * registry order. The in-memory revocations stand even when the persisted
+   * write fails and the failure is raised.
    * @throws when the serial is not a well-formed certificate serial.
    */
-  async revokeBySerial(serial: string): Promise<number> {
+  async revokeBySerial(serial: string): Promise<string[]> {
     assertCertificateSerial(serial)
     const revokedAt = Date.now()
-    let revoked = 0
+    const revoked: string[] = []
     for (const [sessionId, session] of this.sessions) {
       if (session.certificateSerial !== serial || session.revokedAt !== undefined) continue
       this.sessions.set(sessionId, { ...session, revokedAt })
-      revoked += 1
+      revoked.push(sessionId)
     }
-    if (revoked > 0) await this.writeSnapshot()
+    if (revoked.length > 0) await this.writeSnapshot()
     return revoked
   }
 

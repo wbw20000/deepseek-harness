@@ -142,14 +142,14 @@ describe('SessionRegistry', () => {
 
     // An unknown serial revokes nothing and writes nothing (the five saves so
     // far are the three issues; `issue` flushes its internal `issueSync`).
-    expect(await registry.revokeBySerial('ffff')).toBe(0)
+    expect(await registry.revokeBySerial('ffff')).toEqual([])
     expect(store.saves).toBe(5)
-    expect(await registry.revokeBySerial('1a2b3c4d')).toBe(2)
+    expect(await registry.revokeBySerial('1a2b3c4d')).toEqual([bound.sessionId, boundSync.sessionId])
     expect((await registry.get(bound.sessionId))?.revokedAt).toBeDefined()
     expect((await registry.get(boundSync.sessionId))?.revokedAt).toBeDefined()
     expect((await registry.get(unbound.sessionId))?.revokedAt).toBeUndefined()
-    // Already-revoked sessions are not counted twice.
-    expect(await registry.revokeBySerial('1a2b3c4d')).toBe(0)
+    // Already-revoked sessions are not reported twice.
+    expect(await registry.revokeBySerial('1a2b3c4d')).toEqual([])
     await registry.flush()
     expect(store.snapshot?.sessions.every(session => session.certificateSerial === '1a2b3c4d'
       ? session.revokedAt !== undefined

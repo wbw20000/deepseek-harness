@@ -394,9 +394,9 @@ describe('BrowserAuth', () => {
     const secure = await createAuth(secureStore, 30, {}, true)
     const setCookie = exchange(secure).state.headers?.['set-cookie']
     expect(setCookie).toMatch(/; HttpOnly; SameSite=Strict; Secure$/u)
-    expect(await secure.logout({
+    expect((await secure.logout({
       headers: { host: '127.0.0.1:3080', cookie: exchange(secure).cookie },
-    })).toMatch(/; Secure$/u)
+    })).clearCookie).toMatch(/; Secure$/u)
     void secureStore
   })
 
@@ -405,7 +405,10 @@ describe('BrowserAuth', () => {
     const auth = await createAuth(store)
     const { cookie } = exchange(auth)
     const cleared = await auth.logout({ headers: { host: '127.0.0.1:3080', cookie } })
-    expect(cleared).toMatch(/^dsh-auth-[^=]+=; Max-Age=0; Path=\/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; SameSite=Strict$/u)
+    expect(cleared.clearCookie).toMatch(
+      /^dsh-auth-[^=]+=; Max-Age=0; Path=\/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; SameSite=Strict$/u,
+    )
+    expect(cleared.revoked).toBe(true)
     expect(auth.isAuthenticated(request('/', '127.0.0.1:3080', { cookie }))).toBe(false)
     expect(typeof (await firstSession(auth)).revokedAt).toBe('number')
 
@@ -413,15 +416,19 @@ describe('BrowserAuth', () => {
     const [name] = cookie.split('=') as [string, string]
     expect(await auth.logout({ headers: { host: '127.0.0.1:3080', cookie: signedCookie(store, name, {
       version: 2, authority: 'localhost:1', sessionId: 's', issuedAt: Date.now(), expiresAt: Date.now() + 1000,
-    }) } })).toBeUndefined()
+    }) } })).toEqual({ sessionId: undefined, revoked: false, clearCookie: undefined })
 
     // A second logout for the same cookie still returns the clearing header.
-    expect(await auth.logout({ headers: { host: '127.0.0.1:3080', cookie } })).toBe(cleared)
-    expect(await auth.logout({ headers: { host: '127.0.0.1:3080' } })).toBeUndefined()
-    expect(await auth.logout({ headers: { cookie } })).toBeUndefined()
-    expect(await auth.logout({ headers: { host: '127.0.0.1:3080', cookie: 'other=1' } })).toBeUndefined()
+    expect(await auth.logout({ headers: { host: '127.0.0.1:3080', cookie } }))
+      .toEqual({ sessionId: cleared.sessionId, revoked: false, clearCookie: cleared.clearCookie })
+    expect(await auth.logout({ headers: { host: '127.0.0.1:3080' } }))
+      .toEqual({ sessionId: undefined, revoked: false, clearCookie: undefined })
+    expect(await auth.logout({ headers: { cookie } }))
+      .toEqual({ sessionId: undefined, revoked: false, clearCookie: undefined })
+    expect(await auth.logout({ headers: { host: '127.0.0.1:3080', cookie: 'other=1' } }))
+      .toEqual({ sessionId: undefined, revoked: false, clearCookie: undefined })
     expect(await auth.logout({ headers: { host: '127.0.0.1:3080', cookie: `${cookie.split('=')[0]}=broken` } }))
-      .toBeUndefined()
+      .toEqual({ sessionId: undefined, revoked: false, clearCookie: undefined })
   })
 
   it('exchanges a one-shot pairing token once with the minted device label', async () => {
@@ -524,6 +531,7 @@ describe('BrowserAuth', () => {
       remoteAddress: '127.0.0.1',
     })
     expect(await firstSession(auth)).toMatchObject({ certificateSerial: '1a2b3c4d' })
+    const boundSessionId = (await firstSession(auth)).sessionId
 
     // The same device (same serial, via the trusted proxy) authenticates.
     expect(auth.isAuthenticated(request('/', '127.0.0.1:3080', {
@@ -553,8 +561,8 @@ describe('BrowserAuth', () => {
 
     // Revoking the certificate invalidates every session bound to its serial
     // at once and leaves the unbound session alone.
-    expect(await auth.revokeCertificate('1a2b3c4d')).toBe(1)
-    expect(await auth.revokeCertificate('1a2b3c4d')).toBe(0)
+    expect(await auth.revokeCertificate('1a2b3c4d')).toEqual([boundSessionId])
+    expect(await auth.revokeCertificate('1a2b3c4d')).toEqual([])
     expect(auth.isAuthenticated(request('/', '127.0.0.1:3080', {
       cookie, serial: '1a2b3c4d', remoteAddress: '127.0.0.1',
     }))).toBe(false)

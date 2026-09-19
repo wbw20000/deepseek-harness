@@ -3,13 +3,18 @@ import { describe, expect, it, vi } from 'vitest'
 import type { BrowserAuth } from '../src/browser-auth.ts'
 import { HostConnectionService } from '../src/rpc-host.ts'
 
+/** Authentication double: route dispatch never presents a cookie here. */
+const unauthenticatedAuth = {
+  authenticatedSession: () => undefined,
+} as unknown as BrowserAuth
+
 async function mounted(): Promise<{
   readonly connection: HostConnectionService
   readonly dispose: () => Promise<void>
 }> {
   const ctx = new Context()
   const fiber = ctx.plugin((pluginCtx) => {
-    new HostConnectionService(pluginCtx, [], {} as BrowserAuth)
+    new HostConnectionService(pluginCtx, [], unauthenticatedAuth)
   })
   await fiber.await()
   return {

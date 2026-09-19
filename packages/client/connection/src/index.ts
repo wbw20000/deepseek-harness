@@ -38,6 +38,7 @@ export type {
   HostConnectionRpc,
   RpcMessage,
   ServerResponse,
+  SessionsRevokedListener,
 } from './rpc.ts'
 export { RpcId, transportError } from './rpc.ts'
 export {
@@ -49,6 +50,9 @@ export {
   serverResponseSchema,
 } from './rpc-schema.ts'
 export { HostConnectionService } from './rpc-host.ts'
+export { ConnectionCallerContext } from './caller-context.ts'
+export type { ConnectionCaller } from './caller-context.ts'
+export type { AuthenticatedSession, SessionLogout } from './browser-auth.ts'
 export type { RegisteredSession, SessionRegistryStore } from './session-registry.ts'
 export {
   MAX_CERTIFICATE_SERIAL_HEX_LENGTH,

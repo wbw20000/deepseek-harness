@@ -38,13 +38,15 @@ kind: "package-reference"
 
 cookie 签名密钥是 `ctx.credentials` 中由 `client-connection/browser-session` 拥有的 grant 记录，会话登记把它的 JSON 快照作为 `client-connection/browser-sessions` 记录存在同一旁；本地提供方把两者都持久化到 `$DSH_HOME/.credentials.yaml`，Connection 激活期间把两者都载入内存，因此请求认证同步执行。每次令牌交换都先登记会话再铸造命名它的 cookie，而校验还要求该会话存在且未被撤销，因此撤销一条登记会让对应 cookie 失效，且不触碰签名密钥。删除或替换记录会在下一次 Connection 激活时生效。cookie 携带绝对签发与过期区间，`cookieMaxAgeDays` 默认设为 30 天，并在确定性名称与签名 payload 中同时绑定规范化 hostname 和 port。它是 host-only、`Path=/`、`HttpOnly`、`SameSite=Strict`。随附服务器使用 loopback HTTP，因此 `Secure` 默认关闭；仅当浏览器 origin 经 HTTPS 终止的反向代理提供时，才把 Host Connection 行的 `cookieSecure` 设为 true，这同时把铸造的配对 URL 切换为 `https`。
 
-Connection 自有五条需认证的会话生命周期 Fetch 路由：`GET /api/connection.sessions` 列出登记（设备标签、绑定的证书序列号（如有）与签发、过期、撤销时间，绝无 cookie 值或证书本体）；`POST /api/connection.sessions.revoke` 携带 `{ sessionId }` 撤销一条登记；`POST /api/connection.certificates.revoke` 携带 `{ serial }` 撤销绑定同一证书序列号的全部登记；`POST /api/connection.logout` 撤销调用方自己的会话并令其 cookie 过期；`POST /api/connection.pairing.mint` 携带 `{ ttlMs?, deviceLabel }` 铸造一枚一次性配对令牌，并返回带 `?token=...` 的普通根 URL。配对令牌是 32 字节随机 base64url 密文，同时未消费的至多 5 枚，有效期至多 10 分钟（默认 5 分钟）；`authorizeIndex` 只消费它一次，按铸造时的设备标签登记会话并签发该会话的 cookie。令牌只保存在内存中，不写日志，也不出现在错误消息里。同一认证检查同样把守 `/api/remote.mux` 的 WebSocket 升级，因此被撤销的会话在下次握手时会被拒绝；已被接受的 mux 连接会继续服务直到断开，因为本包不持有活动连接表。
+Connection 自有五条需认证的会话生命周期 Fetch 路由：`GET /api/connection.sessions` 列出登记（设备标签、绑定的证书序列号（如有）与签发、过期、撤销时间，绝无 cookie 值或证书本体）；`POST /api/connection.sessions.revoke` 携带 `{ sessionId }` 撤销一条登记；`POST /api/connection.certificates.revoke` 携带 `{ serial }` 撤销绑定同一证书序列号的全部登记；`POST /api/connection.logout` 撤销调用方自己的会话并令其 cookie 过期；`POST /api/connection.pairing.mint` 携带 `{ ttlMs?, deviceLabel }` 铸造一枚一次性配对令牌，并返回带 `?token=...` 的普通根 URL。配对令牌是 32 字节随机 base64url 密文，同时未消费的至多 5 枚，有效期至多 10 分钟（默认 5 分钟）；`authorizeIndex` 只消费它一次，按铸造时的设备标签登记会话并签发该会话的 cookie。令牌只保存在内存中，不写日志，也不出现在错误消息里。同一认证检查同样把守 `/api/remote.mux` 的 WebSocket 升级，因此被撤销的会话在下次握手时会被拒绝；API Gateway 还会以 WebSocket close code 4401（`session revoked`）关闭该会话已被接受的 mux 连接——语义见 [Gateway README](../../api/gateway/README.zh.md#revocation-disconnects-accepted-mux-connections)。
 
 当部署在 DSH 前面用 Caddy 终止每设备 mTLS 时，会话可以绑定打开它的那台设备的客户端证书。Caddy 用离线设备 CA 校验证书并转发其序列号；DSH 不接触 TLS 握手，只把受信代理传来的序列号头当作采信来源。把 Host Connection 行的 `mtlsClientSerialHeader` 设为该头——`header_up X-DSH-Client-Serial {http.request.tls.client.serial}`——并把 `mtlsTrustedProxies` 设为该代理的远端 socket 地址，Caddy 经本机回环反代时即为 `127.0.0.1`。默认（不配置该头）从不读取序列号头，保持原有仅 cookie 的行为；配置了头却没有受信代理条目会让插件加载失败。DSH 接受 Caddy 的十进制渲染或十六进制，并归一化为小写十六进制后存储。每次令牌交换（进程启动令牌与配对令牌）都把受信序列号绑定到新登记，被绑定的会话只接受受信代理转发相同序列号的请求，因此复制到其他设备上的 cookie 对不再有效。绑定的会话一旦请求中没有受信代理提供的序列号（代理未带头、对端不在列表内、或事后从配置中移除该字段）就会被拒绝，绝不静默退回仅 cookie 模式。撤销按登记或按设备执行：`sessions.revoke` 与 `logout` 各自撤销一条会话，而 `certificates.revoke` 同时作废该序列号及其绑定的全部会话。
 
 认证之前，每个请求仍经过 `src/api-request-trust.ts`。其 `Host` 必须是 loopback，或与 `trustedHosts` 条目匹配：带端口的 `host:port` 精确匹配，不带端口的条目匹配任意端口，两侧均经 WHATWG 归一化。若附带 `Origin`，它必须等于该 Host；`sec-fetch-site: cross-site` 一律拒绝。畸形配置 authority 会让插件加载失败。这些检查防御 DNS rebinding 与跨站浏览器请求，绝不建立身份。Host/Origin 校验失败返回 403；Host 可信但未认证的请求返回 401。`dsh web --host 0.0.0.0` 仍不受支持。决策记录：[浏览器请求信任](../../../.agents/notes/implemented/architecture/2026-07-28-api-browser-trust-boundary.zh.md)与[浏览器令牌认证](../../../.agents/notes/implemented/architecture/2026-08-24-browser-token-authentication.zh.md)。
 
 通过认证的共享 HTTP 请求在传输请求体之前经过 `connection/request` waterfall。监听器可以拒绝新请求，或等待 `next()` 直到响应完成；释放所属 fiber 会移除准入行为。Desktop 使用此扩展点，在已批准的安装期间锁住新的 API 工作，而不取消已接纳的工作。WebSocket 流仍由 API Gateway 负责。
+
+Connection 分发的每个请求——精确 Fetch 路由与共享通道 RPC 拦截器——都在 `ctx.connection.caller.run(callerOf(request), ...)` 内执行：这是一个 AsyncLocalStorage 作用域，保存该请求的调用方身份，包括小写并带端口的 `Host` 头、该头是否为 loopback 主机，以及已验证 cookie 的 `sessionId` 与绑定的 `certificateSerial`（未认证时均为 undefined）。`loopback` 以 `Host` 头为准而不是 socket：经 frp/Caddy 转发的手机流量虽然落在回环 socket 上，Host 却是 FQDN，因此以 Host 为准。处理器用 `ctx.connection.caller.current()` 读取该身份，无需自行解析头。`ctx.connection.callerOf(request)` 为 Connection 不经手的载体（如 WebSocket 升级）推导同一身份；`ctx.connection.onSessionsRevoked(listener)` 在 `sessions.revoke`、`certificates.revoke` 与 `logout` 各自真正撤销会话时报告被撤销的 sessionId 列表——监听器抛错既不影响撤销结果，也不影响其余监听器，返回的 disposer 用于退订。
 
 <a id="connection-generation"></a>
 ## Connection generation
@@ -72,7 +74,7 @@ API Gateway Client 把内部 `$events` 逻辑流注册为唯一 generation sourc
 <a id="known-limitations-and-deferred-work"></a>
 
 - **缓冲型 `/api` 路由会把每个请求体保留在内存里**：`maxRequestBodyBytes`（默认 300 MiB，按默认 200 MiB 图片总量上限经 base64 膨胀加信封余量得出）限制普通图片与 RPC 信封。显式启用的流式路由接收带背压的分块并绕过总量上限；路由实现负责持久化、取消与存储配额。
-- **会话登记只属于单个进程和单个数据目录**：登记不会跨进程或跨设备共享，受信代理报告的序列号除外；共用同一凭据文件的并发进程各自保留 last-write-wins 的登记快照，不做合并。撤销（包括按证书撤销）只在 DSH 自身的检查处生效：被撤销会话中已被接受的 WebSocket mux 连接会继续服务直到断开，因为本包不持有活动连接表；这些检查也不约束宿主机上同用户的其他进程——凭据文件本就对它们可读。
+- **会话登记只属于单个进程和单个数据目录**：登记不会跨进程或跨设备共享，受信代理报告的序列号除外；共用同一凭据文件的并发进程各自保留 last-write-wins 的登记快照，不做合并。撤销（包括按证书撤销）在 DSH 自身的检查处生效：被撤销会话中已被接受的 mux 连接由 API Gateway 以 close code 4401 关闭；这些检查不约束宿主机上同用户的其他进程——凭据文件本就对它们可读。
 
 
 <a id="dev-note"></a>

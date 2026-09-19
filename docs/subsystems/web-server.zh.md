@@ -68,6 +68,22 @@ Host `ctx.connection` shape consumed by transport-independent adapters.
 
 ```ts cordis-catalog
 /**
+ * Derive the caller identity of one request from its Host header and
+ * verified browser cookie.
+ * @param request - request or upgrade headers carrying Host and Cookie.
+ * @returns the caller identity of this request.
+ */
+callerOf(request: ConnectionTrustRequest): ConnectionCaller
+
+/**
+ * Subscribe to browser-session revocations notified by `sessions.revoke`,
+ * `certificates.revoke`, and `logout` with the session ids they revoked.
+ * @param listener - callback receiving the revoked session ids.
+ * @returns disposer removing this listener.
+ */
+onSessionsRevoked(listener: SessionsRevokedListener): () => void
+
+/**
  * Compose exact Fetch routes and the shared-channel RPC interceptor.
  * @param channel - shared channel mounted by Connection.
  * @returns Fetch handler for trusted, authenticated requests.

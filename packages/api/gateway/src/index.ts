@@ -207,8 +207,18 @@ export class TypertGatewayService extends Service implements TypertGateway {
         (endpoint, payload, signal) => this.openWireStream(endpoint, payload, signal),
         this.wireStream.failure,
         resolved.websocketHeartbeatIntervalMs,
+        {
+          callerOf: request => webCtx.connection.callerOf(request),
+          run: (caller, invoke) => webCtx.connection.caller.run(caller, invoke),
+        },
       )
       webCtx.effect(() => {
+        // Revoking a browser session disconnects its already-accepted mux
+        // connections immediately; the next handshake is refused by the
+        // authentication check above.
+        const unsubscribeRevocations = webCtx.connection.onSessionsRevoked((sessionIds) => {
+          mux.closeSessions(sessionIds)
+        })
         const route: WebUpgradeRoute = {
           path: REMOTE_STREAM_MUX_PATH,
           handler: (req, socket, head) => {
@@ -222,6 +232,7 @@ export class TypertGatewayService extends Service implements TypertGateway {
         }
         const unregister = webCtx.webServer.registerUpgrade(route)
         return async () => {
+          unsubscribeRevocations()
           unregister()
           await mux.close()
         }

@@ -3,6 +3,7 @@
 import type { IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
 import WebSocket, { WebSocketServer, type RawData } from 'ws'
+import type { ConnectionCaller } from '@deepseek-ai/dsh-client-connection'
 import {
   parseRemoteStreamClientMessage,
   type RemoteStreamFailure,
@@ -19,12 +20,45 @@ export type RemoteStreamOpener = (
 /** Convert an invocation or carrier failure to a stable wire value. */
 export type RemoteStreamFailureMapper = (error: unknown) => RemoteStreamFailure
 
+/**
+ * Caller identity applied to every Remote invocation on one mux connection.
+ * The Gateway derives it once per connection from the upgrade request and
+ * runs each logical stream's opener inside it. When the composition provides
+ * no Connection service, the mux has no caller scope and keeps the previous
+ * behavior.
+ */
+export interface RemoteStreamMuxCallerScope {
+  /**
+   * Derive one connection's caller identity from its upgrade request.
+   * @param request - authenticated HTTP upgrade request.
+   * @returns the caller identity of this connection.
+   */
+  callerOf(request: IncomingMessage): ConnectionCaller
+
+  /**
+   * Run one invocation inside the caller's identity context.
+   * @param caller - identity of the connection serving this invocation.
+   * @param invoke - opener call to execute.
+   * @returns whatever `invoke` returns.
+   */
+  run<T>(caller: ConnectionCaller, invoke: () => T): T
+}
+
 const MAX_MISSED_HEARTBEATS = 2
+
+/** Termination status and reason applied to mux connections of a revoked session. */
+const SESSION_REVOKED_CLOSE = { code: 4401, reason: 'session revoked' } as const
+
+/** One accepted mux connection and the session identity it was accepted for. */
+interface MuxConnectionEntry {
+  readonly done: Promise<void>
+  readonly sessionId: string | undefined
+}
 
 /** Own the no-server WebSocket acceptor and every active logical stream. */
 export class RemoteStreamMuxServer {
   private readonly server = new WebSocketServer({ noServer: true })
-  private readonly connections = new Set<Promise<void>>()
+  private readonly connections = new Map<RemoteStreamMuxConnection, MuxConnectionEntry>()
   private readonly missedHeartbeats = new WeakMap<WebSocket, number>()
   private heartbeatTimer: NodeJS.Timeout | undefined
 
@@ -32,11 +66,13 @@ export class RemoteStreamMuxServer {
    * @param open - Gateway stream dispatcher.
    * @param failure - Gateway error-to-wire mapper.
    * @param heartbeatIntervalMs - interval between WebSocket Ping control frames.
+   * @param caller - Connection caller scope applied to every invocation, or undefined when no Connection service is mounted.
    */
   constructor(
     private readonly open: RemoteStreamOpener,
     private readonly failure: RemoteStreamFailureMapper,
     private readonly heartbeatIntervalMs: number,
+    private readonly caller?: RemoteStreamMuxCallerScope,
   ) {}
 
   /**
@@ -50,11 +86,26 @@ export class RemoteStreamMuxServer {
       this.missedHeartbeats.set(websocket, 0)
       websocket.on('pong', () => { this.missedHeartbeats.set(websocket, 0) })
       this.startHeartbeat()
-      const connection = new RemoteStreamMuxConnection(websocket, this.open, this.failure)
+      const caller = this.caller?.callerOf(req)
+      const connection = new RemoteStreamMuxConnection(websocket, this.caller, caller, this.open, this.failure)
       const done = connection.run()
-      this.connections.add(done)
-      void done.then(() => { this.connections.delete(done) })
+      this.connections.set(connection, { done, sessionId: caller?.sessionId })
+      void done.then(() => { this.connections.delete(connection) })
     })
+  }
+
+  /**
+   * Close every connection whose session appears in `revoked` with the
+   * `session revoked` status; each connection aborts and settles its logical
+   * streams before its socket closes.
+   * @param revoked - session ids one revocation removed.
+   */
+  closeSessions(revoked: readonly string[]): void {
+    const revokedSessionIds = new Set(revoked)
+    for (const [connection, entry] of this.connections) {
+      if (entry.sessionId === undefined || !revokedSessionIds.has(entry.sessionId)) continue
+      connection.close(SESSION_REVOKED_CLOSE.code, SESSION_REVOKED_CLOSE.reason)
+    }
   }
 
   /** Terminate all sockets and wait until every iterator has returned. */
@@ -68,7 +119,7 @@ export class RemoteStreamMuxServer {
       else closed.reject(error)
     })
     await closed.promise
-    await Promise.all(this.connections)
+    await Promise.all([...this.connections.values()].map(entry => entry.done))
   }
 
   /** Start one `unref()` timer after the first upgrade; it spans empty-client periods until close(). */
@@ -105,9 +156,16 @@ class RemoteStreamMuxConnection {
 
   constructor(
     private readonly socket: WebSocket,
+    private readonly scope: RemoteStreamMuxCallerScope | undefined,
+    private readonly caller: ConnectionCaller | undefined,
     private readonly open: RemoteStreamOpener,
     private readonly failure: RemoteStreamFailureMapper,
   ) {}
+
+  /** Request the closing handshake; logical streams settle when the socket closes. */
+  close(code: number, reason: string): void {
+    this.socket.close(code, reason)
+  }
 
   async run(): Promise<void> {
     const closed = new Promise<void>((resolve) => {
@@ -152,7 +210,21 @@ class RemoteStreamMuxConnection {
     void done.then(remove, remove)
   }
 
-  private async pump(
+  private pump(
+    streamId: string,
+    endpoint: string,
+    payload: unknown,
+    active: ActiveStream,
+  ): Promise<void> {
+    // Every @Remote invocation on this connection — opening and consuming —
+    // runs inside the identity derived from its upgrade request, so business
+    // code reads the caller with `ctx.connection.caller.current()`. The whole
+    // consumption stays inside the scope because an async generator reads the
+    // ambient identity at each resumption, not only at creation.
+    return this.runCaller(() => this.consume(streamId, endpoint, payload, active))
+  }
+
+  private async consume(
     streamId: string,
     endpoint: string,
     payload: unknown,
@@ -175,6 +247,12 @@ class RemoteStreamMuxConnection {
         }
       }
     }
+  }
+
+  /** Run one opener inside the connection's caller identity, or bare without a Connection scope. */
+  private runCaller<T>(invoke: () => T): T {
+    if (this.scope === undefined || this.caller === undefined) return invoke()
+    return this.scope.run(this.caller, invoke)
   }
 
   private send(message: RemoteStreamServerMessage): Promise<void> {

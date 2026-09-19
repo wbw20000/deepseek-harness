@@ -16,14 +16,27 @@
 import { isLoopbackHostname } from './loopback-hostname.ts'
 import type { ConnectionTrustRequest } from './rpc.ts'
 
-function header(headers: ConnectionTrustRequest['headers'], name: string): string | undefined {
+/**
+ * Read one request header as a single string.
+ * @param headers - request headers from either the Fetch or node:http representation.
+ * @param name - lowercase header name.
+ * @returns the header value, or undefined when absent or not a single string.
+ */
+export function requestHeader(
+  headers: ConnectionTrustRequest['headers'],
+  name: string,
+): string | undefined {
   if (headers instanceof Headers) return headers.get(name) ?? undefined
   const value = headers[name]
   return typeof value === 'string' ? value : undefined
 }
 
-/** Normalized URL of a Host-header authority (hostname lowercased, default port stripped, IPv6 bracketed), or undefined when unparsable. */
-function parseAuthority(authority: string): URL | undefined {
+/**
+ * Normalized URL of a Host-header authority (hostname lowercased, default port stripped, IPv6 bracketed).
+ * @param authority - raw `host[:port]` authority as carried on the wire.
+ * @returns the parsed authority URL, or undefined when unparsable.
+ */
+export function parseAuthority(authority: string): URL | undefined {
   try {
     // http: is a WHATWG "special scheme": parsing yields a non-empty hostname or throws.
     return new URL(`http://${authority}`)
@@ -96,19 +109,19 @@ export function isTrustedApiRequest(request: ConnectionTrustRequest, trustedHost
   // (images and navigations) arrives with neither Origin nor
   // Fetch-Metadata, indistinguishable from curl, and its response is readable
   // by the rebound page.
-  const host = header(request.headers, 'host')
+  const host = requestHeader(request.headers, 'host')
   if (host === undefined) return false
   const hostUrl = parseAuthority(host)
   if (hostUrl === undefined) return false
   if (!isLoopbackHostname(hostUrl.hostname) && !isTrustedAuthority(hostUrl, trustedHosts)) return false
   // Cross-site fence: modern browsers label the initiator relationship on
   // every fetch; an explicit cross-site marker is refused regardless of Origin.
-  if (header(request.headers, 'sec-fetch-site') === 'cross-site') return false
+  if (requestHeader(request.headers, 'sec-fetch-site') === 'cross-site') return false
   // Origin fence: when a browser attaches an Origin it must be exactly this
   // authority (compared through the same normalization as the Host). Absent
   // Origin is fine — the Host fence above already bound the request. The
   // literal "null" (sandboxed iframes, file: pages) is an opaque origin, refused.
-  const origin = header(request.headers, 'origin')
+  const origin = requestHeader(request.headers, 'origin')
   if (origin === undefined) return true
   try {
     return new URL(origin).host === hostUrl.host

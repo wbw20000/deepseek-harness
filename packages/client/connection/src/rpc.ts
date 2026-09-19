@@ -168,12 +168,76 @@ export interface HostConnectionRpc {
   ): () => Promise<void>
 }
 
+/** Listener notified with the session ids one browser-session revocation removed. */
+export type SessionsRevokedListener = (sessionIds: readonly string[]) => void
+
+/**
+ * Identity of one caller as derived from the request or upgrade that carried
+ * it. `host` is the wire-visible authority; `sessionId` and
+ * `certificateSerial` exist only after Connection verified the browser cookie
+ * against the session registry.
+ */
+export interface ConnectionCaller {
+  /** Registered browser session named by the verified cookie, or undefined when the request is unauthenticated. */
+  readonly sessionId: string | undefined
+  /** Raw `Host` header value lowercased, including an explicit port; empty when the request carries none. */
+  readonly host: string
+  /**
+   * Whether the `Host` header names a loopback host. Phone traffic through
+   * frp/Caddy arrives on a loopback socket but names an FQDN, so the Host
+   * header decides, not the socket.
+   */
+  readonly loopback: boolean
+  /** Lowercase hexadecimal serial bound to the presented session, or undefined when unbound or unauthenticated. */
+  readonly certificateSerial: string | undefined
+}
+
+/**
+ * Structural view of the ambient caller scope Host adapters read. The Host
+ * implementation is `ConnectionCallerContext` (AsyncLocalStorage) in
+ * `caller-context.ts`, which stays host-only because this face compiles for
+ * the browser too.
+ */
+export interface ConnectionCallerScope {
+  /**
+   * Run one handler with `caller` as the ambient identity for its whole async chain.
+   * @param caller - identity visible to the handler and everything it awaits.
+   * @param fn - handler to execute.
+   * @returns whatever `fn` returns.
+   */
+  run<T>(caller: ConnectionCaller, fn: () => T): T
+
+  /**
+   * Read the ambient caller identity.
+   * @returns the identity installed by the enclosing `run`, or undefined when called outside any scope.
+   */
+  current(): ConnectionCaller | undefined
+}
+
 /** Host `ctx.connection` shape consumed by transport-independent adapters. */
 export interface HostConnectionHandle {
   /** Generic RPC channel registry. */
   readonly rpc: HostConnectionRpc
   /** Exact Fetch routes for streaming or browser-native responses. */
   readonly fetch: HostConnectionFetch
+  /** Ambient caller identity installed around every request and stream dispatch. */
+  readonly caller: ConnectionCallerScope
+
+  /**
+   * Derive the caller identity of one request from its Host header and
+   * verified browser cookie.
+   * @param request - request or upgrade headers carrying Host and Cookie.
+   * @returns the caller identity of this request.
+   */
+  callerOf(request: ConnectionTrustRequest): ConnectionCaller
+
+  /**
+   * Subscribe to browser-session revocations notified by `sessions.revoke`,
+   * `certificates.revoke`, and `logout` with the session ids they revoked.
+   * @param listener - callback receiving the revoked session ids.
+   * @returns disposer removing this listener.
+   */
+  onSessionsRevoked(listener: SessionsRevokedListener): () => void
 
   /**
    * Compose exact Fetch routes and the shared-channel RPC interceptor.

@@ -760,6 +760,23 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [],
       },
       {
+        signature: 'readonly caller: ConnectionCallerScope',
+        description: 'Ambient caller identity installed around every request and stream dispatch.',
+        parameters: [],
+      },
+      {
+        signature: 'callerOf(request: ConnectionTrustRequest): ConnectionCaller',
+        description: 'Derive the caller identity of one request from its Host header and verified browser cookie.',
+        parameters: [{ name: 'request', description: 'request or upgrade headers carrying Host and Cookie.' }],
+        returns: 'the caller identity of this request.',
+      },
+      {
+        signature: 'onSessionsRevoked(listener: SessionsRevokedListener): () => void',
+        description: 'Subscribe to browser-session revocations notified by `sessions.revoke`, `certificates.revoke`, and `logout` with the session ids they revoked.',
+        parameters: [{ name: 'listener', description: 'callback receiving the revoked session ids.' }],
+        returns: 'disposer removing this listener.',
+      },
+      {
         signature: 'createSharedFetchHandler(channel: \'/api\'): ConnectionFetchHandler',
         description: 'Compose exact Fetch routes and the shared-channel RPC interceptor.',
         parameters: [{ name: 'channel', description: 'shared channel mounted by Connection.' }],
@@ -4628,6 +4645,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface ConfirmationCard {\n    readonly taskId: string;\n    readonly taskAndGoal: string;\n    readonly acceptanceCases: readonly RequiredCase[];\n    readonly manualCases: readonly string[];\n    readonly planningAuthorized: boolean;\n    readonly suggestedBudgetBasis: string;\n    readonly stableBaselineDigest?: string;\n    readonly allowedModificationScope: readonly string[];\n    readonly budget: CardBudget;\n    readonly consumedBudget: {\n        readonly rounds: number;\n        readonly timeMs: number;\n    };\n    readonly costLimits: string;\n}',
   },
   {
+    name: 'ConnectionCaller',
+    declaration: 'export interface ConnectionCaller {\n    readonly sessionId: string | undefined;\n    readonly host: string;\n    readonly loopback: boolean;\n    readonly certificateSerial: string | undefined;\n}',
+  },
+  {
+    name: 'ConnectionCallerScope',
+    declaration: 'export interface ConnectionCallerScope {\n    run<T>(caller: ConnectionCaller, fn: () => T): T;\n    current(): ConnectionCaller | undefined;\n}',
+  },
+  {
     name: 'ConnectionFetchHandler',
     declaration: 'export interface ConnectionFetchHandler {\n    requestBodyMode(request: {\n        readonly method: string;\n        readonly url: URL;\n    }): ConnectionRequestBodyMode;\n    fetch(request: Request): Promise<Response>;\n}',
   },
@@ -6466,6 +6491,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SessionSeqCursor',
     declaration: 'export type SessionSeqCursor = SessionSeq | -1;',
+  },
+  {
+    name: 'SessionsRevokedListener',
+    declaration: 'export type SessionsRevokedListener = (sessionIds: readonly string[]) => void;',
   },
   {
     name: 'SessionStartSource',
