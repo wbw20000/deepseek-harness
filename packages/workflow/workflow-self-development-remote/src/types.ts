@@ -111,6 +111,27 @@ export interface BudgetApprovalInput {
   readonly approvedBy: string
 }
 
+/**
+ * One unified self-development notification event, in the events consumer's
+ * title-level projection: fixed-template titles with round numbers and
+ * closed-vocabulary reasons only — never the journal's free-text failure
+ * reasons, handoff details, or requirement text.
+ */
+export interface RecentEvent {
+  /** Task the event belongs to. */
+  readonly taskId: string
+  /** What the human should notice. */
+  readonly kind: 'turn-finished' | 'failed' | 'awaiting-decision' | 'awaiting-trial' | 'stopped'
+  /** Owning chat session; absent for self-development tasks. */
+  readonly sessionId?: string
+  /** Fixed-template summary chosen by the events mapping. */
+  readonly title: string
+  /** Host-clock milliseconds when the durable commit was observed. */
+  readonly occurredAt: number
+  /** Task projection revision after the commit that produced the event. */
+  readonly revision: number
+}
+
 /** One listed task row for progress views. */
 export interface TaskSummary {
   /** Task identity. */
@@ -272,6 +293,12 @@ export interface RemoteRunAttemptOutcome {
   readonly evidencePath?: string
   /** Why the outcome file could not be written; absent when it was recorded. */
   readonly outcomeWriteError?: { readonly code: string; readonly message: string }
+  /**
+   * The experiment worktree the launched attempt runs in, as accepted by this
+   * facade's request validation; absent on a replay, where this process never
+   * saw the launch.
+   */
+  readonly worktree?: string
   /** Operation id the facade generated for this launch. */
   readonly operationId: string
 }

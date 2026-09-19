@@ -1,0 +1,215 @@
+/* Self-development panel: list, card, forms, and timeline, over --dsw-* tokens only. */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dsw-space-4, 16px);
+  padding: var(--dsw-space-3, 12px);
+  min-width: 0;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--dsw-space-2, 8px);
+}
+
+.heading {
+  margin: 0;
+  font-size: var(--dsw-font-size-md, 14px);
+  font-weight: 600;
+  color: var(--dsw-text-primary, inherit);
+}
+
+.statusLine {
+  margin: 0;
+  color: var(--dsw-text-secondary, inherit);
+  font-size: var(--dsw-font-size-sm, 12px);
+}
+
+.errorLine {
+  margin: 0;
+  color: var(--dsw-text-danger, inherit);
+  font-size: var(--dsw-font-size-sm, 12px);
+}
+
+.taskList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dsw-space-1, 4px);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.taskButton {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: var(--dsw-space-2, 8px);
+  width: 100%;
+  text-align: left;
+}
+
+.taskTitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.taskBadge {
+  color: var(--dsw-text-secondary, inherit);
+  font-size: var(--dsw-font-size-sm, 12px);
+}
+
+.taskRevision {
+  color: var(--dsw-text-secondary, inherit);
+  font-size: var(--dsw-font-size-sm, 12px);
+}
+
+.card,
+.projection,
+.timeline,
+.form,
+.trial {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dsw-space-2, 8px);
+  padding: var(--dsw-space-3, 12px);
+  border: 1px solid var(--dsw-border-primary, transparent);
+  border-radius: var(--dsw-corner-md, 8px);
+}
+
+.cardHeading {
+  margin: 0;
+  font-size: var(--dsw-font-size-sm, 12px);
+  font-weight: 600;
+  color: var(--dsw-text-secondary, inherit);
+}
+
+.field,
+.fieldRow {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.fieldLabel {
+  color: var(--dsw-text-secondary, inherit);
+  font-size: var(--dsw-font-size-sm, 12px);
+}
+
+.fieldValue {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.budgetMode {
+  font-weight: 600;
+}
+
+.budgetRow {
+  display: block;
+}
+
+.caseList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dsw-space-1, 4px);
+  margin: 0;
+  padding: 0 0 0 var(--dsw-space-4, 16px);
+}
+
+.caseRow {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.caseId {
+  font-weight: 600;
+}
+
+.caseRequirement,
+.caseAssertions {
+  color: var(--dsw-text-secondary, inherit);
+  font-size: var(--dsw-font-size-sm, 12px);
+  overflow-wrap: anywhere;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--dsw-space-2, 8px);
+}
+
+.formRow {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.formLabel {
+  color: var(--dsw-text-secondary, inherit);
+  font-size: var(--dsw-font-size-sm, 12px);
+}
+
+.echo {
+  color: var(--dsw-text-secondary, inherit);
+  font-size: var(--dsw-font-size-sm, 12px);
+  overflow-wrap: anywhere;
+}
+
+.timelineList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dsw-space-2, 8px);
+  margin: 0;
+  padding: 0 0 0 var(--dsw-space-4, 16px);
+}
+
+.timelineRow {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.timelineKind {
+  font-weight: 600;
+}
+
+.timelineTitle {
+  overflow-wrap: anywhere;
+}
+
+.timelineMeta {
+  color: var(--dsw-text-secondary, inherit);
+  font-size: var(--dsw-font-size-sm, 12px);
+  overflow-wrap: anywhere;
+}
+
+/* Narrow screens: the panel collapses to one column and the task row drops
+   its revision so the list stays readable at 480px and below. */
+@media (max-width: 480px) {
+  .panel {
+    padding: var(--dsw-space-2, 8px);
+  }
+
+  .taskButton {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .taskRevision {
+    display: none;
+  }
+
+  .card,
+  .projection,
+  .timeline,
+  .form,
+  .trial {
+    padding: var(--dsw-space-2, 8px);
+  }
+}

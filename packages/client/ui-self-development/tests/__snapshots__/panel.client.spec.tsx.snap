@@ -1,0 +1,51 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`SelfDevelopmentPanel > keeps the panel single-column at 480px through the stylesheet media query 1`] = `
+<div
+  class="_panel_b4b0d9"
+  data-enabled="true"
+>
+  <header
+    class="_header_b4b0d9"
+  >
+    <h2
+      class="_heading_b4b0d9"
+    >
+      Self-development tasks
+    </h2>
+    <button
+      class="_button_4d2f85 _ghost_4d2f85 _sm_4d2f85"
+      type="button"
+    >
+      Reload
+    </button>
+  </header>
+  <ul
+    aria-label="Self-development task list"
+    class="_taskList_b4b0d9"
+  />
+  <p
+    class="_statusLine_b4b0d9"
+  >
+    Loading tasks…
+  </p>
+  <section
+    aria-label="Per-round evidence"
+    class="_timeline_b4b0d9"
+  >
+    <h3
+      class="_cardHeading_b4b0d9"
+    >
+      Per-round evidence
+    </h3>
+    <p
+      class="_statusLine_b4b0d9"
+    >
+      No round events yet
+    </p>
+    <ol
+      class="_timelineList_b4b0d9"
+    />
+  </section>
+</div>
+`;

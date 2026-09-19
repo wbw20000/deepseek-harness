@@ -193,6 +193,14 @@ Stable-side Remote facade. The supervised runner is optional: every method that 
 @Remote('getTask') async getTask(taskId: string): Promise<TaskDetail>
 
 /**
+ * Read the retained recent self-development notification events.
+ * @returns the events consumer's title-level buffer, oldest first; `[]` when
+ *   the events consumer plugin is not loaded in this context.
+ * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED` while the facade is disabled.
+ */
+@Remote('recentEvents') async recentEvents(): Promise<readonly RecentEvent[]>
+
+/**
  * Create one task from a TaskSpec. The actor is the spec's `createdBy`
  * field; it is checked against `allowedActors` when that list is non-empty.
  * @param spec - TaskSpec in wire form.

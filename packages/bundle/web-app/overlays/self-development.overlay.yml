@@ -1,0 +1,50 @@
+# Loader overlay for the self-development experiment: `dsh web --patch
+# packages/bundle/web-app/overlays/self-development.overlay.yml`. Without this
+# patch the default web bundle carries no self-development surface at all.
+#
+# Applying it enables the whole seam at once — the host task-control service,
+# the supervised runner, the notification consumer, the stable-side Remote
+# facade, and the browser panel row — so the tab and the services it calls live
+# and die together. Every path below is a placeholder a deployment must
+# replace; every package's README owns the full field semantics.
+- insert:
+    # Core task-control service: owns the private control directory and the
+    # task journals. Every journal bound is a measured deployment value.
+    - id: workflow-self-development
+      name: '@deepseek-ai/dsh-workflow-self-development'
+      config:
+        controlDirectory: /absolute/path/to/self-development/control
+        maxRecordsPerSegment: 100
+        checkpointInterval: 10
+
+    # Supervised runner: executes attempts. Every field is required.
+    - id: workflow-self-development-runner
+      name: '@deepseek-ai/dsh-workflow-self-development-runner'
+      config:
+        nodeBinary: /absolute/path/to/node
+        dshBin: /absolute/path/to/apps/cli/lib/bin.js
+        dshHome: /absolute/path/to/self-development/dsh-home
+        experimentsRoot: /absolute/path/to/self-development/experiments
+        evidenceRoot: /absolute/path/to/self-development/evidence
+        killGraceMs: 5000
+
+    # Notification consumer: folds committed events into the unified
+    # notification event and keeps the recent buffer `recentEvents` reads.
+    # `localNotificationCommand` stays unset, so no command ever spawns.
+    - id: workflow-self-development-events
+      name: '@deepseek-ai/dsh-workflow-self-development-events'
+      config:
+        recentLimit: 200
+
+    # Stable-side Remote facade the browser panel calls. `enabled: false`
+    # refuses every method, so the row alone enables nothing.
+    - id: workflow-self-development-remote
+      name: '@deepseek-ai/dsh-workflow-self-development-remote'
+      config:
+        enabled: true
+        allowedActors: []
+        controlDirectory: /absolute/path/to/self-development/control
+
+    # Browser panel row: one right-Sidebar tab plus one Settings section.
+    - id: ui-self-development
+      name: '@deepseek-ai/dsh-client-ui-self-development'

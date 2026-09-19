@@ -870,6 +870,7 @@ export const TYPE_LINK_EXEMPTIONS: Readonly<Record<string, string>> = {
   IntegrationResult: 'one serialized integration outcome is owned by packages/workflow/workflow-self-development-workspaces/README.md',
   TaskOperationResult: 'core task operation result is owned by packages/workflow/workflow-self-development/README.md',
   TaskSummary: 'progress row view is owned by packages/workflow/workflow-self-development-remote/README.md',
+  RecentEvent: 'recent notification event wire view is owned by packages/workflow/workflow-self-development-remote/README.md',
   TaskDetail: 'projection-plus-card view is owned by packages/workflow/workflow-self-development-remote/README.md',
   RemoteTaskProjection: 'JSON-safe task projection view is owned by packages/workflow/workflow-self-development-remote/README.md',
   ConfirmationCard: 'human-review confirmation card view is owned by packages/workflow/workflow-self-development-remote/README.md',

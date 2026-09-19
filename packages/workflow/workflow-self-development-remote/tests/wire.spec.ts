@@ -15,8 +15,9 @@ import {
   TestPlanDigest,
   TestPlanVersion,
 } from '@deepseek-ai/dsh-workflow-self-development'
-import { toWireOutcome, toWireProjection } from '../src/wire.ts'
+import { toWireEvent, toWireOutcome, toWireProjection } from '../src/wire.ts'
 import type { SupervisedAttemptOutcome } from '@deepseek-ai/dsh-workflow-self-development-runner'
+import type { SelfDevelopmentEvent } from '@deepseek-ai/dsh-workflow-self-development-events'
 import type { TaskProjection } from '@deepseek-ai/dsh-workflow-self-development'
 
 /** A projection that fills every field, including every normally-absent one. */
@@ -125,11 +126,12 @@ describe('toWireOutcome', () => {
       evidencePath: '/evidence/attempts/attempt-2.json',
       outcomeWriteError: { code: 'EACCES', message: 'denied' },
     }
-    expect(toWireOutcome(outcome, 'op-1')).toEqual({
+    expect(toWireOutcome(outcome, 'op-1', '/experiments/wt-2')).toEqual({
       operation: { revision: 6, replayed: false },
       attemptId: 'attempt-2',
       evidencePath: '/evidence/attempts/attempt-2.json',
       outcomeWriteError: { code: 'EACCES', message: 'denied' },
+      worktree: '/experiments/wt-2',
       operationId: 'op-1',
     })
   })
@@ -141,9 +143,48 @@ describe('toWireOutcome', () => {
       evidencePath: undefined,
       outcomeWriteError: undefined,
     }
-    expect(toWireOutcome(outcome, 'op-2')).toEqual({
+    expect(toWireOutcome(outcome, 'op-2', undefined)).toEqual({
       operation: { revision: 4, replayed: true },
       operationId: 'op-2',
+    })
+  })
+})
+
+describe('toWireEvent', () => {
+  it('keeps the title-level fields and drops the always-undefined session id', () => {
+    const event: SelfDevelopmentEvent = {
+      taskId: 'task-1',
+      kind: 'awaiting-decision',
+      sessionId: undefined,
+      title: 'Plan drafted, awaiting confirmation',
+      occurredAt: 1_700_000_000_000,
+      revision: 3,
+    }
+    expect(toWireEvent(event)).toEqual({
+      taskId: 'task-1',
+      kind: 'awaiting-decision',
+      title: 'Plan drafted, awaiting confirmation',
+      occurredAt: 1_700_000_000_000,
+      revision: 3,
+    })
+  })
+
+  it('keeps a session id when the producer carries one', () => {
+    const event: SelfDevelopmentEvent = {
+      taskId: 'task-1',
+      kind: 'failed',
+      sessionId: 'chat-7',
+      title: 'Round 2 failed',
+      occurredAt: 1_700_000_060_000,
+      revision: 5,
+    }
+    expect(toWireEvent(event)).toEqual({
+      taskId: 'task-1',
+      kind: 'failed',
+      sessionId: 'chat-7',
+      title: 'Round 2 failed',
+      occurredAt: 1_700_000_060_000,
+      revision: 5,
     })
   })
 })

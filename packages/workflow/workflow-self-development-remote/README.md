@@ -51,6 +51,7 @@ Every method below is a `@Remote` method. Ordinary chat messages never reach the
 |---|---|---|
 | `listTasks()` | read-only | Scans `<controlDirectory>/tasks/*` and returns one row per task: `taskId`, `status`, `revision`, and `title` (the first 80 characters of the requirement). Returns `[]` before the first task exists; journal directories are never created by this read. |
 | `getTask(taskId)` | read-only | Returns the task's `TaskProjection` plus `card`, the read-only confirmation-card view described below. Refuses with `SELF_DEV_REMOTE_TASK_UNKNOWN` when the task has no journal yet. |
+| `recentEvents()` | read-only | Returns the events consumer's title-level notification buffer, oldest first; `[]` when the events consumer plugin is not loaded. |
 | `createTask(spec, expectedRevision)` | `createTask` | Creates the task from the TaskSpec wire form. The actor is `spec.createdBy`. Returns the facade-generated `operationId`. |
 | `authorizePlanning(taskId, expectedRevision, authorizedBy)` | `authorizePlanning` | Grants the separate planning authorization; it never approves development and consumes no round. |
 | `submitPlanDraft(taskId, expectedRevision, draft)` | `submitPlanDraft` | Submits a drafted plan for human confirmation. |

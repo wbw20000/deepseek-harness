@@ -169,6 +169,9 @@ const packageFileExtras: Readonly<Record<string, readonly string[]>> = {
   '@deepseek-ai/dsh-experimental-inspector': ['lib/worker.js'],
   // The shipped preset compositions travel inside the roster package.
   '@deepseek-ai/dsh-agent-presets': ['presets'],
+  // The opt-in self-development overlay ships beside the default patch; the
+  // package README's enable step points `dsh web --patch` at it.
+  '@deepseek-ai/dsh-web-app': ['overlays/self-development.overlay.yml'],
   // The Web Host mounts the default-off settings owner independently of each
   // Agent-scoped delegation-tool instance.
   '@deepseek-ai/dsh-tool-subagent': ['lib/model-selection-settings.js'],

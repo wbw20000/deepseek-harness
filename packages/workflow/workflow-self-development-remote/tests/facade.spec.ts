@@ -12,6 +12,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { SelfDevelopmentTasks, TaskSpecVersion, TestPlanVersion } from '@deepseek-ai/dsh-workflow-self-development'
+import SelfDevelopmentEvents from '@deepseek-ai/dsh-workflow-self-development-events'
 import SelfDevelopmentRemote from '../src/index.ts'
 import type { RemoteRunAttemptRequest } from '../src/types.ts'
 import { makeEnvironment } from './helpers.ts'
@@ -65,6 +66,8 @@ afterEach(async () => {
 async function makeFacade(options: {
   readonly enabled?: boolean
   readonly allowedActors?: string[]
+  /** Load the real events consumer alongside the facade. */
+  readonly withEvents?: boolean
 } = {}): Promise<SelfDevelopmentRemote> {
   const env = await makeEnvironment()
   root = env.base
@@ -74,6 +77,7 @@ async function makeFacade(options: {
     maxRecordsPerSegment: 100,
     checkpointInterval: 10,
   })
+  if (options.withEvents === true) new SelfDevelopmentEvents(context, {})
   return new SelfDevelopmentRemote(context, {
     enabled: options.enabled ?? true,
     allowedActors: options.allowedActors ?? [],
@@ -120,6 +124,7 @@ describe('disabled switch', () => {
       presenceAcknowledged: true,
     })).rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_DISABLED' })
     await expect(facade.activeTasks()).rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_DISABLED' })
+    await expect(facade.recentEvents()).rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_DISABLED' })
   })
 })
 
@@ -202,6 +207,29 @@ describe('missing runner', () => {
       presenceAcknowledged: true,
     })).rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_RUNNER_UNAVAILABLE' })
     await expect(facade.activeTasks()).resolves.toEqual([])
+  })
+})
+
+describe('recent events', () => {
+  it('returns an empty buffer when the events consumer plugin is not loaded', async () => {
+    const facade = await makeFacade()
+    await expect(facade.recentEvents()).resolves.toEqual([])
+  })
+
+  it('returns the events consumer\'s title-level buffer after a plan draft commit', async () => {
+    const facade = await makeFacade({ withEvents: true })
+    await facade.createTask(SPEC, 0)
+    await facade.authorizePlanning(TASK_ID, 1, 'tester')
+    await facade.submitPlanDraft(TASK_ID, 2, DRAFT)
+    const events = await facade.recentEvents()
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({
+      taskId: TASK_ID,
+      kind: 'awaiting-decision',
+      title: 'Plan drafted, awaiting confirmation',
+      revision: 3,
+    })
+    expect(typeof events[0]?.occurredAt).toBe('number')
   })
 })
 
