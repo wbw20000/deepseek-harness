@@ -131,6 +131,7 @@ export const SERVICE_PAGE: Record<string, string> = {
   workflowEngine: 'workflow.md',
   selfDevelopmentTasks: 'workflow.md',
   selfDevelopmentRunner: 'workflow.md',
+  selfDevelopmentWorkspaces: 'workflow.md',
   webhookRuntime: 'webhook.md',
   workspaceRegistry: 'workspace.md',
   workspaceController: 'workspace.md',
@@ -856,6 +857,10 @@ export const TYPE_LINK_EXEMPTIONS: Readonly<Record<string, string>> = {
   AttemptEvidence: 'stable-side attempt evidence record is owned by packages/workflow/workflow-self-development-runner/README.md',
   SupervisedAttemptRequest: 'one supervised attempt request is owned by packages/workflow/workflow-self-development-runner/README.md',
   SupervisedAttemptOutcome: 'one supervised attempt outcome is owned by packages/workflow/workflow-self-development-runner/README.md',
+  TaskWorkspace: 'one allocated task workspace is owned by packages/workflow/workflow-self-development-workspaces/README.md',
+  AllocateRequest: 'one workspace allocation request is owned by packages/workflow/workflow-self-development-workspaces/README.md',
+  IntegrationRequest: 'one serialized integration request is owned by packages/workflow/workflow-self-development-workspaces/README.md',
+  IntegrationResult: 'one serialized integration outcome is owned by packages/workflow/workflow-self-development-workspaces/README.md',
   TaskOperationResult: 'core task operation result is owned by packages/workflow/workflow-self-development/README.md',
 }
 

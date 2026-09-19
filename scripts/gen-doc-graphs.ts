@@ -556,6 +556,13 @@ const SERVICE_ROLES: ServiceRole[] = [
     note: 'Opt-in supervised-mode runner: host clock, human-presence evidence, headless executor, and independent acceptor; it registers no tool, prompt, or event and enables no unattended execution.',
   },
   {
+    key: 'selfDevelopmentWorkspaces',
+    pkg: 'workflow-self-development-workspaces',
+    title: 'Self-development workspaces',
+    mode: 'core',
+    note: 'Opt-in per-task workspace allocation: one git worktree, branch, and copied data home per task under a durable registry, and serialized fast-forward integration back to the project baseline; directory separation, not a sandbox.',
+  },
+  {
     key: 'ssh',
     pkg: 'ssh',
     title: 'POSIX SSH connection owner',

@@ -12465,6 +12465,19 @@ importers:
         specifier: workspace:^
         version: link:../../llm/llm
 
+  packages/workflow/workflow-self-development-workspaces:
+    dependencies:
+      '@deepseek-ai/schemastery':
+        specifier: link:../../../vendor/schemastery
+        version: link:../../../vendor/schemastery
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-llm':
+        specifier: workspace:^
+        version: link:../../llm/llm
+
   packages/workspace/workspace:
     dependencies:
       '@deepseek-ai/dsh-brand':

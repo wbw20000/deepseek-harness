@@ -129,7 +129,7 @@ interface WorkflowRun {
 
 ## 自开发任务控制与有人监督的 runner
 
-workflow 组还拥有脚本 seam 之外的可选自开发组合。[dsh-workflow-self-development](../../packages/workflow/workflow-self-development/README.zh.md) 在私有控制目录中为每个任务拥有一条持久生命周期——版本化 spec、冻结测试计划、人工预算批准、已验证尝试结果、试用批准——并为每个任务缓存一个串行化控制器。[dsh-workflow-self-development-runner](../../packages/workflow/workflow-self-development-runner/README.zh.md) 针对该控制器组合一次有人监督的尝试：受信时钟、人工在场证据、操作绑定的启动记录、headless 执行器、独立验收器，以及带终局结果的持久尝试证据。每次启动都要求一条已记录的人工确认和有限预算；这对包提供的是带明确记录限制的有人监督测试，绝不是无人值守运行。两个服务都以 `ctx.selfDevelopmentTasks` 与 `ctx.selfDevelopmentRunner` 出现在 [Cordis API](#cordis-surface) 中。
+workflow 组还拥有脚本 seam 之外的可选自开发组合。[dsh-workflow-self-development](../../packages/workflow/workflow-self-development/README.zh.md) 在私有控制目录中为每个任务拥有一条持久生命周期——版本化 spec、冻结测试计划、人工预算批准、已验证尝试结果、试用批准——并为每个任务缓存一个串行化控制器。[dsh-workflow-self-development-runner](../../packages/workflow/workflow-self-development-runner/README.zh.md) 针对该控制器组合一次有人监督的尝试：受信时钟、人工在场证据、操作绑定的启动记录、headless 执行器、独立验收器，以及带终局结果的持久尝试证据。每次启动都要求一条已记录的人工确认和有限预算；这对包提供的是带明确记录限制的有人监督测试，绝不是无人值守运行。第三个可选兄弟包 [dsh-workflow-self-development-workspaces](../../packages/workflow/workflow-self-development-workspaces/README.zh.md) 在持久登记文件下为每个任务分配一个 git worktree、分支与复制的数据目录，并把完成的任务分支串行集成回项目基线。每次启动都要求一条已记录的人工确认和有限预算；这三个包提供的是带明确记录限制的有人监督测试，绝不是无人值守运行。三个服务都以 `ctx.selfDevelopmentTasks`、`ctx.selfDevelopmentRunner` 与 `ctx.selfDevelopmentWorkspaces` 出现在 [Cordis API](#cordis-surface) 中。
 
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
@@ -227,6 +227,64 @@ isJournalHandoff(error: unknown): boolean
 ```
 
 Source: [`packages/workflow/workflow-self-development/src/index.ts`](../../packages/workflow/workflow-self-development/src/index.ts)
+
+<a id="ctxselfdevelopmentworkspaces--selfdevelopmentworkspaces"></a>
+
+### `ctx.selfDevelopmentWorkspaces` — `SelfDevelopmentWorkspaces`
+
+Cordis service composing workspace allocation, release, and serialized integration.
+
+```ts cordis-catalog
+/**
+ * Allocate the workspace for one task, or return the workspace a previous
+ * allocation registered for the same task id. Allocation is refused — not
+ * queued — once the configured concurrency limit is reached, because a
+ * queued task behind live worktrees would not run in parallel. Allocations
+ * and releases against one experiments root serialize in memory, so the
+ * limit check and the registry write are exact within this process; across
+ * processes the deployment keeps one writer per experiments root.
+ * @param req - task id, project root, and optional baseline commit.
+ * @returns the task's workspace record.
+ * @throws SelfDevelopmentWorkspacesError with the codes documented on
+ *   {@link allocateWorkspace}.
+ */
+allocate(req: AllocateRequest): Promise<TaskWorkspace>
+
+/**
+ * Release one task's workspace: remove its worktree, delete its data home,
+ * and drop the registry entry. Only registered paths are touched.
+ * @param taskId - the task whose workspace is released.
+ * @throws SelfDevelopmentWorkspacesError with the codes documented on
+ *   {@link releaseWorkspace}.
+ */
+release(taskId: string): Promise<void>
+
+/**
+ * List the currently allocated workspaces from the durable registry.
+ * @returns the registry's workspace records; later allocation changes are
+ *   not reflected in a returned snapshot.
+ * @throws SelfDevelopmentWorkspacesError with `SELF_DEV_WORKSPACE_REGISTRY_INVALID` when
+ *   the registry file cannot be read or parsed.
+ */
+async list(): Promise<readonly TaskWorkspace[]>
+
+/**
+ * Integrate one allocated task's worktree into a project branch. Calls on
+ * one service instance serialize in memory; calls across processes
+ * serialize on the experiments root's integration lock. Git failures inside
+ * the integration are reported as a `failed` result, never thrown.
+ * @param req - task id, target branch, and actor.
+ * @returns the integration outcome.
+ * @throws SelfDevelopmentWorkspacesError with `SELF_DEV_WORKSPACE_TASK_UNKNOWN` when the
+ *   task has no allocated workspace, and with `SELF_DEV_WORKSPACE_INTEGRATION_BUSY`
+ *   when a live cross-process lock holder does not release in time. The
+ *   in-memory chain itself has no busy bound: a call waits indefinitely
+ *   behind a serialized callback that never settles.
+ */
+integrate(req: IntegrationRequest): Promise<IntegrationResult>
+```
+
+Source: [`packages/workflow/workflow-self-development-workspaces/src/index.ts`](../../packages/workflow/workflow-self-development-workspaces/src/index.ts)
 
 <a id="ctxworkflowengine--workflowengine-abstract-seam"></a>
 
