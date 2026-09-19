@@ -79,6 +79,13 @@ export type RpcMessage = ClientRequest | ServerResponse
 export interface ConnectionTrustRequest {
   /** Request headers supplied by either the Fetch or node:http representation. */
   readonly headers: Headers | Readonly<Record<string, string | readonly string[] | undefined>>
+  /**
+   * Remote socket address of the request, when the carrier reports it; a
+   * node:http `IncomingMessage` passed directly exposes the same address on
+   * its `socket`. Consumed only by the client-certificate serial
+   * trusted-proxy check (`client-certificate.ts`).
+   */
+  readonly remoteAddress?: string | undefined
 }
 
 /** HTTP status returned before dispatch, or undefined when the request may proceed. */

@@ -10,6 +10,7 @@ import {
   API_PATH,
   apply,
   inject,
+  CERTIFICATES_REVOKE_ROUTE_PATH,
   LOGOUT_ROUTE_PATH,
   PAIRING_MINT_ROUTE_PATH,
   SESSIONS_REVOKE_ROUTE_PATH,
@@ -42,9 +43,18 @@ function fakeHttpServer(
 }
 
 /** Bodyless request carrying the given headers (enough for the trust fence + bridge). */
-function fakeRequest(headers: Record<string, string>, url = `${API_PATH}/x`): IncomingMessage {
+function fakeRequest(
+  headers: Record<string, string>,
+  url = `${API_PATH}/x`,
+  remoteAddress?: string,
+): IncomingMessage {
   const request = Readable.from([]) as unknown as IncomingMessage
-  Object.assign(request, { url, method: 'GET', headers })
+  Object.assign(request, {
+    url,
+    method: 'GET',
+    headers,
+    ...(remoteAddress === undefined ? {} : { remoteAddress }),
+  })
   return request
 }
 
@@ -109,11 +119,18 @@ async function mounted(config?: ConnectionConfig): Promise<{
 }
 
 /** Exchange a service's process token for one authority-bound Cookie header. */
-function browserCookie(connection: HostConnectionHandle, authority: string): string {
+function browserCookie(
+  connection: HostConnectionHandle,
+  authority: string,
+  init?: { serial?: string; remoteAddress?: string },
+): string {
   const url = new URL(connection.authenticatedUrl(`http://${authority}`))
   const exchanged = fakeResponse()
   connection.authorizeIndex(
-    fakeRequest({ host: authority }, `${url.pathname}${url.search}`),
+    fakeRequest({
+      host: authority,
+      ...init?.serial === undefined ? {} : { 'x-dsh-client-serial': init.serial },
+    }, `${url.pathname}${url.search}`, init?.remoteAddress),
     exchanged.response,
   )
   const setCookie = exchanged.state.headers?.['set-cookie']
@@ -296,10 +313,101 @@ describe('connection session routes', () => {
         [SESSIONS_REVOKE_ROUTE_PATH, fakePost({ host: 'localhost' }, SESSIONS_REVOKE_ROUTE_PATH, { sessionId: 's' })],
         [PAIRING_MINT_ROUTE_PATH, fakePost({ host: 'localhost' }, PAIRING_MINT_ROUTE_PATH, { deviceLabel: 'x' })],
         [LOGOUT_ROUTE_PATH, fakePost({ host: 'localhost' }, LOGOUT_ROUTE_PATH, {})],
+        [CERTIFICATES_REVOKE_ROUTE_PATH, fakePost({ host: 'localhost' }, CERTIFICATES_REVOKE_ROUTE_PATH, { serial: '1a2b' })],
       ] as const) {
         const state = await serve(routes, request)
         expect(`${path}: ${String(state.status)}`).toBe(`${path}: 401`)
       }
     } finally { await dispose() }
+  })
+
+  it('binds the trusted certificate serial to sessions and revokes one device across sessions', async () => {
+    const { routes, connection, dispose } = await mounted({
+      mtlsClientSerialHeader: 'X-DSH-Client-Serial',
+      mtlsTrustedProxies: ['127.0.0.1'],
+    })
+    try {
+      const cookie = browserCookie(connection, 'localhost', {
+        serial: '1a2b3c4d',
+        remoteAddress: '127.0.0.1',
+      })
+      const deviceHeaders = { host: 'localhost', cookie, 'x-dsh-client-serial': '1a2b3c4d' }
+
+      // The listing reports the bound serial and never any cookie material.
+      const listed = await serve(routes, fakeRequest(deviceHeaders, SESSIONS_ROUTE_PATH, '127.0.0.1'))
+      expect(listed.status).toBe(200)
+      const sessions = (JSON.parse(listed.body as string) as { sessions: Array<Record<string, unknown>> }).sessions
+      expect(sessions).toHaveLength(1)
+      expect(sessions[0]).toMatchObject({ deviceLabel: 'launch-token', certificateSerial: '1a2b3c4d' })
+
+      // A second session of the same device (same serial) plus its cookie.
+      const secondCookie = browserCookie(connection, 'localhost', {
+        serial: '1a2b3c4d',
+        remoteAddress: '127.0.0.1',
+      })
+      expect(await serve(routes, fakeRequest({
+        host: 'localhost', cookie: secondCookie, 'x-dsh-client-serial': '1a2b3c4d',
+      }, SESSIONS_ROUTE_PATH, '127.0.0.1'))).toMatchObject({ status: 200 })
+
+      // A mismatching serial from the trusted proxy is refused at the fence.
+      expect(await serve(routes, fakeRequest({
+        host: 'localhost', cookie, 'x-dsh-client-serial': 'ff',
+      }, SESSIONS_ROUTE_PATH, '127.0.0.1'))).toMatchObject({ status: 401 })
+      // The header from a non-trusted peer is ignored, so the bound session fails closed.
+      expect(await serve(routes, fakeRequest(deviceHeaders, SESSIONS_ROUTE_PATH, '192.168.1.9')))
+        .toMatchObject({ status: 401 })
+
+      // One certificate revocation retires every session of the device at
+      // once; the serial may arrive in Caddy's decimal rendering. The call
+      // runs from an unbound console session (a browser without a client
+      // certificate), which keeps the cookie-only behavior.
+      const consoleCookie = browserCookie(connection, 'localhost')
+      const revoked = await serve(routes, fakePost(
+        { host: 'localhost', cookie: consoleCookie },
+        CERTIFICATES_REVOKE_ROUTE_PATH,
+        { serial: '439041101' },
+      ))
+      expect(revoked.status).toBe(200)
+      expect(JSON.parse(revoked.body as string)).toEqual({ revoked: 2 })
+      for (const candidate of [cookie, secondCookie]) {
+        expect(await serve(routes, fakeRequest({
+          host: 'localhost', cookie: candidate, 'x-dsh-client-serial': '1a2b3c4d',
+        }, SESSIONS_ROUTE_PATH, '127.0.0.1'))).toMatchObject({ status: 401 })
+      }
+    } finally { await dispose() }
+  })
+
+  it('rejects malformed certificate-revoke bodies and unknown serials', async () => {
+    const { routes, connection, dispose } = await mounted({
+      mtlsClientSerialHeader: 'X-DSH-Client-Serial',
+      mtlsTrustedProxies: ['127.0.0.1'],
+    })
+    try {
+      const cookie = browserCookie(connection, 'localhost')
+      const revoke = async (body: unknown): Promise<{ status?: number; body?: unknown }> =>
+        serve(routes, fakePost({ host: 'localhost', cookie }, CERTIFICATES_REVOKE_ROUTE_PATH, body))
+      expect((await revoke({})).status).toBe(400)
+      expect((await revoke({ serial: 'not a serial' })).status).toBe(400)
+      expect((await revoke({ serial: 42 })).status).toBe(400)
+      expect((await revoke({ serial: 'f'.repeat(65) })).status).toBe(400)
+      expect((await revoke({ serial: '1a2b3c4d' })).status).toBe(200)
+      expect(JSON.parse(String((await revoke({ serial: '1a2b3c4d' })).body))).toEqual({ revoked: 0 })
+      const badJson = await serve(routes, fakeRawPost(
+        { host: 'localhost', cookie }, CERTIFICATES_REVOKE_ROUTE_PATH, 'not json'))
+      expect(badJson.status).toBe(400)
+    } finally { await dispose() }
+  })
+
+  it('fails the plugin load on a malformed serial-header policy', async () => {
+    await expect(mounted({ mtlsClientSerialHeader: 'X-DSH-Client-Serial' }))
+      .rejects.toThrow(/requires at least one mtlsTrustedProxies entry/u)
+    await expect(mounted({
+      mtlsClientSerialHeader: 'X-DSH Client-Serial',
+      mtlsTrustedProxies: ['127.0.0.1'],
+    })).rejects.toThrow(/not a valid HTTP header name/u)
+    await expect(mounted({
+      mtlsClientSerialHeader: 'X-DSH-Client-Serial',
+      mtlsTrustedProxies: ['localhost'],
+    })).rejects.toThrow(/is not an IP literal/u)
   })
 })

@@ -68,8 +68,8 @@ describe('SessionRegistry', () => {
     const store = new MemoryStore({
       version: 1,
       sessions: [
-        { sessionId: 'expired', deviceLabel: 'old', issuedAt: 1, expiresAt: 2, revokedAt: undefined },
-        { sessionId: 'live', deviceLabel: 'kept', issuedAt: 1, expiresAt: Date.now() + 1000, revokedAt: undefined },
+        { sessionId: 'expired', deviceLabel: 'old', issuedAt: 1, expiresAt: 2, revokedAt: undefined, certificateSerial: undefined },
+        { sessionId: 'live', deviceLabel: 'kept', issuedAt: 1, expiresAt: Date.now() + 1000, revokedAt: undefined, certificateSerial: undefined },
       ],
     })
     const registry = new SessionRegistry(store)
@@ -125,6 +125,68 @@ describe('SessionRegistry', () => {
     const second = new SessionRegistry(store)
     await second.loaded
     expect(typeof (await second.get(issued.sessionId))?.revokedAt).toBe('number')
+  })
+
+  it('binds a certificate serial at issue and revokes every session of one serial', async () => {
+    const store = new MemoryStore()
+    const registry = new SessionRegistry(store)
+    await registry.loaded
+
+    const bound = await registry.issue('phone', Date.now() + 60_000, '1a2b3c4d')
+    const boundSync = registry.issueSync('phone-2', Date.now() + 60_000, '1a2b3c4d')
+    const unbound = await registry.issue('desktop', Date.now() + 60_000)
+    expect(bound.certificateSerial).toBe('1a2b3c4d')
+    expect(unbound.certificateSerial).toBeUndefined()
+    expect((await registry.list()).map(session => session.certificateSerial))
+      .toEqual(['1a2b3c4d', '1a2b3c4d', undefined])
+
+    // An unknown serial revokes nothing and writes nothing (the five saves so
+    // far are the three issues; `issue` flushes its internal `issueSync`).
+    expect(await registry.revokeBySerial('ffff')).toBe(0)
+    expect(store.saves).toBe(5)
+    expect(await registry.revokeBySerial('1a2b3c4d')).toBe(2)
+    expect((await registry.get(bound.sessionId))?.revokedAt).toBeDefined()
+    expect((await registry.get(boundSync.sessionId))?.revokedAt).toBeDefined()
+    expect((await registry.get(unbound.sessionId))?.revokedAt).toBeUndefined()
+    // Already-revoked sessions are not counted twice.
+    expect(await registry.revokeBySerial('1a2b3c4d')).toBe(0)
+    await registry.flush()
+    expect(store.snapshot?.sessions.every(session => session.certificateSerial === '1a2b3c4d'
+      ? session.revokedAt !== undefined
+      : true)).toBe(true)
+  })
+
+  it('rejects malformed certificate serials at issue and at serial revocation', async () => {
+    const registry = new SessionRegistry(new MemoryStore())
+    await registry.loaded
+    for (const invalid of ['1A2B', '0x1a2b', 'g', '1a 2b', 'f'.repeat(65)]) {
+      await expect(registry.issue('phone', Date.now() + 60_000, invalid)).rejects.toThrow(/certificateSerial/u)
+      expect(() => registry.issueSync('phone', Date.now() + 60_000, invalid)).toThrow(/certificateSerial/u)
+    }
+    expect(await registry.list()).toEqual([])
+    await expect(registry.revokeBySerial('1A2B')).rejects.toThrow(/certificateSerial/u)
+  })
+
+  it('keeps bound serials across reloads and rewrites a snapshot with a malformed serial', async () => {
+    const store = new MemoryStore()
+    const first = new SessionRegistry(store)
+    await first.loaded
+    const issued = await first.issue('phone', Date.now() + 60_000, '1a2b3c4d')
+    const reloaded = new SessionRegistry(store)
+    await reloaded.loaded
+    expect(await reloaded.get(issued.sessionId)).toMatchObject({ certificateSerial: '1a2b3c4d' })
+
+    // A snapshot entry with a malformed serial is corrupt: fail closed and
+    // rewrite empty, exactly like every other structural defect.
+    const corrupt = new MemoryStore({
+      version: 1,
+      sessions: [{ sessionId: 's', deviceLabel: 'x', issuedAt: 1, expiresAt: 2, revokedAt: undefined, certificateSerial: '1A2B' }],
+    } as unknown as StoredSessionRegistry)
+    const restarted = new SessionRegistry(corrupt)
+    await restarted.loaded
+    expect(await restarted.list()).toEqual([])
+    await restarted.flush()
+    expect(corrupt.snapshot).toMatchObject({ version: 1, sessions: [] })
   })
 
   it('raises a failed durable write to the next caller and to flush', async () => {
