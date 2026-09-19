@@ -41,6 +41,7 @@ import { buildConfirmationCard, taskTitle } from './card.ts'
 import { toWireEvent, toWireOutcome, toWireProjection } from './wire.ts'
 import { SelfDevelopmentRemoteError } from './errors.ts'
 import {
+  assertHostOnlyFields,
   parseApproveBudgetInput,
   parseAuthorizePlanningInput,
   parseConfirmPlanInput,
@@ -57,6 +58,7 @@ import type {
   PlanDraftInput,
   RecentEvent,
   RemoteConfig,
+  RemoteConnectionService,
   RemoteOperationResult,
   RemoteRunAttemptOutcome,
   RemoteRunAttemptRequest,
@@ -75,6 +77,8 @@ export type {
   PlanDraftInput,
   RecentEvent,
   RemoteConfig,
+  RemoteConnectionCaller,
+  RemoteConnectionService,
   RemoteOperationResult,
   RemoteRunAttemptOutcome,
   RemoteRunAttemptRequest,
@@ -97,6 +101,9 @@ export type Config = RemoteConfig
  * Stable-side Remote facade. The supervised runner is optional: every method
  * that needs it refuses with a facade code when the runner plugin is not
  * loaded, and the read paths work against the task-control service alone.
+ * The connection service is optional too and is read with `ctx.get`, per the
+ * repository's optional-service rule: a deployment without the phone channel
+ * mounts no connection service, and every caller is then the stable host.
  */
 export class SelfDevelopmentRemote extends TypertRemoteService {
   static inject = ['selfDevelopmentTasks']
@@ -197,13 +204,16 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
    * @param expectedRevision - revision the caller observed; a new task is at revision 0.
    * @returns the operation id the facade generated plus the core's result.
    * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED`, `SELF_DEV_REMOTE_CONFIG_INVALID`,
-   *   or `SELF_DEV_REMOTE_ACTOR_FORBIDDEN`.
+   *   `SELF_DEV_REMOTE_ACTOR_FORBIDDEN`, or `SELF_DEV_REMOTE_HOST_ONLY_FIELD` from a non-host caller:
+   *   the spec fixes `stableBaselineDigest` and `allowedModificationScope`, which are isolation
+   *   settings the phone whitelist may not set.
    * @throws whatever the task-control service rejects with, verbatim.
    */
   @Remote('createTask')
   async createTask(spec: TaskSpecInput, expectedRevision: number): Promise<RemoteOperationResult> {
     this.assertEnabled()
     const parsed = parseCreateTaskInput(spec, expectedRevision)
+    this.assertCallerIsHost('createTask', 'stableBaselineDigest and allowedModificationScope')
     this.assertActorAllowed(parsed.spec.createdBy)
     const operationId = this.operationId()
     const controller = await this.open(parsed.spec.taskId)
@@ -403,7 +413,9 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
    * @returns the runner's outcome plus the operation id the facade generated.
    * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED`, `SELF_DEV_REMOTE_CONFIG_INVALID`,
    *   `SELF_DEV_REMOTE_ACTOR_FORBIDDEN`, `SELF_DEV_REMOTE_PRESENCE_UNCONFIRMED` when
-   *   `presenceAcknowledged` is not exactly `true`, or
+   *   `presenceAcknowledged` is not exactly `true`, `SELF_DEV_REMOTE_HOST_ONLY_FIELD` from a
+   *   non-host caller (the launch assigns the worktree, acceptance, and artifact isolation
+   *   settings, and a non-host request may not set the host-only `dataHome`), or
    *   `SELF_DEV_REMOTE_RUNNER_UNAVAILABLE` when the runner plugin is not loaded.
    * @throws whatever the core or the runner rejects with, verbatim.
    */
@@ -411,6 +423,8 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
   async runAttempt(request: RemoteRunAttemptRequest): Promise<RemoteRunAttemptOutcome> {
     this.assertEnabled()
     const parsed = parseRunAttemptRequest(request)
+    assertHostOnlyFields('runAttempt', parsed, this.callerIsHost())
+    this.assertCallerIsHost('runAttempt', 'worktree, acceptancePath, artifactPaths, dataHome')
     if (!parsed.presenceAcknowledged) {
       throw new SelfDevelopmentRemoteError(
         'presenceAcknowledged must be explicitly true; a UI must never default or pre-select the human-presence acknowledgement',
@@ -475,6 +489,50 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
     throw new SelfDevelopmentRemoteError(
       `actor ${JSON.stringify(actor)} is not in the configured allowlist`,
       'SELF_DEV_REMOTE_ACTOR_FORBIDDEN',
+    )
+  }
+
+  /**
+   * Whether the current Remote caller counts as the stable host. The
+   * connection layer derives the answer from the request's Host header: a
+   * loopback host is this machine. Without the connection service, or outside
+   * any `@Remote` request, there is no caller context and the call is treated
+   * as the host — the local direct-call and test semantics.
+   * @returns whether the caller may set host-only isolation fields.
+   */
+  private callerIsHost(): boolean {
+    const caller = this.connection()?.caller.current()
+    if (caller === undefined) return true
+    return caller.loopback
+  }
+
+  /**
+   * Read the optional connection service structurally. The service is read
+   * with `ctx.get` instead of a declared injection so deployments without the
+   * phone channel load the facade unchanged.
+   * @returns the connection service, or `undefined` when it is not mounted.
+   */
+  private connection(): RemoteConnectionService | undefined {
+    const connection: unknown = this.ctx.get('connection')
+    return connection as RemoteConnectionService | undefined
+  }
+
+  /**
+   * Refuse an isolation-setting operation from a non-host caller, before the
+   * core or runner is touched.
+   * @param operation - facade method the caller invoked.
+   * @param settings - the isolation settings the operation assigns.
+   * @returns nothing when the caller counts as the stable host.
+   * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_HOST_ONLY_FIELD` from a caller whose
+   *   Host header is not loopback; the message states what the phone whitelist
+   *   may still do.
+   */
+  private assertCallerIsHost(operation: string, settings: string): void {
+    if (this.callerIsHost()) return
+    throw new SelfDevelopmentRemoteError(
+      `${operation} assigns isolation settings (${settings}) and is reserved for the stable host; `
+        + 'a phone caller may watch progress, interject, confirm the plan and budget, stop, and approve or reject the trial',
+      'SELF_DEV_REMOTE_HOST_ONLY_FIELD',
     )
   }
 

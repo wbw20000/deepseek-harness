@@ -31,6 +31,34 @@ export type {
 /** Which limits a budget approval carries, as the core defines it. */
 export type BudgetMode = BudgetApproval['mode']
 
+/**
+ * The calling side of one Remote request, mirroring the frozen
+ * `ConnectionCaller` contract of the connection service. The connection layer
+ * derives `loopback` from the request's Host header: a loopback host is this
+ * machine, which is what makes a caller the stable host.
+ */
+export interface RemoteConnectionCaller {
+  /** Owning chat session id, when the caller is bound to one. */
+  readonly sessionId: string | undefined
+  /** Host header the request arrived with, as `host:port`. */
+  readonly host: string
+  /** Whether the request's Host header resolved to the loopback interface. */
+  readonly loopback: boolean
+  /** Serial of the client certificate the request authenticated with, when present. */
+  readonly certificateSerial: string | undefined
+}
+
+/**
+ * Structural view of the optional `connection` service, mirroring the frozen
+ * `ctx.connection.caller.current()` contract. Declared here, not imported,
+ * because the service is optional and this package must stay loadable in
+ * deployments that mount no connection service.
+ */
+export interface RemoteConnectionService {
+  /** Caller context of the Remote request currently being served. */
+  readonly caller: { readonly current: () => RemoteConnectionCaller | undefined }
+}
+
 /** Deployment configuration of the Remote facade. */
 export interface RemoteConfig {
   /**

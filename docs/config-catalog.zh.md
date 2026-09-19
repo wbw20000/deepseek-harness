@@ -3889,7 +3889,7 @@ export interface RemoteConfig {
 }
 ```
 
-来源： [`packages/workflow/workflow-self-development-remote/src/types.ts:35`](../packages/workflow/workflow-self-development-remote/src/types.ts)
+来源： [`packages/workflow/workflow-self-development-remote/src/types.ts:63`](../packages/workflow/workflow-self-development-remote/src/types.ts)
 
 <a id="deepseek-aidsh-workflow-self-development-runner"></a>
 
