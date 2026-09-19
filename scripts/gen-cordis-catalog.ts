@@ -131,6 +131,7 @@ export const SERVICE_PAGE: Record<string, string> = {
   workflowEngine: 'workflow.md',
   selfDevelopmentTasks: 'workflow.md',
   selfDevelopmentRunner: 'workflow.md',
+  selfDevelopmentRemote: 'workflow.md',
   webhookRuntime: 'webhook.md',
   workspaceRegistry: 'workspace.md',
   workspaceController: 'workspace.md',
@@ -857,6 +858,19 @@ export const TYPE_LINK_EXEMPTIONS: Readonly<Record<string, string>> = {
   SupervisedAttemptRequest: 'one supervised attempt request is owned by packages/workflow/workflow-self-development-runner/README.md',
   SupervisedAttemptOutcome: 'one supervised attempt outcome is owned by packages/workflow/workflow-self-development-runner/README.md',
   TaskOperationResult: 'core task operation result is owned by packages/workflow/workflow-self-development/README.md',
+  TaskSummary: 'progress row view is owned by packages/workflow/workflow-self-development-remote/README.md',
+  TaskDetail: 'projection-plus-card view is owned by packages/workflow/workflow-self-development-remote/README.md',
+  RemoteTaskProjection: 'JSON-safe task projection view is owned by packages/workflow/workflow-self-development-remote/README.md',
+  ConfirmationCard: 'human-review confirmation card view is owned by packages/workflow/workflow-self-development-remote/README.md',
+  CardBudget: 'confirmation-card budget terms are owned by packages/workflow/workflow-self-development-remote/README.md',
+  RemoteOperationResult: 'facade operation result is owned by packages/workflow/workflow-self-development-remote/README.md',
+  RemoteRunAttemptOutcome: 'facade attempt outcome view is owned by packages/workflow/workflow-self-development-remote/README.md',
+  TaskSpecInput: 'facade TaskSpec wire form is owned by packages/workflow/workflow-self-development-remote/README.md',
+  PlanDraftInput: 'facade plan draft wire form is owned by packages/workflow/workflow-self-development-remote/README.md',
+  ConfirmedPlanInput: 'facade confirmed plan wire form is owned by packages/workflow/workflow-self-development-remote/README.md',
+  BudgetApprovalInput: 'facade budget approval wire form is owned by packages/workflow/workflow-self-development-remote/README.md',
+  RemoteRunAttemptRequest: 'facade attempt request is owned by packages/workflow/workflow-self-development-remote/README.md',
+  RemoteConfig: 'facade deployment config is owned by packages/workflow/workflow-self-development-remote/README.md',
 }
 
 /** Repository data policy consumed by the Cordis catalog projector. */

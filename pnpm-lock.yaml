@@ -12443,6 +12443,28 @@ importers:
         specifier: workspace:^
         version: link:../../llm/llm
 
+  packages/workflow/workflow-self-development-remote:
+    dependencies:
+      '@deepseek-ai/dsh-workflow-self-development':
+        specifier: workspace:^
+        version: link:../workflow-self-development
+      '@deepseek-ai/dsh-workflow-self-development-runner':
+        specifier: workspace:^
+        version: link:../workflow-self-development-runner
+      '@deepseek-ai/schemastery':
+        specifier: link:../../../vendor/schemastery
+        version: link:../../../vendor/schemastery
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-typert-protocol':
+        specifier: workspace:^
+        version: link:../../typert/protocol
+
   packages/workflow/workflow-self-development-runner:
     dependencies:
       '@deepseek-ai/dsh-workflow-self-development':
