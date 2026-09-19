@@ -12443,6 +12443,22 @@ importers:
         specifier: workspace:^
         version: link:../../llm/llm
 
+  packages/workflow/workflow-self-development-events:
+    dependencies:
+      '@deepseek-ai/dsh-util-values':
+        specifier: workspace:^
+        version: link:../../util/values
+      '@deepseek-ai/dsh-workflow-self-development':
+        specifier: workspace:^
+        version: link:../workflow-self-development
+      '@deepseek-ai/schemastery':
+        specifier: link:../../../vendor/schemastery
+        version: link:../../../vendor/schemastery
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../../vendor/cordis
+
   packages/workflow/workflow-self-development-remote:
     dependencies:
       '@deepseek-ai/dsh-workflow-self-development':

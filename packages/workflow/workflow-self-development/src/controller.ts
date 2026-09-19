@@ -162,6 +162,12 @@ export class SelfDevelopmentTaskController {
      * each `startAttempt` request supplies its own clock.
      */
     private readonly recoveryClock: TrustedClock,
+    /**
+     * Optional post-commit observer. It runs after every durable commit with
+     * the frozen projection; a thrown error is contained and never turns a
+     * committed event into an operation failure.
+     */
+    private readonly onCommitted: ((record: CommittedRecord, projection: TaskProjection) => void) | undefined,
     private state: TaskFoldState,
     records: readonly CommittedRecord[],
   ) {
@@ -185,6 +191,9 @@ export class SelfDevelopmentTaskController {
    * @param params.journal - opened journal for the task.
    * @param params.clock - trusted clock used only to mark an attempt left in
    *   flight by a previous process as interrupted; it never observes a new attempt.
+   * @param params.onCommitted - optional observer invoked after every durable
+   *   commit with the committed record and the frozen projection; a thrown
+   *   error is contained and never affects the commit or the task state.
    * @returns the ready controller.
    * @throws SelfDevelopmentError with `SELF_DEV_JOURNAL_UNAVAILABLE` when the journal failed verification; callers must expose handoff.
    */
@@ -192,6 +201,7 @@ export class SelfDevelopmentTaskController {
     taskId: string
     journal: TaskJournal
     clock: TrustedClock
+    onCommitted?: (record: CommittedRecord, projection: TaskProjection) => void
   }): Promise<SelfDevelopmentTaskController> {
     const read = await params.journal.read()
     if (read.status !== 'ok') {
@@ -203,7 +213,7 @@ export class SelfDevelopmentTaskController {
     let state = initialFoldState()
     for (const record of read.records) state = foldEvent(state, record.event)
     const controller = new SelfDevelopmentTaskController(
-      params.taskId, params.journal, params.clock, state, read.records,
+      params.taskId, params.journal, params.clock, params.onCommitted, state, read.records,
     )
     await controller.recoverInterruptedAttempt()
     await controller.rebuildProjection()
@@ -372,6 +382,15 @@ export class SelfDevelopmentTaskController {
         payloadDigest: operation.payloadDigest,
         result: { revision: this.state.revision, replayed: false },
       })
+    }
+    if (this.onCommitted !== undefined) {
+      try {
+        this.onCommitted(record, this.projection)
+      } catch {
+        // The event is already durable and `this.projection` is the only other
+        // statement in the try; a throwing post-commit observer must never
+        // turn a committed event into an operation failure, so it is contained.
+      }
     }
     return record
   }

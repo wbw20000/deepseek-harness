@@ -26,7 +26,9 @@ kind: "package-reference"
 <a id="service"></a>
 ## 服务
 
-`SelfDevelopmentTasks`（默认导出，Cordis 服务 `selfDevelopmentTasks`）拥有一个配置的私有控制目录，并按任务缓存 `SelfDevelopmentTaskController`。本服务可选启用：不进入任何默认 bundle，也不注册工具、提示、事件或守护进程。
+`SelfDevelopmentTasks`（默认导出，Cordis 服务 `selfDevelopmentTasks`）拥有一个配置的私有控制目录，并按任务缓存 `SelfDevelopmentTaskController`。本服务可选启用：不进入任何默认 bundle，也不注册工具、提示或守护进程。
+
+每次成功的持久提交——包括重新打开时追加的恢复提交——都会发射 `self-development/committed` Cordis 事件，载荷为 `{ taskId, record, projection }`。发射发生在日志追加之后，因此事件命名的必然是已提交的记录；抛错的监听器会被捕获并记录，绝不会让调用操作失败，也不会改变任务状态。该事件是进程内通知，不是持久流。
 
 | 配置字段 | 含义 |
 |---|---|
@@ -80,7 +82,7 @@ kind: "package-reference"
 
 首条记录会创建检查点，后续检查点按配置间隔或分段轮转生成。哈希链检测记录内容改动，检查点检测其覆盖记录的截断。最新检查点之后按完整记录截断日志不会被检测到。两者都不能抵抗管理员或能同时改写两个文件的攻击者；控制目录必须位于实验可写范围之外。
 
-不发布运行时 invariant 配套模块；任务状态来自单一的已验证日志折叠，文件持久性与投影恢复需要文件系统往返测试。本包没有可供交叉核对的独立运行时事件流。
+不发布运行时 invariant 配套模块；任务状态来自单一的已验证日志折叠，文件持久性与投影恢复需要文件系统往返测试。`self-development/committed` Cordis 事件在每次提交后通知监听器；它不是持久流，因此无法交叉核对日志。
 
 -----
 

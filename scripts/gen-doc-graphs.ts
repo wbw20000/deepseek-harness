@@ -564,6 +564,14 @@ const SERVICE_ROLES: ServiceRole[] = [
     note: 'Opt-in stable-side Remote face over the task-control service and the supervised runner for the M4 UI and the phone whitelist; disabled until enabled, and it registers no tool, prompt, or event and no upgrade approval.',
   },
   {
+    key: 'selfDevelopmentEvents',
+    pkg: 'workflow-self-development-events',
+    title: 'Self-development notification events',
+    mode: 'core',
+    consumers: ['workflow-self-development'],
+    note: 'Opt-in event projection over committed task events: unified title-level notification events, a bounded in-memory recent buffer, in-process subscribers, and an optional macOS local-notification command; it registers no tool, prompt, or durable store.',
+  },
+  {
     key: 'ssh',
     pkg: 'ssh',
     title: 'POSIX SSH connection owner',
