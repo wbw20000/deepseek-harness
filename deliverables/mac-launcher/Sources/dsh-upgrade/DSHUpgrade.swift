@@ -17,11 +17,9 @@ import UpgradeTransaction
 ///         --approved-by <name> --result-digest <64hex> --out <json>
 ///
 /// Exit codes: 0 committed, 1 rolled back or needs-manual, 2 usage error.
-/// A usage refusal; printed to stderr and mapped to exit code 2.
-struct UsageFailure: Error {
-    let message: String
-}
-
+/// Argument parsing is shared with the in-process command surface in
+/// `UpgradeCLI`; this executable only maps outcomes to exit codes and
+/// streams.
 @main
 struct DSHUpgrade {
 
@@ -45,102 +43,28 @@ struct DSHUpgrade {
         }
     }
 
-    // MARK: - Argument parsing
-
-    struct Parsed {
-        var values: [String: String] = [:]
-        /// Arguments collected after `--verify-command`.
-        var verifyCommand: [String] = []
-    }
-
-    /// Parses `--name value` pairs plus an optional terminal
-    /// `--verify-command <cmd> [args...]`; unknown flags and missing values
-    /// are usage errors, never silently ignored.
-    static func parse(_ arguments: [String], flags: [String]) -> Result<Parsed, UsageFailure> {
-        var parsed = Parsed()
-        var index = 0
-        while index < arguments.count {
-            let token = arguments[index]
-            guard token.hasPrefix("--") else {
-                return .failure(UsageFailure(message: "unexpected argument: \(token)"))
-            }
-            guard token != "--verify-command" else {
-                let command = Array(arguments[(index + 1)...])
-                guard !command.isEmpty else {
-                    return .failure(UsageFailure(message: "--verify-command needs a command"))
-                }
-                parsed.verifyCommand = command
-                return .success(parsed)
-            }
-            guard flags.contains(token) else {
-                return .failure(UsageFailure(message: "unknown flag: \(token)"))
-            }
-            guard index + 1 < arguments.count else {
-                return .failure(UsageFailure(message: "\(token) needs a value"))
-            }
-            parsed.values[token] = arguments[index + 1]
-            index += 2
-        }
-        return .success(parsed)
-    }
-
-    static func required(_ parsed: Parsed, _ flag: String) -> Result<URL, UsageFailure> {
-        guard let value = parsed.values[flag] else {
-            return .failure(UsageFailure(message: "missing required flag \(flag)"))
-        }
-        return absoluteURL(value, flag: flag)
-    }
-
-    static func absoluteURL(_ value: String, flag: String) -> Result<URL, UsageFailure> {
-        guard !value.isEmpty, value.hasPrefix("/"),
-              !value.split(separator: "/").contains("..") else {
-            return .failure(UsageFailure(message: "\(flag) must be an absolute path without `..`"))
-        }
-        return .success(URL(fileURLWithPath: value, isDirectory: true))
-    }
-
-    static func parseOptions(from parsed: Parsed) -> Result<UpgradeEngine.Options, UsageFailure> {
-        var options = UpgradeEngine.Options()
-        if let value = parsed.values["--transaction-dir"] {
-            switch absoluteURL(value, flag: "--transaction-dir") {
-            case let .failure(error): return .failure(error)
-            case let .success(url): options.transactionDirectory = url
-            }
-        }
-        if let value = parsed.values["--backups-root"] {
-            switch absoluteURL(value, flag: "--backups-root") {
-            case let .failure(error): return .failure(error)
-            case let .success(url): options.backupsRoot = url
-            }
-        }
-        if !parsed.verifyCommand.isEmpty {
-            options.verifyCommand = parsed.verifyCommand
-        }
-        return .success(options)
-    }
-
     // MARK: - Subcommands
 
     static func runUpgrade(_ arguments: [String]) -> Int32 {
         let flags = ["--candidate-root", "--identity", "--trial-record",
                      "--production-app", "--production-data-home",
                      "--backups-root", "--transaction-dir"]
-        let parsed: Parsed
-        switch parse(arguments, flags: flags) {
+        let parsed: UpgradeCLI.Parsed
+        switch UpgradeCLI.parse(arguments, flags: flags) {
         case let .failure(error): printUsageError(error); return 2
         case let .success(value): parsed = value
         }
         let options: UpgradeEngine.Options
-        switch parseOptions(from: parsed) {
+        switch UpgradeCLI.parseOptions(from: parsed) {
         case let .failure(error): printUsageError(error); return 2
         case let .success(value): options = value
         }
         let inputs: [(String, Result<URL, UsageFailure>)] = [
-            ("--candidate-root", required(parsed, "--candidate-root")),
-            ("--identity", required(parsed, "--identity")),
-            ("--trial-record", required(parsed, "--trial-record")),
-            ("--production-app", required(parsed, "--production-app")),
-            ("--production-data-home", required(parsed, "--production-data-home")),
+            ("--candidate-root", UpgradeCLI.required(parsed, "--candidate-root")),
+            ("--identity", UpgradeCLI.required(parsed, "--identity")),
+            ("--trial-record", UpgradeCLI.required(parsed, "--trial-record")),
+            ("--production-app", UpgradeCLI.required(parsed, "--production-app")),
+            ("--production-data-home", UpgradeCLI.required(parsed, "--production-data-home")),
         ]
         var urls: [String: URL] = [:]
         for (flag, result) in inputs {
@@ -162,13 +86,13 @@ struct DSHUpgrade {
     static func runRestore(_ arguments: [String]) -> Int32 {
         let flags = ["--from-backup", "--from-last-good", "--production-app",
                      "--production-data-home", "--backups-root", "--transaction-dir"]
-        let parsed: Parsed
-        switch parse(arguments, flags: flags) {
+        let parsed: UpgradeCLI.Parsed
+        switch UpgradeCLI.parse(arguments, flags: flags) {
         case let .failure(error): printUsageError(error); return 2
         case let .success(value): parsed = value
         }
         let options: UpgradeEngine.Options
-        switch parseOptions(from: parsed) {
+        switch UpgradeCLI.parseOptions(from: parsed) {
         case let .failure(error): printUsageError(error); return 2
         case let .success(value): options = value
         }
@@ -178,12 +102,12 @@ struct DSHUpgrade {
             printUsageError(UsageFailure(message: "--from-backup and --from-last-good are mutually exclusive; both given (\(lastGood))"))
             return 2
         case let (.some(backup), .none):
-            switch absoluteURL(backup, flag: "--from-backup") {
+            switch UpgradeCLI.absoluteURL(backup, flag: "--from-backup") {
             case let .failure(error): printUsageError(error); return 2
             case let .success(url): source = .backupDirectory(url)
             }
         case let (.none, .some(lastGood)):
-            switch absoluteURL(lastGood, flag: "--from-last-good") {
+            switch UpgradeCLI.absoluteURL(lastGood, flag: "--from-last-good") {
             case let .failure(error): printUsageError(error); return 2
             case let .success(url): source = .lastGoodRecord(url)
             }
@@ -193,7 +117,8 @@ struct DSHUpgrade {
         }
         let productionApp: URL
         let dataHome: URL
-        switch (required(parsed, "--production-app"), required(parsed, "--production-data-home")) {
+        switch (UpgradeCLI.required(parsed, "--production-app"),
+                UpgradeCLI.required(parsed, "--production-data-home")) {
         case let (.failure(error), _):
             printUsageError(error); return 2
         case let (_, .failure(error)):
@@ -208,13 +133,13 @@ struct DSHUpgrade {
     }
 
     static func runResume(_ arguments: [String]) -> Int32 {
-        let parsed: Parsed
-        switch parse(arguments, flags: ["--transaction-dir"]) {
+        let parsed: UpgradeCLI.Parsed
+        switch UpgradeCLI.parse(arguments, flags: ["--transaction-dir"]) {
         case let .failure(error): printUsageError(error); return 2
         case let .success(value): parsed = value
         }
         let directory: URL
-        switch required(parsed, "--transaction-dir") {
+        switch UpgradeCLI.required(parsed, "--transaction-dir") {
         case let .failure(error): printUsageError(error); return 2
         case let .success(url): directory = url
         }
@@ -236,8 +161,6 @@ struct DSHUpgrade {
         }
     }
 
-    static let standardError = FileHandleTextOutputStream(handle: .standardError)
-
     static func errorLine(_ message: String) {
         FileHandle.standardError.write(Data("dsh-upgrade: \(message)\n".utf8))
     }
@@ -258,13 +181,5 @@ struct DSHUpgrade {
           dsh-upgrade make-trial-record --candidate-identity <json> --approved-by <name> \\
               --result-digest <64hex> --out <json>
         """)
-    }
-}
-
-struct FileHandleTextOutputStream: TextOutputStream {
-    let handle: FileHandle
-
-    mutating func write(_ string: String) {
-        handle.write(Data(string.utf8))
     }
 }

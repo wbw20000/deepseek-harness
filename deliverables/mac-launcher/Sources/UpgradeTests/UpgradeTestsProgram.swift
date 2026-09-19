@@ -83,6 +83,13 @@ final class UpgradeTestRunner {
             print("  FAIL: \(label) (\(currentSuite) at \(file):\(line))")
         }
     }
+
+    /// Records an environment-dependent check as explicitly skipped, with
+    /// the reason: counted, never a failure, never silently dropped.
+    func skip(_ label: String) {
+        checks += 1
+        print("  SKIP: \(label)")
+    }
 }
 
 enum TempDir {
