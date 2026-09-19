@@ -1,9 +1,9 @@
 /**
  * Facade behavior against the real task-control service: the disabled switch,
  * wire validation, the actor allowlist, the missing-runner refusals, the
- * read paths and their confirmation card, and the verbatim passthrough of the
- * core's own error codes. The supervised attempt lifecycle itself runs in the
- * real-Loader composition spec.
+ * read paths and their confirmation card, and the boundary conversion of core
+ * rejections into `self-development/core`. The supervised attempt lifecycle
+ * itself runs in the real-Loader composition spec.
  * @module facade.spec
  */
 
@@ -11,9 +11,11 @@ import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { SelfDevelopmentTasks, TaskSpecVersion, TestPlanVersion } from '@deepseek-ai/dsh-workflow-self-development'
+import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
+import { SelfDevelopmentError, SelfDevelopmentTasks, TaskSpecVersion, TestPlanVersion } from '@deepseek-ai/dsh-workflow-self-development'
 import SelfDevelopmentEvents from '@deepseek-ai/dsh-workflow-self-development-events'
 import SelfDevelopmentRemote from '../src/index.ts'
+import { SelfDevelopmentRemoteError } from '../src/errors.ts'
 import type { RemoteRunAttemptRequest } from '../src/types.ts'
 import { makeEnvironment } from './helpers.ts'
 import type { Environment } from './helpers.ts'
@@ -95,24 +97,32 @@ describe('boot-time config validation', () => {
       allowedActors: [],
       controlDirectory: 'relative/control',
     })
-    expect(rejected).toThrow(expect.objectContaining({ code: 'SELF_DEV_REMOTE_CONFIG_INVALID' }))
+    expect(rejected).toThrow(expect.objectContaining({ code: 'self-development/config-invalid' }))
   })
 })
 
 describe('disabled switch', () => {
-  it('refuses every method with SELF_DEV_REMOTE_DISABLED while enabled is false', async () => {
+  it('refuses every method with a RemoteError carrying self-development/disabled while enabled is false', async () => {
     const facade = await makeFacade({ enabled: false })
-    await expect(facade.listTasks()).rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_DISABLED' })
-    await expect(facade.getTask(TASK_ID)).rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_DISABLED' })
-    await expect(facade.createTask(SPEC, 0)).rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_DISABLED' })
+    const refusal = await facade.listTasks().then(
+      () => { throw new Error('expected listTasks to refuse') },
+      (error: unknown) => error,
+    )
+    expect(refusal).toBeInstanceOf(RemoteError)
+    expect(refusal).toBeInstanceOf(SelfDevelopmentRemoteError)
+    expect((refusal as SelfDevelopmentRemoteError).code).toBe('self-development/disabled')
+    expect((refusal as SelfDevelopmentRemoteError).name).toBe('SelfDevelopmentRemoteError')
+    await expect(facade.getTask(TASK_ID)).rejects.toMatchObject({ code: 'self-development/disabled' })
+    await expect(facade.getTask(TASK_ID)).rejects.toMatchObject({ code: 'self-development/disabled' })
+    await expect(facade.createTask(SPEC, 0)).rejects.toMatchObject({ code: 'self-development/disabled' })
     await expect(facade.authorizePlanning(TASK_ID, 1, 'tester'))
-      .rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_DISABLED' })
-    await expect(facade.submitPlanDraft(TASK_ID, 2, DRAFT)).rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_DISABLED' })
-    await expect(facade.confirmPlan(TASK_ID, 3, PLAN, 'tester')).rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_DISABLED' })
-    await expect(facade.approveBudget(TASK_ID, 4, APPROVAL)).rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_DISABLED' })
-    await expect(facade.stop(TASK_ID, 5)).rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_DISABLED' })
+      .rejects.toMatchObject({ code: 'self-development/disabled' })
+    await expect(facade.submitPlanDraft(TASK_ID, 2, DRAFT)).rejects.toMatchObject({ code: 'self-development/disabled' })
+    await expect(facade.confirmPlan(TASK_ID, 3, PLAN, 'tester')).rejects.toMatchObject({ code: 'self-development/disabled' })
+    await expect(facade.approveBudget(TASK_ID, 4, APPROVAL)).rejects.toMatchObject({ code: 'self-development/disabled' })
+    await expect(facade.stop(TASK_ID, 5)).rejects.toMatchObject({ code: 'self-development/disabled' })
     await expect(facade.recordTrialApproval(TASK_ID, 6, 'tester'))
-      .rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_DISABLED' })
+      .rejects.toMatchObject({ code: 'self-development/disabled' })
     await expect(facade.runAttempt({
       taskId: TASK_ID,
       expectedRevision: 5,
@@ -122,9 +132,9 @@ describe('disabled switch', () => {
       confirmedBy: 'tester',
       loopbackAllowlist: [],
       presenceAcknowledged: true,
-    })).rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_DISABLED' })
-    await expect(facade.activeTasks()).rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_DISABLED' })
-    await expect(facade.recentEvents()).rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_DISABLED' })
+    })).rejects.toMatchObject({ code: 'self-development/disabled' })
+    await expect(facade.activeTasks()).rejects.toMatchObject({ code: 'self-development/disabled' })
+    await expect(facade.recentEvents()).rejects.toMatchObject({ code: 'self-development/disabled' })
   })
 })
 
@@ -132,14 +142,14 @@ describe('wire validation', () => {
   it('refuses a malformed spec, revision, and task id', async () => {
     const facade = await makeFacade()
     await expect(facade.createTask({ ...SPEC, requirement: '' }, 0))
-      .rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_CONFIG_INVALID' })
-    await expect(facade.createTask(SPEC, -1)).rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_CONFIG_INVALID' })
-    await expect(facade.getTask('../escape')).rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_CONFIG_INVALID' })
-    await expect(facade.authorizePlanning(TASK_ID, 1, '')).rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_CONFIG_INVALID' })
+      .rejects.toMatchObject({ code: 'self-development/config-invalid' })
+    await expect(facade.createTask(SPEC, -1)).rejects.toMatchObject({ code: 'self-development/config-invalid' })
+    await expect(facade.getTask('../escape')).rejects.toMatchObject({ code: 'self-development/config-invalid' })
+    await expect(facade.authorizePlanning(TASK_ID, 1, '')).rejects.toMatchObject({ code: 'self-development/config-invalid' })
     await expect(facade.submitPlanDraft(TASK_ID, 2, {
       requiredCases: [{ caseId: '', requirement: 'r', assertionIds: ['a1'] }],
       manualCases: [],
-    })).rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_CONFIG_INVALID' })
+    })).rejects.toMatchObject({ code: 'self-development/config-invalid' })
   })
 
   it('refuses runAttempt without an explicit presence acknowledgement', async () => {
@@ -154,32 +164,32 @@ describe('wire validation', () => {
       loopbackAllowlist: [],
     }
     await expect(facade.runAttempt(base as unknown as RemoteRunAttemptRequest))
-      .rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_CONFIG_INVALID' })
+      .rejects.toMatchObject({ code: 'self-development/config-invalid' })
     await expect(facade.runAttempt({ ...base, presenceAcknowledged: false }))
-      .rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_PRESENCE_UNCONFIRMED' })
+      .rejects.toMatchObject({ code: 'self-development/presence-unconfirmed' })
     await expect(facade.runAttempt({ ...base, worktree: 'relative/wt', presenceAcknowledged: true }))
-      .rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_CONFIG_INVALID' })
+      .rejects.toMatchObject({ code: 'self-development/config-invalid' })
     await expect(facade.runAttempt({ ...base, acceptancePath: 'relative/acceptance.json', presenceAcknowledged: true }))
-      .rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_CONFIG_INVALID' })
+      .rejects.toMatchObject({ code: 'self-development/config-invalid' })
     await expect(facade.runAttempt({ ...base, dataHome: 'relative/home', presenceAcknowledged: true }))
-      .rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_CONFIG_INVALID' })
+      .rejects.toMatchObject({ code: 'self-development/config-invalid' })
   })
 })
 
 describe('actor allowlist', () => {
   it('refuses the actor-gated methods for an unlisted actor before the core is touched', async () => {
     const facade = await makeFacade({ allowedActors: ['alice'] })
-    await expect(facade.createTask(SPEC, 0)).rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_ACTOR_FORBIDDEN' })
+    await expect(facade.createTask(SPEC, 0)).rejects.toMatchObject({ code: 'self-development/actor-forbidden' })
     await expect(facade.createTask({ ...SPEC, createdBy: 'alice' }, 0)).resolves.toMatchObject({
       taskId: TASK_ID,
       replayed: false,
     })
     await expect(facade.confirmPlan(TASK_ID, 3, PLAN, 'bob'))
-      .rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_ACTOR_FORBIDDEN' })
+      .rejects.toMatchObject({ code: 'self-development/actor-forbidden' })
     await expect(facade.approveBudget(TASK_ID, 4, { ...APPROVAL, approvedBy: 'bob' }))
-      .rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_ACTOR_FORBIDDEN' })
+      .rejects.toMatchObject({ code: 'self-development/actor-forbidden' })
     await expect(facade.recordTrialApproval(TASK_ID, 4, 'bob'))
-      .rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_ACTOR_FORBIDDEN' })
+      .rejects.toMatchObject({ code: 'self-development/actor-forbidden' })
   })
 
   it('keeps progress, planning, drafting, and stop open to any actor', async () => {
@@ -194,7 +204,7 @@ describe('actor allowlist', () => {
 })
 
 describe('missing runner', () => {
-  it('refuses runAttempt with SELF_DEV_REMOTE_RUNNER_UNAVAILABLE and keeps activeTasks empty', async () => {
+  it('refuses runAttempt with self-development/runner-unavailable and keeps activeTasks empty', async () => {
     const facade = await makeFacade()
     await expect(facade.runAttempt({
       taskId: TASK_ID,
@@ -205,7 +215,7 @@ describe('missing runner', () => {
       confirmedBy: 'tester',
       loopbackAllowlist: [],
       presenceAcknowledged: true,
-    })).rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_RUNNER_UNAVAILABLE' })
+    })).rejects.toMatchObject({ code: 'self-development/runner-unavailable' })
     await expect(facade.activeTasks()).resolves.toEqual([])
   })
 })
@@ -236,7 +246,7 @@ describe('recent events', () => {
 describe('read paths and the confirmation card', () => {
   it('refuses getTask for an unknown task without creating its journal directory', async () => {
     const facade = await makeFacade()
-    await expect(facade.getTask('never-created')).rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_TASK_UNKNOWN' })
+    await expect(facade.getTask('never-created')).rejects.toMatchObject({ code: 'self-development/task-unknown' })
     await expect(facade.listTasks()).resolves.toEqual([])
   })
 
@@ -376,21 +386,30 @@ describe('read paths and the confirmation card', () => {
   })
 })
 
-describe('core passthrough', () => {
-  it('propagates the core revision conflict code verbatim', async () => {
+describe('core boundary conversion', () => {
+  it('converts the core revision conflict into the self-development/core failure with the original code', async () => {
     const facade = await makeFacade()
     await facade.createTask(SPEC, 0)
-    await expect(facade.authorizePlanning(TASK_ID, 99, 'tester'))
-      .rejects.toMatchObject({ code: 'SELF_DEV_REVISION_CONFLICT' })
+    const rejection = await facade.authorizePlanning(TASK_ID, 99, 'tester').then(
+      () => { throw new Error('expected authorizePlanning to refuse') },
+      (error: unknown) => error,
+    )
+    expect(rejection).toBeInstanceOf(RemoteError)
+    expect((rejection as RemoteError).code).toBe('self-development/core')
+    expect((rejection as RemoteError<'self-development/core'>).details.code).toBe('SELF_DEV_REVISION_CONFLICT')
+    expect((rejection as { cause: unknown }).cause).toBeInstanceOf(SelfDevelopmentError)
   })
 
-  it('refuses a duplicate spec under a fresh facade operation id', async () => {
+  it('refuses a duplicate spec under a fresh facade operation id with the core code in details', async () => {
     const facade = await makeFacade()
     const first = await facade.createTask(SPEC, 0)
     expect(first.replayed).toBe(false)
     // A second facade call generates its own operation id, so the core treats
     // it as a new operation and refuses the duplicate spec.
-    await expect(facade.createTask(SPEC, 1)).rejects.toMatchObject({ code: 'SELF_DEV_INVALID_STATE' })
+    await expect(facade.createTask(SPEC, 1)).rejects.toMatchObject({
+      code: 'self-development/core',
+      details: { code: 'SELF_DEV_INVALID_STATE' },
+    })
     expect(first.operationId).not.toBe('')
   })
 

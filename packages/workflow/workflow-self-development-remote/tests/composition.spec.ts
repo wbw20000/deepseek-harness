@@ -145,7 +145,7 @@ describe('real-Loader composition through the Remote facade', () => {
     // The first launch writes WIP2, so acceptance fails, the round is
     // consumed, and the core settles the attempt as a failed round.
     await expect(facade.runAttempt(attemptRequest(env, revision)))
-      .rejects.toMatchObject({ code: 'SELF_DEV_INVALID_RESULT' })
+      .rejects.toMatchObject({ code: 'self-development/core', details: { code: 'SELF_DEV_INVALID_RESULT' } })
 
     const afterFailure = await facade.getTask(TASK_ID)
     expect(afterFailure.projection.status).toBe('ready')
@@ -185,7 +185,7 @@ describe('real-Loader composition through the Remote facade', () => {
 
     // No confirmed plan yet: the facade refuses before the runner is touched.
     await expect(facade.runAttempt(attemptRequest(env, 1)))
-      .rejects.toMatchObject({ code: 'SELF_DEV_INVALID_STATE' })
+      .rejects.toMatchObject({ code: 'self-development/core', details: { code: 'SELF_DEV_INVALID_STATE' } })
 
     let revision = (await facade.authorizePlanning(TASK_ID, 1, 'phone-user')).revision
     revision = (await facade.submitPlanDraft(TASK_ID, revision, DRAFT)).revision
@@ -193,7 +193,7 @@ describe('real-Loader composition through the Remote facade', () => {
     revision = (await facade.approveBudget(TASK_ID, revision, APPROVAL)).revision
 
     await expect(facade.runAttempt({ ...attemptRequest(env, revision), acceptancePath: join(env.base, 'missing.json') }))
-      .rejects.toMatchObject({ code: 'SELF_DEV_RUNNER_ACCEPTANCE_INVALID' })
+      .rejects.toMatchObject({ code: 'self-development/core', details: { code: 'SELF_DEV_RUNNER_ACCEPTANCE_INVALID' } })
   })
 
   it('forwards the host-only dataHome to the runner as the attempt data directory', { timeout: 60_000 }, async () => {
@@ -246,7 +246,7 @@ describe('real-Loader composition through the Remote facade', () => {
     expect(inFlight.projection.status).toBe('attempting')
     const result = await facade.stop(TASK_ID, inFlight.projection.revision)
     expect(result.replayed).toBe(false)
-    await expect(attempt).rejects.toMatchObject({ code: 'SELF_DEV_ATTEMPT_CANCELLED' })
+    await expect(attempt).rejects.toMatchObject({ code: 'self-development/core', details: { code: 'SELF_DEV_ATTEMPT_CANCELLED' } })
     const detail = await facade.getTask(TASK_ID)
     expect(detail.projection.status).toBe('stopped')
     expect(await facade.activeTasks()).toEqual([])

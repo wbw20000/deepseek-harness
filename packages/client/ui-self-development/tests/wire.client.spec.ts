@@ -8,7 +8,7 @@ const t = makeTranslate(en)
 
 describe('self-development wire builders', () => {
   it('renders known failure codes with fixed wording and unknown ones with the wire text', () => {
-    expect(failureText(t, { code: 'SELF_DEV_REMOTE_DISABLED', message: 'ignored' })).toBe('The self-development remote service is disabled (enabled: false)')
+    expect(failureText(t, { code: 'self-development/disabled', message: 'ignored' })).toBe('The self-development remote service is disabled (enabled: false)')
     expect(failureText(t, { code: 'SELF_DEV_OTHER', message: 'boom' })).toBe('The operation failed: boom')
   })
 

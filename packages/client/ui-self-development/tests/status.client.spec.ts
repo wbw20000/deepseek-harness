@@ -28,15 +28,16 @@ describe('self-development view keys', () => {
     for (const kind of kinds) expect(zh[eventKindKey(kind)].length).toBeGreaterThan(0)
   })
 
-  it('maps the facade and core error codes to fixed wording and falls back for unknown codes', () => {
-    expect(zh[errorKey('SELF_DEV_REMOTE_DISABLED')]).toBe('自开发远端服务未启用（enabled: false）')
-    expect(zh[errorKey('SELF_DEV_REMOTE_CONFIG_INVALID')]).toBe('请求参数无效')
-    expect(zh[errorKey('SELF_DEV_REMOTE_TASK_UNKNOWN')]).toBe('任务不存在')
-    expect(zh[errorKey('SELF_DEV_REMOTE_ACTOR_FORBIDDEN')]).toBe('当前操作者不在允许名单中')
-    expect(zh[errorKey('SELF_DEV_REMOTE_PRESENCE_UNCONFIRMED')]).toBe('缺少显式在场确认')
-    expect(zh[errorKey('SELF_DEV_REMOTE_RUNNER_UNAVAILABLE')]).toBe('运行器插件未加载，无法启动轮次')
-    expect(zh[errorKey('SELF_DEV_INVALID_STATE')]).toBe('任务当前状态不允许该操作')
-    expect(zh[errorKey('SELF_DEV_RUNNER_ACCEPTANCE_INVALID')]).toBe('验收定义不可用')
+  it('maps the facade error codes to fixed wording and falls back for core and unknown codes', () => {
+    expect(zh[errorKey('self-development/disabled')]).toBe('自开发远端服务未启用（enabled: false）')
+    expect(zh[errorKey('self-development/config-invalid')]).toBe('请求参数无效')
+    expect(zh[errorKey('self-development/task-unknown')]).toBe('任务不存在')
+    expect(zh[errorKey('self-development/actor-forbidden')]).toBe('当前操作者不在允许名单中')
+    expect(zh[errorKey('self-development/presence-unconfirmed')]).toBe('缺少显式在场确认')
+    expect(zh[errorKey('self-development/runner-unavailable')]).toBe('运行器插件未加载，无法启动轮次')
+    // A core or runner rejection arrives as self-development/core; the generic
+    // line carries its message verbatim.
+    expect(errorKey('self-development/core')).toBe('errorGeneric')
     expect(errorKey('SOMETHING_ELSE')).toBe('errorGeneric')
   })
 

@@ -36,7 +36,9 @@ import type {
 // Type-only: pulls the events consumer's Context merge so the optional
 // `selfDevelopmentEvents` read below is typed.
 import type {} from '@deepseek-ai/dsh-workflow-self-development-events'
-import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
+import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
+import type { SelfDevelopmentErrorCode } from '@deepseek-ai/dsh-workflow-self-development'
+import type { SelfDevelopmentRunnerErrorCode } from '@deepseek-ai/dsh-workflow-self-development-runner'
 import { buildConfirmationCard, taskTitle } from './card.ts'
 import { toWireEvent, toWireOutcome, toWireProjection } from './wire.ts'
 import { SelfDevelopmentRemoteError } from './errors.ts'
@@ -125,7 +127,7 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
    * @param ctx - owning Cordis context carrying the task-control service.
    * @param config - deployment configuration for the enablement switch, the
    *   actor allowlist, and the task-control service's control directory.
-   * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_CONFIG_INVALID` when the control
+   * @throws SelfDevelopmentRemoteError with `self-development/config-invalid` when the control
    *   directory is not an absolute path. Misconfiguration fails at load.
    */
   constructor(ctx: Context, config: RemoteConfig) {
@@ -136,65 +138,73 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
   /**
    * List every task under the control directory with its progress row.
    * @returns one row per task journal directory, sorted by task id.
-   * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED` while the facade is disabled.
-   * @throws whatever the task-control service or a task journal rejects with, verbatim.
+   * @throws SelfDevelopmentRemoteError with `self-development/disabled` while the facade is disabled.
+   * @throws whatever the task-control service or a task journal rejects with, converted at the
+   *   facade boundary into `self-development/core` (`details.code` keeps the original code).
    */
   @Remote('listTasks')
   async listTasks(): Promise<readonly TaskSummary[]> {
-    this.assertEnabled()
-    const tasksRoot = join(this.resolved.controlDirectory, 'tasks')
-    let entries
-    try {
-      entries = await readdir(tasksRoot, { withFileTypes: true })
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
-      throw error
-    }
-    const summaries: TaskSummary[] = []
-    for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
-      if (!entry.isDirectory()) continue
-      const taskId = parseTaskId(entry.name)
-      const projection = await this.ctx.selfDevelopmentTasks.state(taskId, this.clock())
-      summaries.push({
-        taskId,
-        status: projection.status,
-        revision: projection.revision,
-        title: taskTitle(projection.spec?.requirement ?? ''),
-      })
-    }
-    return summaries
+    return this.forward(async () => {
+      this.assertEnabled()
+      const tasksRoot = join(this.resolved.controlDirectory, 'tasks')
+      let entries
+      try {
+        entries = await readdir(tasksRoot, { withFileTypes: true })
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+        throw error
+      }
+      const summaries: TaskSummary[] = []
+      for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+        if (!entry.isDirectory()) continue
+        const taskId = parseTaskId(entry.name)
+        const projection = await this.ctx.selfDevelopmentTasks.state(taskId, this.clock())
+        summaries.push({
+          taskId,
+          status: projection.status,
+          revision: projection.revision,
+          title: taskTitle(projection.spec?.requirement ?? ''),
+        })
+      }
+      return summaries
+    })
   }
 
   /**
    * Read one task's full projection and its confirmation-card view.
    * @param taskId - task identity.
    * @returns the projection and the read-only card.
-   * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED` while the facade is disabled,
-   *   `SELF_DEV_REMOTE_CONFIG_INVALID` when the task id is malformed, or
-   *   `SELF_DEV_REMOTE_TASK_UNKNOWN` when the task has no journal yet; the facade never creates a
+   * @throws SelfDevelopmentRemoteError with `self-development/disabled` while the facade is disabled,
+   *   `self-development/config-invalid` when the task id is malformed, or
+   *   `self-development/task-unknown` when the task has no journal yet; the facade never creates a
    *   journal from a read path.
-   * @throws whatever the task-control service rejects with, verbatim.
+   * @throws whatever the task-control service rejects with, converted at the facade boundary into
+   *   `self-development/core` (`details.code` keeps the original code).
    */
   @Remote('getTask')
   async getTask(taskId: string): Promise<TaskDetail> {
-    this.assertEnabled()
-    const id = parseTaskId(taskId)
-    await this.assertTaskExists(id)
-    const projection = await this.ctx.selfDevelopmentTasks.state(id, this.clock())
-    return { projection: toWireProjection(projection), card: buildConfirmationCard(id, projection) }
+    return this.forward(async () => {
+      this.assertEnabled()
+      const id = parseTaskId(taskId)
+      await this.assertTaskExists(id)
+      const projection = await this.ctx.selfDevelopmentTasks.state(id, this.clock())
+      return { projection: toWireProjection(projection), card: buildConfirmationCard(id, projection) }
+    })
   }
 
   /**
    * Read the retained recent self-development notification events.
    * @returns the events consumer's title-level buffer, oldest first; `[]` when
    *   the events consumer plugin is not loaded in this context.
-   * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED` while the facade is disabled.
+   * @throws SelfDevelopmentRemoteError with `self-development/disabled` while the facade is disabled.
    */
   @Remote('recentEvents')
   async recentEvents(): Promise<readonly RecentEvent[]> {
-    this.assertEnabled()
-    const events = this.ctx.get('selfDevelopmentEvents')
-    return await Promise.resolve(events === undefined ? [] : events.recent().map(toWireEvent))
+    return this.forward(async () => {
+      this.assertEnabled()
+      const events = this.ctx.get('selfDevelopmentEvents')
+      return await Promise.resolve(events === undefined ? [] : events.recent().map(toWireEvent))
+    })
   }
 
   /**
@@ -203,27 +213,30 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
    * @param spec - TaskSpec in wire form.
    * @param expectedRevision - revision the caller observed; a new task is at revision 0.
    * @returns the operation id the facade generated plus the core's result.
-   * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED`, `SELF_DEV_REMOTE_CONFIG_INVALID`,
-   *   `SELF_DEV_REMOTE_ACTOR_FORBIDDEN`, or `SELF_DEV_REMOTE_HOST_ONLY_FIELD` from a non-host caller:
+   * @throws SelfDevelopmentRemoteError with `self-development/disabled`, `self-development/config-invalid`,
+   *   `self-development/actor-forbidden`, or `self-development/host-only-field` from a non-host caller:
    *   the spec fixes `stableBaselineDigest` and `allowedModificationScope`, which are isolation
    *   settings the phone whitelist may not set.
-   * @throws whatever the task-control service rejects with, verbatim.
+   * @throws whatever the task-control service rejects with, converted at the facade boundary into
+   *   `self-development/core` (`details.code` keeps the original code).
    */
   @Remote('createTask')
   async createTask(spec: TaskSpecInput, expectedRevision: number): Promise<RemoteOperationResult> {
-    this.assertEnabled()
-    const parsed = parseCreateTaskInput(spec, expectedRevision)
-    this.assertCallerIsHost('createTask', 'stableBaselineDigest and allowedModificationScope')
-    this.assertActorAllowed(parsed.spec.createdBy)
-    const operationId = this.operationId()
-    const controller = await this.open(parsed.spec.taskId)
-    const result = await controller.createTask({
-      taskId: SelfDevTaskId(parsed.spec.taskId),
-      expectedRevision: parsed.expectedRevision,
-      operationId,
-      spec: parsed.spec,
+    return this.forward(async () => {
+      this.assertEnabled()
+      const parsed = parseCreateTaskInput(spec, expectedRevision)
+      this.assertCallerIsHost('createTask', 'stableBaselineDigest and allowedModificationScope')
+      this.assertActorAllowed(parsed.spec.createdBy)
+      const operationId = this.operationId()
+      const controller = await this.open(parsed.spec.taskId)
+      const result = await controller.createTask({
+        taskId: SelfDevTaskId(parsed.spec.taskId),
+        expectedRevision: parsed.expectedRevision,
+        operationId,
+        spec: parsed.spec,
+      })
+      return { taskId: parsed.spec.taskId, operationId, ...result }
     })
-    return { taskId: parsed.spec.taskId, operationId, ...result }
   }
 
   /**
@@ -233,22 +246,25 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
    * @param expectedRevision - revision the caller observed.
    * @param authorizedBy - human actor granting the authorization.
    * @returns the operation id the facade generated plus the core's result.
-   * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED` or `SELF_DEV_REMOTE_CONFIG_INVALID`.
-   * @throws whatever the task-control service rejects with, verbatim.
+   * @throws SelfDevelopmentRemoteError with `self-development/disabled` or `self-development/config-invalid`.
+   * @throws whatever the task-control service rejects with, converted at the facade boundary into
+   *   `self-development/core` (`details.code` keeps the original code).
    */
   @Remote('authorizePlanning')
   async authorizePlanning(taskId: string, expectedRevision: number, authorizedBy: string): Promise<RemoteOperationResult> {
-    this.assertEnabled()
-    const parsed = parseAuthorizePlanningInput(taskId, expectedRevision, authorizedBy)
-    const operationId = this.operationId()
-    const controller = await this.open(parsed.taskId)
-    const result = await controller.authorizePlanning({
-      taskId: SelfDevTaskId(parsed.taskId),
-      expectedRevision: parsed.expectedRevision,
-      operationId,
-      authorizedBy: parsed.authorizedBy,
+    return this.forward(async () => {
+      this.assertEnabled()
+      const parsed = parseAuthorizePlanningInput(taskId, expectedRevision, authorizedBy)
+      const operationId = this.operationId()
+      const controller = await this.open(parsed.taskId)
+      const result = await controller.authorizePlanning({
+        taskId: SelfDevTaskId(parsed.taskId),
+        expectedRevision: parsed.expectedRevision,
+        operationId,
+        authorizedBy: parsed.authorizedBy,
+      })
+      return { taskId: parsed.taskId, operationId, ...result }
     })
-    return { taskId: parsed.taskId, operationId, ...result }
   }
 
   /**
@@ -257,8 +273,9 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
    * @param expectedRevision - revision the caller observed.
    * @param draft - plan draft in wire form.
    * @returns the operation id the facade generated plus the core's result.
-   * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED` or `SELF_DEV_REMOTE_CONFIG_INVALID`.
-   * @throws whatever the task-control service rejects with, verbatim.
+   * @throws SelfDevelopmentRemoteError with `self-development/disabled` or `self-development/config-invalid`.
+   * @throws whatever the task-control service rejects with, converted at the facade boundary into
+   *   `self-development/core` (`details.code` keeps the original code).
    */
   @Remote('submitPlanDraft')
   async submitPlanDraft(
@@ -266,17 +283,19 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
     expectedRevision: number,
     draft: PlanDraftInput,
   ): Promise<RemoteOperationResult> {
-    this.assertEnabled()
-    const parsed = parseSubmitPlanDraftInput(taskId, expectedRevision, draft)
-    const operationId = this.operationId()
-    const controller = await this.open(parsed.taskId)
-    const result = await controller.submitPlanDraft({
-      taskId: SelfDevTaskId(parsed.taskId),
-      expectedRevision: parsed.expectedRevision,
-      operationId,
-      draft: parsed.draft,
+    return this.forward(async () => {
+      this.assertEnabled()
+      const parsed = parseSubmitPlanDraftInput(taskId, expectedRevision, draft)
+      const operationId = this.operationId()
+      const controller = await this.open(parsed.taskId)
+      const result = await controller.submitPlanDraft({
+        taskId: SelfDevTaskId(parsed.taskId),
+        expectedRevision: parsed.expectedRevision,
+        operationId,
+        draft: parsed.draft,
+      })
+      return { taskId: parsed.taskId, operationId, ...result }
     })
-    return { taskId: parsed.taskId, operationId, ...result }
   }
 
   /**
@@ -286,9 +305,10 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
    * @param plan - confirmed plan in wire form.
    * @param actor - human actor confirming the plan; checked against `allowedActors`.
    * @returns the operation id the facade generated plus the core's result.
-   * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED`, `SELF_DEV_REMOTE_CONFIG_INVALID`,
-   *   or `SELF_DEV_REMOTE_ACTOR_FORBIDDEN`.
-   * @throws whatever the task-control service rejects with, verbatim.
+   * @throws SelfDevelopmentRemoteError with `self-development/disabled`, `self-development/config-invalid`,
+   *   or `self-development/actor-forbidden`.
+   * @throws whatever the task-control service rejects with, converted at the facade boundary into
+   *   `self-development/core` (`details.code` keeps the original code).
    */
   @Remote('confirmPlan')
   async confirmPlan(
@@ -297,18 +317,20 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
     plan: ConfirmedPlanInput,
     actor: string,
   ): Promise<RemoteOperationResult> {
-    this.assertEnabled()
-    const parsed = parseConfirmPlanInput(taskId, expectedRevision, plan, actor)
-    this.assertActorAllowed(parsed.actor)
-    const operationId = this.operationId()
-    const controller = await this.open(parsed.taskId)
-    const result = await controller.confirmPlan({
-      taskId: SelfDevTaskId(parsed.taskId),
-      expectedRevision: parsed.expectedRevision,
-      operationId,
-      plan: parsed.plan,
+    return this.forward(async () => {
+      this.assertEnabled()
+      const parsed = parseConfirmPlanInput(taskId, expectedRevision, plan, actor)
+      this.assertActorAllowed(parsed.actor)
+      const operationId = this.operationId()
+      const controller = await this.open(parsed.taskId)
+      const result = await controller.confirmPlan({
+        taskId: SelfDevTaskId(parsed.taskId),
+        expectedRevision: parsed.expectedRevision,
+        operationId,
+        plan: parsed.plan,
+      })
+      return { taskId: parsed.taskId, operationId, ...result }
     })
-    return { taskId: parsed.taskId, operationId, ...result }
   }
 
   /**
@@ -318,9 +340,10 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
    * @param expectedRevision - revision the caller observed.
    * @param approval - budget approval in wire form.
    * @returns the operation id the facade generated plus the core's result.
-   * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED`, `SELF_DEV_REMOTE_CONFIG_INVALID`,
-   *   or `SELF_DEV_REMOTE_ACTOR_FORBIDDEN`.
-   * @throws whatever the task-control service rejects with, verbatim.
+   * @throws SelfDevelopmentRemoteError with `self-development/disabled`, `self-development/config-invalid`,
+   *   or `self-development/actor-forbidden`.
+   * @throws whatever the task-control service rejects with, converted at the facade boundary into
+   *   `self-development/core` (`details.code` keeps the original code).
    */
   @Remote('approveBudget')
   async approveBudget(
@@ -328,18 +351,20 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
     expectedRevision: number,
     approval: BudgetApprovalInput,
   ): Promise<RemoteOperationResult> {
-    this.assertEnabled()
-    const parsed = parseApproveBudgetInput(taskId, expectedRevision, approval)
-    this.assertActorAllowed(readApprovedBy(parsed.approval))
-    const operationId = this.operationId()
-    const controller = await this.open(parsed.taskId)
-    const result = await controller.approveBudget({
-      taskId: SelfDevTaskId(parsed.taskId),
-      expectedRevision: parsed.expectedRevision,
-      operationId,
-      approval: parsed.approval,
+    return this.forward(async () => {
+      this.assertEnabled()
+      const parsed = parseApproveBudgetInput(taskId, expectedRevision, approval)
+      this.assertActorAllowed(readApprovedBy(parsed.approval))
+      const operationId = this.operationId()
+      const controller = await this.open(parsed.taskId)
+      const result = await controller.approveBudget({
+        taskId: SelfDevTaskId(parsed.taskId),
+        expectedRevision: parsed.expectedRevision,
+        operationId,
+        approval: parsed.approval,
+      })
+      return { taskId: parsed.taskId, operationId, ...result }
     })
-    return { taskId: parsed.taskId, operationId, ...result }
   }
 
   /**
@@ -350,27 +375,30 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
    * @param expectedRevision - revision the caller observed.
    * @param reason - optional stop reason; only `cancelled` exists today.
    * @returns the operation id the facade generated plus the core's result.
-   * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED` or `SELF_DEV_REMOTE_CONFIG_INVALID`.
-   * @throws whatever the core or the runner rejects with, verbatim.
+   * @throws SelfDevelopmentRemoteError with `self-development/disabled` or `self-development/config-invalid`.
+   * @throws whatever the core or the runner rejects with, converted at the facade boundary into
+   *   `self-development/core` (`details.code` keeps the original code).
    */
   @Remote('stop')
   async stop(taskId: string, expectedRevision: number, reason?: 'cancelled'): Promise<RemoteOperationResult> {
-    this.assertEnabled()
-    const parsed = parseStopInput(taskId, expectedRevision, reason)
-    const operationId = this.operationId()
-    const runner = this.runner()
-    const result = runner !== undefined
-      ? await runner.stop({
-        taskId: parsed.taskId,
-        expectedRevision: parsed.expectedRevision,
-        operationId,
-      })
-      : await (await this.open(parsed.taskId)).stop({
-        taskId: SelfDevTaskId(parsed.taskId),
-        expectedRevision: parsed.expectedRevision,
-        operationId,
-      })
-    return { taskId: parsed.taskId, operationId, ...result }
+    return this.forward(async () => {
+      this.assertEnabled()
+      const parsed = parseStopInput(taskId, expectedRevision, reason)
+      const operationId = this.operationId()
+      const runner = this.runner()
+      const result = runner !== undefined
+        ? await runner.stop({
+          taskId: parsed.taskId,
+          expectedRevision: parsed.expectedRevision,
+          operationId,
+        })
+        : await (await this.open(parsed.taskId)).stop({
+          taskId: SelfDevTaskId(parsed.taskId),
+          expectedRevision: parsed.expectedRevision,
+          operationId,
+        })
+      return { taskId: parsed.taskId, operationId, ...result }
+    })
   }
 
   /**
@@ -380,9 +408,10 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
    * @param expectedRevision - revision the caller observed.
    * @param approvedBy - human actor approving the trial; checked against `allowedActors`.
    * @returns the operation id the facade generated plus the core's result.
-   * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED`, `SELF_DEV_REMOTE_CONFIG_INVALID`,
-   *   or `SELF_DEV_REMOTE_ACTOR_FORBIDDEN`.
-   * @throws whatever the task-control service rejects with, verbatim.
+   * @throws SelfDevelopmentRemoteError with `self-development/disabled`, `self-development/config-invalid`,
+   *   or `self-development/actor-forbidden`.
+   * @throws whatever the task-control service rejects with, converted at the facade boundary into
+   *   `self-development/core` (`details.code` keeps the original code).
    */
   @Remote('recordTrialApproval')
   async recordTrialApproval(
@@ -390,18 +419,20 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
     expectedRevision: number,
     approvedBy: string,
   ): Promise<RemoteOperationResult> {
-    this.assertEnabled()
-    const parsed = parseRecordTrialApprovalInput(taskId, expectedRevision, approvedBy)
-    this.assertActorAllowed(parsed.approvedBy)
-    const operationId = this.operationId()
-    const controller = await this.open(parsed.taskId)
-    const result = await controller.recordTrialApproval({
-      taskId: SelfDevTaskId(parsed.taskId),
-      expectedRevision: parsed.expectedRevision,
-      operationId,
-      approvedBy: parsed.approvedBy,
+    return this.forward(async () => {
+      this.assertEnabled()
+      const parsed = parseRecordTrialApprovalInput(taskId, expectedRevision, approvedBy)
+      this.assertActorAllowed(parsed.approvedBy)
+      const operationId = this.operationId()
+      const controller = await this.open(parsed.taskId)
+      const result = await controller.recordTrialApproval({
+        taskId: SelfDevTaskId(parsed.taskId),
+        expectedRevision: parsed.expectedRevision,
+        operationId,
+        approvedBy: parsed.approvedBy,
+      })
+      return { taskId: parsed.taskId, operationId, ...result }
     })
-    return { taskId: parsed.taskId, operationId, ...result }
   }
 
   /**
@@ -411,68 +442,98 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
    * must never default that acknowledgement. Requires the runner plugin.
    * @param request - the supervised attempt request in wire form.
    * @returns the runner's outcome plus the operation id the facade generated.
-   * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED`, `SELF_DEV_REMOTE_CONFIG_INVALID`,
-   *   `SELF_DEV_REMOTE_ACTOR_FORBIDDEN`, `SELF_DEV_REMOTE_PRESENCE_UNCONFIRMED` when
-   *   `presenceAcknowledged` is not exactly `true`, `SELF_DEV_REMOTE_HOST_ONLY_FIELD` from a
+   * @throws SelfDevelopmentRemoteError with `self-development/disabled`, `self-development/config-invalid`,
+   *   `self-development/actor-forbidden`, `self-development/presence-unconfirmed` when
+   *   `presenceAcknowledged` is not exactly `true`, `self-development/host-only-field` from a
    *   non-host caller (the launch assigns the worktree, acceptance, and artifact isolation
    *   settings, and a non-host request may not set the host-only `dataHome`), or
-   *   `SELF_DEV_REMOTE_RUNNER_UNAVAILABLE` when the runner plugin is not loaded.
-   * @throws whatever the core or the runner rejects with, verbatim.
+   *   `self-development/runner-unavailable` when the runner plugin is not loaded.
+   * @throws whatever the core or the runner rejects with, converted at the facade boundary into
+   *   `self-development/core` (`details.code` keeps the original code).
    */
   @Remote('runAttempt')
   async runAttempt(request: RemoteRunAttemptRequest): Promise<RemoteRunAttemptOutcome> {
-    this.assertEnabled()
-    const parsed = parseRunAttemptRequest(request)
-    assertHostOnlyFields('runAttempt', parsed, this.callerIsHost())
-    this.assertCallerIsHost('runAttempt', 'worktree, acceptancePath, artifactPaths, dataHome')
-    if (!parsed.presenceAcknowledged) {
-      throw new SelfDevelopmentRemoteError(
-        'presenceAcknowledged must be explicitly true; a UI must never default or pre-select the human-presence acknowledgement',
-        'SELF_DEV_REMOTE_PRESENCE_UNCONFIRMED',
-      )
-    }
-    this.assertActorAllowed(parsed.confirmedBy)
-    const runner = this.requireRunner()
-    const controller = await this.open(parsed.taskId)
-    const presence = await this.buildPresence(controller.projection, parsed)
-    const operationId = this.operationId()
-    const outcome = await runner.runAttempt({
-      taskId: parsed.taskId,
-      expectedRevision: parsed.expectedRevision,
-      operationId,
-      worktree: parsed.worktree,
-      artifactPaths: sortedUnique(parsed.artifactPaths),
-      acceptancePath: parsed.acceptancePath,
-      // Host-only: only the stable host supplies a data directory, forwarded
-      // verbatim; a phone channel omits the field and the runner keeps its
-      // configured `dshHome`.
-      ...(parsed.dataHome === undefined ? {} : { dshHome: parsed.dataHome }),
-      presence,
+    return this.forward(async () => {
+      this.assertEnabled()
+      const parsed = parseRunAttemptRequest(request)
+      assertHostOnlyFields('runAttempt', parsed, this.callerIsHost())
+      this.assertCallerIsHost('runAttempt', 'worktree, acceptancePath, artifactPaths, dataHome')
+      if (!parsed.presenceAcknowledged) {
+        throw new SelfDevelopmentRemoteError(
+          'self-development/presence-unconfirmed',
+          'presenceAcknowledged must be explicitly true; a UI must never default or pre-select the human-presence acknowledgement',
+        )
+      }
+      this.assertActorAllowed(parsed.confirmedBy)
+      const runner = this.requireRunner()
+      const controller = await this.open(parsed.taskId)
+      const presence = await this.buildPresence(controller.projection, parsed)
+      const operationId = this.operationId()
+      const outcome = await runner.runAttempt({
+        taskId: parsed.taskId,
+        expectedRevision: parsed.expectedRevision,
+        operationId,
+        worktree: parsed.worktree,
+        artifactPaths: sortedUnique(parsed.artifactPaths),
+        acceptancePath: parsed.acceptancePath,
+        // Host-only: only the stable host supplies a data directory, forwarded
+        // verbatim; a phone channel omits the field and the runner keeps its
+        // configured `dshHome`.
+        ...(parsed.dataHome === undefined ? {} : { dshHome: parsed.dataHome }),
+        presence,
+      })
+      return toWireOutcome(outcome, operationId, parsed.worktree)
     })
-    return toWireOutcome(outcome, operationId, parsed.worktree)
   }
 
   /**
    * The task ids of the attempts the runner currently owns.
    * @returns a read-only snapshot, empty when the runner plugin is absent.
-   * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED` while the facade is disabled.
+   * @throws SelfDevelopmentRemoteError with `self-development/disabled` while the facade is disabled.
    */
   @Remote('activeTasks')
   async activeTasks(): Promise<readonly string[]> {
-    this.assertEnabled()
-    return await Promise.resolve(this.runner()?.activeTasks() ?? [])
+    return this.forward(async () => {
+      this.assertEnabled()
+      return await Promise.resolve(this.runner()?.activeTasks() ?? [])
+    })
+  }
+
+  /**
+   * Run one `@Remote` body behind the facade's failure conversion. The
+   * Gateway forwards only `RemoteError`s and folds everything else into
+   * `gateway/internal`, so a core or runner rejection is converted here into
+   * `self-development/core` with the owning package's code in `details.code`,
+   * while the facade's own refusals pass through unchanged.
+   * @param invoke - the method body to run.
+   * @returns the body's result.
+   */
+  private async forward<T>(invoke: () => Promise<T>): Promise<T> {
+    try {
+      return await invoke()
+    } catch (error) {
+      if (error instanceof RemoteError) throw error
+      if (error instanceof SelfDevelopmentError || error instanceof SelfDevelopmentRunnerError) {
+        // The owning packages narrow `code` through their constructors, below
+        // HarnessError's string-typed property.
+        throw new RemoteError('self-development/core', error.message, {
+          code: error.code as SelfDevelopmentErrorCode | SelfDevelopmentRunnerErrorCode,
+        }, { cause: error })
+      }
+      throw error
+    }
   }
 
   /**
    * Refuse every method while the facade is disabled.
    * @returns nothing when the facade is enabled.
-   * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED` while `enabled` is `false`.
+   * @throws SelfDevelopmentRemoteError with `self-development/disabled` while `enabled` is `false`.
    */
   private assertEnabled(): void {
     if (this.resolved.enabled) return
     throw new SelfDevelopmentRemoteError(
+      'self-development/disabled',
       'self-development remote is disabled; set enabled: true in the service config to allow UI and phone operations',
-      'SELF_DEV_REMOTE_DISABLED',
     )
   }
 
@@ -480,15 +541,15 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
    * Check an operation's actor against the allowlist.
    * @param actor - the operation's actor field.
    * @returns nothing when the actor may act.
-   * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_ACTOR_FORBIDDEN` when the allowlist is
+   * @throws SelfDevelopmentRemoteError with `self-development/actor-forbidden` when the allowlist is
    *   non-empty and does not contain the actor.
    */
   private assertActorAllowed(actor: string): void {
     if (this.resolved.allowedActors.length === 0) return
     if (this.resolved.allowedActors.includes(actor)) return
     throw new SelfDevelopmentRemoteError(
+      'self-development/actor-forbidden',
       `actor ${JSON.stringify(actor)} is not in the configured allowlist`,
-      'SELF_DEV_REMOTE_ACTOR_FORBIDDEN',
     )
   }
 
@@ -523,16 +584,16 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
    * @param operation - facade method the caller invoked.
    * @param settings - the isolation settings the operation assigns.
    * @returns nothing when the caller counts as the stable host.
-   * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_HOST_ONLY_FIELD` from a caller whose
+   * @throws SelfDevelopmentRemoteError with `self-development/host-only-field` from a caller whose
    *   Host header is not loopback; the message states what the phone whitelist
    *   may still do.
    */
   private assertCallerIsHost(operation: string, settings: string): void {
     if (this.callerIsHost()) return
     throw new SelfDevelopmentRemoteError(
+      'self-development/host-only-field',
       `${operation} assigns isolation settings (${settings}) and is reserved for the stable host; `
         + 'a phone caller may watch progress, interject, confirm the plan and budget, stop, and approve or reject the trial',
-      'SELF_DEV_REMOTE_HOST_ONLY_FIELD',
     )
   }
 
@@ -547,15 +608,15 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
   /**
    * Resolve the supervised runner plugin, refusing explicitly when absent.
    * @returns the runner service.
-   * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_RUNNER_UNAVAILABLE` when the runner
+   * @throws SelfDevelopmentRemoteError with `self-development/runner-unavailable` when the runner
    *   plugin is not loaded.
    */
   private requireRunner(): SelfDevelopmentRunner {
     const runner = this.runner()
     if (runner !== undefined) return runner
     throw new SelfDevelopmentRemoteError(
+      'self-development/runner-unavailable',
       'runAttempt requires the supervised runner plugin; selfDevelopmentRunner is not loaded in this context',
-      'SELF_DEV_REMOTE_RUNNER_UNAVAILABLE',
     )
   }
 
@@ -587,7 +648,8 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
    * Open (or resume) one task's controller through the task-control service.
    * @param taskId - task identity naming the journal directory.
    * @returns the task controller.
-   * @throws whatever the task-control service rejects with, verbatim.
+   * @throws whatever the task-control service rejects with, converted at the facade boundary into
+   *   `self-development/core` (`details.code` keeps the original code).
    */
   private async open(taskId: string): Promise<SelfDevelopmentTaskController> {
     return this.ctx.selfDevelopmentTasks.open(taskId, this.clock())
@@ -598,7 +660,7 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
    * an unknown task never creates its directory.
    * @param taskId - task identity.
    * @returns nothing once the journal directory exists.
-   * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_TASK_UNKNOWN` when the task has no
+   * @throws SelfDevelopmentRemoteError with `self-development/task-unknown` when the task has no
    *   journal directory.
    */
   private async assertTaskExists(taskId: string): Promise<void> {
@@ -607,8 +669,8 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
       await stat(directory)
     } catch {
       throw new SelfDevelopmentRemoteError(
+        'self-development/task-unknown',
         `task ${JSON.stringify(taskId)} has no journal under the control directory`,
-        'SELF_DEV_REMOTE_TASK_UNKNOWN',
       )
     }
   }
@@ -621,8 +683,8 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
    * @param projection - the task projection at the requested revision.
    * @param request - the validated run-attempt request.
    * @returns the confirmation the runner binds to the real launch facts.
-   * @throws SelfDevelopmentError with `SELF_DEV_INVALID_STATE` when the task has no confirmed plan.
-   * @throws SelfDevelopmentRunnerError with `SELF_DEV_RUNNER_ACCEPTANCE_INVALID` when the acceptance
+   * @throws the `self-development/core` failure with `details.code` `SELF_DEV_INVALID_STATE` when the
+   *   task has no confirmed plan, or `SELF_DEV_RUNNER_ACCEPTANCE_INVALID` when the acceptance
    *   definition cannot be read.
    */
   private async buildPresence(
@@ -664,7 +726,8 @@ export default SelfDevelopmentRemote
  * @param path - absolute path of the acceptance definition.
  * @returns the lowercase sha-256 hex digest of the file bytes.
  * @throws SelfDevelopmentRunnerError with `SELF_DEV_RUNNER_ACCEPTANCE_INVALID` when the file cannot
- *   be read, matching the code the runner rejects an unusable definition with.
+ *   be read, matching the code the runner rejects an unusable definition with; the facade boundary
+ *   converts it into `self-development/core`.
  */
 async function acceptanceDefinitionDigest(path: string): Promise<string> {
   let bytes: Buffer
@@ -702,12 +765,12 @@ function readApprovedBy(approval: BudgetApprovalInput): string {
  * Validate the deployment configuration at construction time.
  * @param config - configuration as parsed from cordis.yml.
  * @returns the same configuration once every field is proven usable.
- * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_CONFIG_INVALID` when the control directory
+ * @throws SelfDevelopmentRemoteError with `self-development/config-invalid` when the control directory
  *   is not an absolute path.
  */
 function validateConfig(config: RemoteConfig): RemoteConfig {
   const invalid = (detail: string): SelfDevelopmentRemoteError =>
-    new SelfDevelopmentRemoteError(`self-development remote config is invalid: ${detail}`, 'SELF_DEV_REMOTE_CONFIG_INVALID')
+    new SelfDevelopmentRemoteError('self-development/config-invalid', `self-development remote config is invalid: ${detail}`)
   if (config.controlDirectory.length === 0 || !isAbsolute(config.controlDirectory)) {
     throw invalid(`controlDirectory ${JSON.stringify(config.controlDirectory)} must be an absolute path`)
   }
