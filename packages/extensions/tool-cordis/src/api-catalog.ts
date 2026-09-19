@@ -5866,7 +5866,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'RemoteRunAttemptRequest',
-    declaration: 'export interface RemoteRunAttemptRequest {\n    readonly taskId: string;\n    readonly expectedRevision: number;\n    readonly worktree: string;\n    readonly artifactPaths: readonly string[];\n    readonly acceptancePath: string;\n    readonly confirmedBy: string;\n    readonly loopbackAllowlist: readonly number[];\n    readonly presenceAcknowledged: boolean;\n}',
+    declaration: 'export interface RemoteRunAttemptRequest {\n    readonly taskId: string;\n    readonly expectedRevision: number;\n    readonly worktree: string;\n    readonly artifactPaths: readonly string[];\n    readonly acceptancePath: string;\n    readonly dataHome?: string | undefined;\n    readonly confirmedBy: string;\n    readonly loopbackAllowlist: readonly number[];\n    readonly presenceAcknowledged: boolean;\n}',
   },
   {
     name: 'RemoteTaskProjection',
@@ -6898,7 +6898,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SupervisedAttemptRequest',
-    declaration: 'export interface SupervisedAttemptRequest {\n    readonly taskId: string;\n    readonly expectedRevision: number;\n    readonly operationId: string;\n    readonly worktree: string;\n    readonly artifactPaths: readonly string[];\n    readonly acceptancePath: string;\n    readonly presence: PresenceConfirmation;\n    readonly signal?: AbortSignal;\n}',
+    declaration: 'export interface SupervisedAttemptRequest {\n    readonly taskId: string;\n    readonly expectedRevision: number;\n    readonly operationId: string;\n    readonly worktree: string;\n    readonly dshHome?: string;\n    readonly artifactPaths: readonly string[];\n    readonly acceptancePath: string;\n    readonly presence: PresenceConfirmation;\n    readonly signal?: AbortSignal;\n}',
   },
   {
     name: 'SurfaceEvent',

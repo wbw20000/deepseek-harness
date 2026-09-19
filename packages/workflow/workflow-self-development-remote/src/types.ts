@@ -241,6 +241,12 @@ export interface RemoteRunAttemptRequest {
   readonly artifactPaths: readonly string[]
   /** Absolute path of the stable-side acceptance definition. */
   readonly acceptancePath: string
+  /**
+   * Host-only per-attempt data directory, forwarded as the runner's `dshHome`.
+   * Assigned by the stable-side workspace service; a phone caller must omit
+   * this field, and the wire schema marks it `hostOnly` for that reason.
+   */
+  readonly dataHome?: string | undefined
   /** Non-empty name of the person who gave the confirmation; checked against `allowedActors`. */
   readonly confirmedBy: string
   /** Loopback ports the supervised session may bind. */

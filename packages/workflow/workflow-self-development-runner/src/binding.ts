@@ -4,13 +4,16 @@
  * acceptance-definition digests, and the artifact path set. Comparing case
  * names and assertion names alone cannot prove the launched tests are the
  * ones a person confirmed, so every fact is checked here before a launch.
+ * The module also resolves a per-attempt data directory (`dshHome`) against
+ * the same filesystem facts.
  * @module @deepseek-ai/dsh-workflow-self-development-runner/binding
  */
 
 import { realpath, stat } from 'node:fs/promises'
-import { join } from 'node:path'
-import { realpathIfInside } from './path-containment.ts'
+import { isAbsolute, join } from 'node:path'
+import { isInsideReal, realpathIfInside } from './path-containment.ts'
 import type { PresenceConfirmation } from './presence.ts'
+import type { RunnerConfig } from './types.ts'
 import { SelfDevelopmentRunnerError } from './runtime.ts'
 
 /** Real filesystem facts of the launch a confirmation must bind. */
@@ -99,4 +102,45 @@ export async function resolveExperimentWorktree(experimentsRoot: string, worktre
     )
   }
   return worktreeReal
+}
+
+/**
+ * Resolve one attempt's data directory for launch: the requested `dshHome`
+ * must be absolute, must resolve through the filesystem to a location inside
+ * the experiments root (unlike a worktree it needs no `.git` entry — a task
+ * data home copied from the workspaces template is a plain directory), must
+ * not be the configured deployment home, and must not sit inside the
+ * experiment worktree, where the launched agent can write freely. The
+ * returned value is the resolved directory's realpath and is what the launch
+ * record binds and the executor and acceptor hand to their children.
+ * @param config - deployment configuration owning `dshHome` and `experimentsRoot`.
+ * @param dshHome - per-attempt data directory as handed in.
+ * @param worktreeReal - realpath of the resolved experiment worktree.
+ * @returns the data directory's realpath.
+ * @throws SelfDevelopmentRunnerError with `SELF_DEV_RUNNER_WORKTREE_INVALID` when the path is
+ *   relative, does not resolve inside the experiments root, equals the
+ *   configured `dshHome`, or resolves inside the worktree.
+ */
+export async function resolveAttemptDshHome(
+  config: Pick<RunnerConfig, 'dshHome' | 'experimentsRoot'>,
+  dshHome: string,
+  worktreeReal: string,
+): Promise<string> {
+  const invalid = (detail: string): SelfDevelopmentRunnerError =>
+    new SelfDevelopmentRunnerError(`attempt data directory (dshHome) ${detail}`, 'SELF_DEV_RUNNER_WORKTREE_INVALID')
+  if (!isAbsolute(dshHome)) throw invalid(`${JSON.stringify(dshHome)} must be an absolute path`)
+  const dshHomeReal = await realpathIfInside(config.experimentsRoot, dshHome)
+  if (dshHomeReal === undefined) {
+    throw invalid(`${JSON.stringify(dshHome)} does not resolve inside the experiments root`)
+  }
+  // The configured home may itself be absent on disk, so its comparison basis
+  // falls back to the configured spelling when realpath fails.
+  const configDshHomeReal = await realpath(config.dshHome).catch(() => config.dshHome)
+  if (dshHomeReal === configDshHomeReal) {
+    throw invalid(`${JSON.stringify(dshHome)} must not equal the configured dshHome ${JSON.stringify(config.dshHome)}`)
+  }
+  if (isInsideReal(worktreeReal, dshHomeReal)) {
+    throw invalid(`${JSON.stringify(dshHome)} must live outside the experiment worktree ${JSON.stringify(worktreeReal)}`)
+  }
+  return dshHomeReal
 }

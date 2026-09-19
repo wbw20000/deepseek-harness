@@ -19,6 +19,7 @@ Run one supervised self-development attempt end to end. The service composes the
 - [Human-presence evidence](#human-presence-evidence)
 - [Attempt budget](#attempt-budget)
 - [Launch binding and the launch record](#launch-binding-and-the-launch-record)
+- [Per-attempt data directory](#per-attempt-data-directory)
 - [Execution and acceptance](#execution-and-acceptance)
 - [Attempt evidence](#attempt-evidence)
 - [Attempt orchestration](#attempt-orchestration)
@@ -79,12 +80,35 @@ No runtime invariant companion is published: the package exposes no runtime obse
 
 [`binding.ts`](src/binding.ts) refuses a launch whose confirmation does not bind the real launch facts: the task id, the worktree's filesystem realpath (which must resolve inside the experiments root and carry a `.git` entry), the frozen plan digest, the acceptance-definition digest, and the artifact path set.
 
-[`launch-record.ts`](src/launch-record.ts) writes the operation-bound launch record to `<evidenceRoot>/tasks/<taskId>/launches/<operationId>.json`, exactly once per operation, with the digests computed at launch: worktree realpath, artifact paths, acceptance path and digest, test-plan digest, source and artifact digests, the derived budget, and the human confirmation. A retry with the same operation id reads the record back instead of recomputing its launch inputs; the record's content facts are compared exactly, and any divergence throws `SELF_DEV_RUNNER_LAUNCH_MISMATCH`, refusing the launch to a human. The record's `expectedRevision` records which revision the launch expected and is deliberately not compared: a retry after a failed attempt necessarily arrives at a higher revision, and the core's own replay check binds the retried operation.
+[`launch-record.ts`](src/launch-record.ts) writes the operation-bound launch record to `<evidenceRoot>/tasks/<taskId>/launches/<operationId>.json`, exactly once per operation, with the digests computed at launch: worktree realpath, data-directory realpath, artifact paths, acceptance path and digest, test-plan digest, source and artifact digests, the derived budget, and the human confirmation.
+
+<a id="per-attempt-data-directory"></a>
+## Per-attempt data directory
+
+`runSupervisedAttempt` accepts an optional `dshHome` on the request: the data directory this one attempt runs with. Absent, the attempt runs exactly as before, with the deployment's configured `dshHome`. When present, the directory must be absolute, must resolve through the filesystem to a location inside `experimentsRoot` — a plain directory is enough, no `.git` entry — must not be the configured `dshHome`, and must not sit inside the experiment worktree, where the launched agent can write freely. Any other value throws `SELF_DEV_RUNNER_WORKTREE_INVALID` before the acceptance definition is loaded and before a launch record exists.
+
+The executor's child and every acceptance case process both receive the attempt's data directory as their `DSH_HOME`, so per-task state the harness writes under its home lands in that task's directory. The launch record stores the resolved directory as `dshHomeReal` and retries compare it: a retry that names a different data directory is refused with `SELF_DEV_RUNNER_LAUNCH_MISMATCH`, and a record written before the field existed is read as the configured `dshHome`, so an old operation cannot gain a data directory on retry.
+
+This is the seam the workspaces service hands its allocations over: `allocate` returns a `TaskWorkspace` whose `dataHome` is `<experimentsRoot>/<taskId>/dsh-home`, copied from the deployment's `dataHomeTemplate`; pass that value straight through as the attempt's `dshHome`:
+
+```ts ignore-check
+// The workspaces allocation already carries the task's data home.
+const workspace = await workspaces.allocate({ taskId, projectRoot })
+await runner.runAttempt({
+  taskId: workspace.taskId,
+  worktree: workspace.worktree,
+  dshHome: workspace.dataHome,
+  // remaining supervised-attempt fields as usual: expectedRevision,
+  // operationId, artifactPaths, acceptancePath, presence
+})
+```
+
+The separation is bookkeeping and spawn-environment plumbing, not isolation. A child still runs as the operating user, and a same-user process — including the launched agent — can read and write every other task's data directory, the evidence root, and the control directory; protecting those requires an outer sandbox or OS-level access control this package does not provide.
 
 <a id="execution-and-acceptance"></a>
 ## Execution and acceptance
 
-The [executor](src/executor.ts) starts the configured CLI through the headless profile with the experiment directory as its working directory. The [acceptor](src/acceptor.ts) loads a separate definition and checks command outcomes and file assertions. Both use POSIX process groups for cancellation. The presence source above records an acknowledgement; it does not detect continued human presence or enforce the recorded loopback allowlist.
+The [executor](src/executor.ts) starts the configured CLI through the headless profile with the experiment directory as its working directory and the attempt's data directory as its `DSH_HOME`. The [acceptor](src/acceptor.ts) loads a separate definition and checks command outcomes and file assertions, handing its case processes the same data directory. Both use POSIX process groups for cancellation. The presence source above records an acknowledgement; it does not detect continued human presence or enforce the recorded loopback allowlist.
 
 Acceptance definitions must reside outside the experiments root. This placement reduces accidental modification but does not make them immutable to a same-user process. The caller must protect its control files and approved inputs independently. Only a completed integration with the task controller can associate these helper results with a task's budget, frozen plan, and manual trial.
 
@@ -112,7 +136,7 @@ The service owns every attempt it starts. [`stop`](#service) commits the core st
 | Code | Meaning |
 |---|---|
 | `SELF_DEV_RUNNER_CONFIG_INVALID` | The service configuration or a human-presence confirmation fails its shape validation at the config boundary. |
-| `SELF_DEV_RUNNER_WORKTREE_INVALID` | The worktree does not resolve inside the experiments root, lacks a `.git` entry, or cannot be digested. |
+| `SELF_DEV_RUNNER_WORKTREE_INVALID` | The worktree does not resolve inside the experiments root, lacks a `.git` entry, cannot be digested, or a requested per-attempt data directory is relative, resolves outside the experiments root, equals the configured `dshHome`, or sits inside the worktree. |
 | `SELF_DEV_RUNNER_CLOCK_UNAVAILABLE` | `sysctl kern.boottime` cannot be started, read, or parsed into a boot record. |
 | `SELF_DEV_RUNNER_ACCEPTANCE_INVALID` | The acceptance definition is unusable, misplaced, or does not cover the frozen plan's required cases. |
 | `SELF_DEV_RUNNER_EXECUTOR_FAILED` | The headless executor could not spawn its child or could not confirm the process group's exit. |
@@ -146,7 +170,7 @@ The service adds no prompt prefix. Cache reuse inside the separately launched Ag
 
 - **Wall-clock sensitivity** — `HostClock.monotonicMs` derives from `Date.now()`, so a wall-clock adjustment can invalidate duration measurements. A JavaScript timer is not an independent supervisor across process failure or host sleep.
 - **No automatic attempt loop** — the service does not repeat failed attempts and provides no unattended execution or upgrade path. A retry is a caller-issued operation with its own idempotency key; the launch record replays it or refuses it to a human.
-- **Same-user execution** — working-directory selection and a restricted environment are not a sandbox. Children retain the operating-system user's permissions; the supplied experiment home may contain credentials. Acceptance commands also run without an outer sandbox.
+- **Same-user execution** — working-directory selection and a restricted environment are not a sandbox. Children retain the operating-system user's permissions; the supplied experiment home may contain credentials. Acceptance commands also run without an outer sandbox. A per-attempt data directory changes where a child's `DSH_HOME` points, not what it may reach: any same-user process can still read and write every other task's data directory.
 - **Process-group identity and escape** — a descendant that leaves the group, for example with `setsid`, can escape group cancellation. A numeric group id can also be reused after exit; signalling does not pin an OS-owned process identity. Execution helpers reject Windows before spawning; they do not implement a Windows process supervisor.
 - **macOS-only clock source** — `readBootTimeSysctl` shells out to `sysctl kern.boottime`, which does not exist on Linux or Windows; there is no fallback clock.
 - **Supervision is not isolation** — working-directory selection, the environment allowlist, workspace-write, and path checks are not an outer operating-system sandbox. A child of the same user may reach the real home, experiment credentials, the control directory, and other processes. A human confirmation does not automatically create quotas, isolation, or real presence detection. Node wall-clock drift and JavaScript timers cannot replace an independent supervisor's clock, sleep accounting, and crash cleanup. The current stage provides supervised testing with recorded limits only and must not be read as clearance for unattended operation.

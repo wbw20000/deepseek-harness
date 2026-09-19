@@ -58,7 +58,7 @@ kind: "package-reference"
 | `approveBudget(taskId, expectedRevision, approval)` | `approveBudget` | 记录或替换人工预算批准。actor 为 `approval.approvedBy`；已用轮数与时间从不清零。 |
 | `stop(taskId, expectedRevision, reason?)` | runner `stop`，否则核心 `stop` | 停止任务。runner 已加载时，其拥有的进程组与证据写入完成后才返回结果；未加载时只执行核心停止。 |
 | `recordTrialApproval(taskId, expectedRevision, approvedBy)` | `recordTrialApproval` | 记录绑定当前已验证结果的人工试用批准。actor 为 `approvedBy`。 |
-| `runAttempt(request)` | runner `runAttempt` | 启动一个受监督试验。门面组装 `PresenceConfirmation`：`confirmedAt` 取当下的一次可信时钟观测，`taskId`、`testPlanDigest` 取冻结计划，`acceptanceDefinitionDigest` 取定义字节摘要，`artifactPaths` 去重升序，acknowledgement 固定为 `supervised-not-unattended`。要求显式传入 `presenceAcknowledged: true`。返回 runner 结果与 `operationId`。 |
+| `runAttempt(request)` | runner `runAttempt` | 启动一个受监督试验。门面组装 `PresenceConfirmation`：`confirmedAt` 取当下的一次可信时钟观测，`taskId`、`testPlanDigest` 取冻结计划，`acceptanceDefinitionDigest` 取定义字节摘要，`artifactPaths` 去重升序，acknowledgement 固定为 `supervised-not-unattended`。要求显式传入 `presenceAcknowledged: true`。请求中可选的 `dataHome` 仅限宿主侧，并转发为 runner 的每次尝试 `dshHome`；手机端调用必须省略该字段。返回 runner 结果与 `operationId`。 |
 | `activeTasks()` | runner `activeTasks` | 返回 runner 当前拥有的试验的任务 id；无 runner 时为 `[]`。 |
 
 每个变更方法用 `randomUUID()` 生成 `operationId` 并返回给调用方；需要核心重放语义的重试必须带回该 id。所有参数先在门面校验，核心与 runner 的拒绝原样透传，保留属主包的机器可路由 code。
@@ -72,6 +72,8 @@ kind: "package-reference"
 - **`allowedActors`** — 为空表示不限制；非空时约束携带 actor 的操作：`createTask`（`spec.createdBy`）、`confirmPlan`（`actor` 参数）、`approveBudget`（`approval.approvedBy`）、`recordTrialApproval`（`approvedBy`）、`runAttempt`（`confirmedBy`）。进度读取、规划授权、草拟与停止对任何调用方开放，因为看进度、插话与停止正是手机白名单面向的低风险操作。
 
 人工在场确认永不被推断：请求未字面携带 `presenceAcknowledged: true` 时，`runAttempt` 以 `SELF_DEV_REMOTE_PRESENCE_UNCONFIRMED` 拒绝；UI 不得默认勾选、预选或暗示该字段。
+
+`runAttempt` 的 `dataHome` 在线上 schema 中标记为仅宿主侧（host-only），只接受来自稳定宿主的调用：每任务的数据目录由工作区服务的 `allocate` 结果分配，稳定侧把该 `dataHome` 转发为 runner 的 `dshHome`；手机端请求必须省略该字段——schema 的 `hostOnly` 标记为未来的手机通道记录了这一约束。
 
 <a id="phone-whitelist-mapping"></a>
 ## 手机白名单对照
@@ -88,6 +90,7 @@ kind: "package-reference"
 | 升级批准 | **本门面不存在。** 没有任何方法记录升级、发布或安装批准；发布审核表在本包之外。 |
 | 访问试验版 | 不暴露。门面只在 `runAttempt` 结果中返回证据路径；没有方法读取试验产物。 |
 | 修改隔离与凭据设置 | 不暴露。门面配置不含隔离或凭据字段，也没有方法修改 runner 配置。 |
+| 指定任务数据目录 | 手机端不可指定。`runAttempt` 的 `dataHome` 仅限宿主侧：稳定侧传入工作区 `allocate` 结果的 `dataHome`；手机端请求必须省略该字段。 |
 
 <a id="error-codes"></a>
 ## 错误码

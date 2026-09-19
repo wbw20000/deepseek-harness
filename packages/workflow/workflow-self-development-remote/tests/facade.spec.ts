@@ -156,6 +156,8 @@ describe('wire validation', () => {
       .rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_CONFIG_INVALID' })
     await expect(facade.runAttempt({ ...base, acceptancePath: 'relative/acceptance.json', presenceAcknowledged: true }))
       .rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_CONFIG_INVALID' })
+    await expect(facade.runAttempt({ ...base, dataHome: 'relative/home', presenceAcknowledged: true }))
+      .rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_CONFIG_INVALID' })
   })
 })
 

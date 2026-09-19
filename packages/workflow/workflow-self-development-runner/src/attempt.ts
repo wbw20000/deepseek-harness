@@ -29,7 +29,7 @@ import type {
 } from '@deepseek-ai/dsh-workflow-self-development'
 import { checkAcceptanceCoversPlan, loadAcceptance, runAcceptance } from './acceptor.ts'
 import type { AcceptanceCase, AcceptanceRun } from './acceptor.ts'
-import { assertConfirmationBinds, resolveExperimentWorktree } from './binding.ts'
+import { assertConfirmationBinds, resolveAttemptDshHome, resolveExperimentWorktree } from './binding.ts'
 import { armDeadline, phaseLimitMs, planAttemptBudget } from './budget.ts'
 import type { HostClock } from './clock.ts'
 import { artifactDigestOf, sourceDigestOf } from './digests.ts'
@@ -54,6 +54,14 @@ export interface SupervisedAttemptRequest {
   readonly operationId: string
   /** Experiment worktree as handed in (never real-pathed); it must resolve inside the experiments root. */
   readonly worktree: string
+  /**
+   * Per-attempt data directory handed to the executor and the acceptor as the
+   * child's `DSH_HOME`. Absent runs with `config.dshHome` unchanged. When
+   * present it must be absolute, resolve inside the experiments root, and
+   * differ from `config.dshHome` and from the worktree; it is otherwise
+   * rejected with `SELF_DEV_RUNNER_WORKTREE_INVALID`.
+   */
+  readonly dshHome?: string
   /** Worktree-relative artifact paths the acceptance covers. */
   readonly artifactPaths: readonly string[]
   /** Absolute path of the stable-side acceptance definition; it must live outside the experiments root. */
@@ -108,6 +116,8 @@ interface AttemptContext {
   readonly launch: LaunchInputs
   /** Real path of the experiment worktree. */
   readonly worktreeReal: string
+  /** Real path of the data directory this attempt runs with; `config.dshHome` when the request names none. */
+  readonly dshHomeReal: string
   /** sha-256 hex digest of the acceptance definition bytes. */
   readonly acceptanceDefinitionDigest: string
   /** Validated acceptance cases the acceptor runs. */
@@ -163,7 +173,8 @@ interface ExecutedAttempt extends AttemptExecution {
  *   spec, frozen plan, or approved budget, `SELF_DEV_REVISION_CONFLICT` when `expectedRevision` does
  *   not match the projection, or whatever the core's `startAttempt` rejects with.
  * @throws SelfDevelopmentRunnerError with `SELF_DEV_RUNNER_WORKTREE_INVALID` or
- *   `SELF_DEV_RUNNER_ACCEPTANCE_INVALID` when the worktree or acceptance definition is unusable,
+ *   `SELF_DEV_RUNNER_ACCEPTANCE_INVALID` when the worktree, the requested data
+ *   directory, or the acceptance definition is unusable,
  *   `SELF_DEV_RUNNER_PRESENCE_MISMATCH` when the confirmation does not bind the launch facts,
  *   `SELF_DEV_RUNNER_LAUNCH_MISMATCH` when an existing launch record does not match this launch, and
  *   `SELF_DEV_RUNNER_BUDGET_INVALID` when the approved budget bounds nothing.
@@ -178,6 +189,9 @@ export async function runSupervisedAttempt(
 ): Promise<SupervisedAttemptOutcome> {
   const plan = preflight(deps.controller, req)
   const worktreeReal = await resolveExperimentWorktree(deps.config.experimentsRoot, req.worktree)
+  const dshHomeReal = req.dshHome === undefined
+    ? deps.config.dshHome
+    : await resolveAttemptDshHome(deps.config, req.dshHome, worktreeReal)
   const cases = await loadAcceptance(req.acceptancePath, deps.config.experimentsRoot)
   checkAcceptanceCoversPlan(cases, plan.plan)
   const acceptanceDefinitionDigest = await acceptanceDefinitionDigestOf(req.acceptancePath)
@@ -188,13 +202,14 @@ export async function runSupervisedAttempt(
     acceptanceDefinitionDigest,
     artifactPaths: req.artifactPaths,
   })
-  const launch = await bindLaunchInputs(deps.clock, deps.config, req, plan, worktreeReal, acceptanceDefinitionDigest)
+  const launch = await bindLaunchInputs(deps.clock, deps.config, req, plan, worktreeReal, dshHomeReal, acceptanceDefinitionDigest)
   const context: AttemptContext = {
     config: deps.config,
     req,
     plan,
     launch,
     worktreeReal,
+    dshHomeReal,
     acceptanceDefinitionDigest,
     cases,
   }
@@ -336,6 +351,7 @@ async function acceptanceDefinitionDigestOf(path: string): Promise<string> {
  * @param req - the supervised attempt request.
  * @param plan - task facts judged from the projection.
  * @param worktreeReal - real path of the experiment worktree.
+ * @param dshHomeReal - real path of the data directory this launch runs with.
  * @param acceptanceDefinitionDigest - digest of the acceptance definition bytes.
  * @returns the digests the launch is bound to.
  * @throws SelfDevelopmentRunnerError with `SELF_DEV_RUNNER_LAUNCH_MISMATCH` when an existing record
@@ -348,6 +364,7 @@ async function bindLaunchInputs(
   req: SupervisedAttemptRequest,
   plan: AttemptPlan,
   worktreeReal: string,
+  dshHomeReal: string,
   acceptanceDefinitionDigest: string,
 ): Promise<LaunchInputs> {
   const sourceDigest = await sourceDigestOf(worktreeReal)
@@ -356,6 +373,8 @@ async function bindLaunchInputs(
   if (record !== undefined) {
     assertRecordMatches(record, {
       worktreeReal,
+      dshHomeReal,
+      configDshHome: config.dshHome,
       acceptancePath: req.acceptancePath,
       acceptanceDefinitionDigest,
       testPlanDigest: plan.plan.digest,
@@ -371,6 +390,7 @@ async function bindLaunchInputs(
     operationId: req.operationId,
     expectedRevision: req.expectedRevision,
     worktreeReal,
+    dshHomeReal,
     artifactPaths: sortedUnique(req.artifactPaths),
     acceptancePath: req.acceptancePath,
     acceptanceDefinitionDigest,
@@ -402,6 +422,10 @@ function assertRecordMatches(
   record: LaunchRecord,
   current: {
     readonly worktreeReal: string
+    /** Real path of the data directory this launch runs with. */
+    readonly dshHomeReal: string
+    /** The configured `dshHome`, which a record written before `dshHomeReal` existed is judged against. */
+    readonly configDshHome: string
     readonly acceptancePath: string
     readonly acceptanceDefinitionDigest: string
     readonly testPlanDigest: string
@@ -412,6 +436,12 @@ function assertRecordMatches(
 ): void {
   const diverged: string[] = []
   if (record.worktreeReal !== current.worktreeReal) diverged.push('worktreeReal does not match the launched worktree')
+  // Records written before the field existed carried only `config.dshHome`, so
+  // an absent field is read as that configured value, never as this launch's.
+  const recordedDshHomeReal = record.dshHomeReal ?? current.configDshHome
+  if (recordedDshHomeReal !== current.dshHomeReal) {
+    diverged.push('dshHomeReal does not match the launched data directory')
+  }
   if (record.acceptancePath !== current.acceptancePath) diverged.push('acceptancePath does not match the launched definition')
   if (record.acceptanceDefinitionDigest !== current.acceptanceDefinitionDigest) {
     diverged.push('acceptanceDefinitionDigest does not match the launched definition')
@@ -475,6 +505,7 @@ async function executeAttempt(context: AttemptContext, attempt: Attempt, signal:
       phaseTimeoutMs: developLimitMs,
       maxSteps: context.plan.budget.maxSteps,
       signal: developDeadline.signal,
+      ...(context.req.dshHome === undefined ? {} : { dshHome: context.req.dshHome }),
     })
   } finally {
     developDeadline.dispose()
@@ -523,6 +554,7 @@ async function executeAttempt(context: AttemptContext, attempt: Attempt, signal:
       worktree: context.worktreeReal,
       cases: context.cases,
       signal: acceptDeadline.signal,
+      ...(context.req.dshHome === undefined ? {} : { dshHome: context.req.dshHome }),
     })
   } finally {
     acceptDeadline.dispose()

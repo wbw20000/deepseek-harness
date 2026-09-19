@@ -6,6 +6,9 @@
  *
  * Behaviors:
  * - `ok`      → session event, one other-phase status, 3 step_starts, text "done", exit 0.
+ * - `env-dump`→ writes this process's `DSH_HOME` to `./dsh-home-dump.txt` inside its cwd
+ *               (a read-only dump of the environment the executor handed it), emits a
+ *               session event, exit 0.
  * - `steps-5` → session event, 5 step_starts, then stays alive (default-death on SIGTERM).
  * - `graceful`→ session event, 5 step_starts, then stays alive but exits 0 on SIGTERM.
  * - `flood-events` → session event, then 300 1 KiB `text` events written synchronously to
@@ -45,6 +48,11 @@ if (task === 'ok') {
   emit({ type: 'status', phase: 'turn_start', turn: 1 })
   for (const step of [1, 2, 3]) emit({ type: 'status', phase: 'step_start', turn: 1, step })
   emit({ type: 'text', text: 'done' })
+  process.exitCode = 0
+} else if (task === 'env-dump') {
+  const { writeFileSync } = await import('node:fs')
+  writeFileSync(`${process.cwd()}/dsh-home-dump.txt`, process.env.DSH_HOME ?? '')
+  emit({ type: 'session', sessionId: 'session-fake-env-dump' })
   process.exitCode = 0
 } else if (task === 'unicode-tail') {
   emit({ type: 'session', sessionId: 'first-session' })

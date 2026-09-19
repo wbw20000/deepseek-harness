@@ -46,6 +46,11 @@ export interface ExecutorRequest {
   readonly worktree: string
   /** Task text passed to the headless profile as its single positional argument. */
   readonly task: string
+  /**
+   * Data directory passed to the child as `DSH_HOME`; absent runs with
+   * `config.dshHome`, the deployment's single experiment home.
+   */
+  readonly dshHome?: string
   /** Milliseconds the whole phase may run before the process group is torn down. */
   readonly phaseTimeoutMs: number
   /** Step cap from the frozen plan; `undefined` runs without a cap. */
@@ -110,7 +115,7 @@ type ExecutorTeardownSignal = 'SIGTERM' | 'SIGKILL'
 /**
  * Run one headless execution and report how it ended.
  * @param config - deployment configuration owning the binaries and the kill grace.
- * @param request - worktree, task, budgets, and cancellation signal for this run.
+ * @param request - worktree, task, data directory, budgets, and cancellation signal for this run.
  * @returns process and stream facts after pipe closure and group-exit confirmation.
  * @throws SelfDevelopmentRunnerError with `SELF_DEV_RUNNER_EXECUTOR_FAILED` when the
  *   child cannot spawn or group exit cannot be confirmed; `SELF_DEV_RUNNER_CONFIG_INVALID`
@@ -142,7 +147,7 @@ export async function runHeadlessExecutor(config: RunnerConfig, request: Executo
     env: {
       PATH: process.env.PATH,
       HOME: process.env.HOME,
-      DSH_HOME: config.dshHome,
+      DSH_HOME: request.dshHome ?? config.dshHome,
       DSH_PERMISSION_MODE: 'workspace-write',
     },
     detached: true,
