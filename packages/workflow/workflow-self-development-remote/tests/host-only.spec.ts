@@ -130,7 +130,7 @@ describe('caller determination', () => {
     // The host may set the host-only dataHome; the request then runs past the
     // gates and refuses only because no runner plugin is loaded.
     await expect(facade.runAttempt({ ...RUN_REQUEST, dataHome: '/tmp/dsh-home' }))
-      .rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_RUNNER_UNAVAILABLE' })
+      .rejects.toMatchObject({ code: 'self-development/runner-unavailable' })
   })
 
   it('treats an absent caller context as the host and keeps every method available', async () => {
@@ -141,7 +141,7 @@ describe('caller determination', () => {
     await expect(facade.confirmPlan(TASK_ID, 3, PLAN, 'tester')).resolves.toMatchObject({ revision: 4 })
     await expect(facade.approveBudget(TASK_ID, 4, APPROVAL)).resolves.toMatchObject({ revision: 5 })
     await expect(facade.runAttempt({ ...RUN_REQUEST, dataHome: '/tmp/dsh-home' }))
-      .rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_RUNNER_UNAVAILABLE' })
+      .rejects.toMatchObject({ code: 'self-development/runner-unavailable' })
     await expect(facade.stop(TASK_ID, 5)).resolves.toMatchObject({ taskId: TASK_ID, revision: 6 })
   })
 
@@ -150,7 +150,7 @@ describe('caller determination', () => {
     setCaller(callerOf(true))
     await expect(facade.createTask(SPEC, 0)).resolves.toMatchObject({ taskId: TASK_ID, replayed: false })
     await expect(facade.runAttempt({ ...RUN_REQUEST, dataHome: '/tmp/dsh-home' }))
-      .rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_RUNNER_UNAVAILABLE' })
+      .rejects.toMatchObject({ code: 'self-development/runner-unavailable' })
   })
 })
 
@@ -167,13 +167,13 @@ describe('non-host caller refusals', () => {
     await expect(facade.runAttempt(RUN_REQUEST))
       .rejects.toThrow('a phone caller may watch progress, interject, confirm the plan and budget, stop, and approve or reject the trial')
     await expect(facade.runAttempt(RUN_REQUEST))
-      .rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_HOST_ONLY_FIELD' })
+      .rejects.toMatchObject({ code: 'self-development/host-only-field' })
     await expect(facade.runAttempt({ ...RUN_REQUEST, dataHome: '/tmp/dsh-home' }))
       .rejects.toThrow('runAttempt.dataHome is host-only')
     await expect(facade.createTask(SPEC, 5))
       .rejects.toThrow('createTask assigns isolation settings (stableBaselineDigest and allowedModificationScope)')
     await expect(facade.createTask(SPEC, 5))
-      .rejects.toMatchObject({ code: 'SELF_DEV_REMOTE_HOST_ONLY_FIELD' })
+      .rejects.toMatchObject({ code: 'self-development/host-only-field' })
     const detail = await facade.getTask(TASK_ID)
     expect(detail.projection.revision).toBe(5)
   })
@@ -195,7 +195,7 @@ describe('non-host caller refusals', () => {
     // The gate passed: the refusal comes from the core, which has no verified
     // result to bind a trial approval to yet.
     await expect(facade.recordTrialApproval(TASK_ID, 5, 'phone-user'))
-      .rejects.toMatchObject({ code: 'SELF_DEV_INVALID_STATE' })
+      .rejects.toMatchObject({ code: 'self-development/core', details: { code: 'SELF_DEV_INVALID_STATE' } })
     await expect(facade.stop(TASK_ID, 5, 'cancelled')).resolves.toMatchObject({ taskId: TASK_ID, revision: 6 })
   })
 })
@@ -230,20 +230,20 @@ describe('hostOnly metadata collection', () => {
   it('refuses a top-level host-only field from a non-host caller', () => {
     const caught = runCheck({ plain: 'a', secret: 's' })
     expect(caught).toBeInstanceOf(SelfDevelopmentRemoteError)
-    expect(caught?.code).toBe('SELF_DEV_REMOTE_HOST_ONLY_FIELD')
+    expect(caught?.code).toBe('self-development/host-only-field')
     expect(caught?.message).toBe('temporary.secret is host-only; a non-host caller must omit it')
   })
 
   it('refuses a nested host-only field and passes its absent form', () => {
     const caught = runCheck({ plain: 'a', nested: { inner: 'i' } })
-    expect(caught?.code).toBe('SELF_DEV_REMOTE_HOST_ONLY_FIELD')
+    expect(caught?.code).toBe('self-development/host-only-field')
     expect(caught?.message).toBe('temporary.nested.inner is host-only; a non-host caller must omit it')
     expect(runCheck({ plain: 'a', nested: {} })).toBeUndefined()
   })
 
   it('refuses a whole host-only object field from a non-host caller', () => {
     const caught = runCheck({ plain: 'a', blob: { x: '1' } })
-    expect(caught?.code).toBe('SELF_DEV_REMOTE_HOST_ONLY_FIELD')
+    expect(caught?.code).toBe('self-development/host-only-field')
     expect(caught?.message).toBe('temporary.blob is host-only; a non-host caller must omit it')
   })
 

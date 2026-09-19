@@ -161,7 +161,7 @@ function readPath(input: unknown, path: string): unknown {
  * @param schemaName - name the wire schema was registered under.
  * @param input - parsed request value to inspect.
  * @param callerIsHost - whether the caller counts as the stable host.
- * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_HOST_ONLY_FIELD` when `callerIsHost` is
+ * @throws SelfDevelopmentRemoteError with `self-development/host-only-field` when `callerIsHost` is
  *   `false` and any registered host-only field of the schema is set to a
  *   non-`undefined` value.
  */
@@ -172,8 +172,8 @@ export function assertHostOnlyFields(schemaName: string, input: unknown, callerI
   for (const field of fields) {
     if (readPath(input, field) === undefined) continue
     throw new SelfDevelopmentRemoteError(
+      'self-development/host-only-field',
       `${schemaName}.${field} is host-only; a non-host caller must omit it`,
-      'SELF_DEV_REMOTE_HOST_ONLY_FIELD',
     )
   }
 }
@@ -185,7 +185,7 @@ export function assertHostOnlyFields(schemaName: string, input: unknown, callerI
  * @param field - argument name the value arrived under.
  * @param value - value as received from the Remote caller.
  * @returns the parsed value.
- * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_CONFIG_INVALID` when the value does not
+ * @throws SelfDevelopmentRemoteError with `self-development/config-invalid` when the value does not
  *   satisfy the schema.
  */
 function parse<T>(schema: zod.ZodType<T>, field: string, value: unknown): T {
@@ -194,7 +194,7 @@ function parse<T>(schema: zod.ZodType<T>, field: string, value: unknown): T {
     const detail = result.error.issues
       .map(issue => `${issue.path.length === 0 ? field : issue.path.join('.')}: ${issue.message}`)
       .join('; ')
-    throw new SelfDevelopmentRemoteError(`${field} is invalid: ${detail}`, 'SELF_DEV_REMOTE_CONFIG_INVALID')
+    throw new SelfDevelopmentRemoteError('self-development/config-invalid', `${field} is invalid: ${detail}`)
   }
   return result.data
 }
@@ -212,7 +212,7 @@ function isAbsolute(value: string): boolean {
  * Validate a task id against the task-control package's grammar.
  * @param taskId - task identity as received.
  * @returns the same id once proven to be a plain path component.
- * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_CONFIG_INVALID` when the id is not a
+ * @throws SelfDevelopmentRemoteError with `self-development/config-invalid` when the id is not a
  *   plain task id.
  */
 export function parseTaskId(taskId: string): string {
@@ -221,8 +221,8 @@ export function parseTaskId(taskId: string): string {
   } catch (error: unknown) {
     /* v8 ignore next 3 -- validateTaskId only throws SelfDevelopmentError, so the non-Error branch is unreachable. */
     throw new SelfDevelopmentRemoteError(
+      'self-development/config-invalid',
       `taskId ${JSON.stringify(taskId)} is invalid: ${error instanceof Error ? error.message : String(error)}`,
-      'SELF_DEV_REMOTE_CONFIG_INVALID',
     )
   }
   return taskId
@@ -233,7 +233,7 @@ export function parseTaskId(taskId: string): string {
  * @param spec - TaskSpec in wire form.
  * @param expectedRevision - revision the caller observed.
  * @returns the parsed spec and revision.
- * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_CONFIG_INVALID` when either field is malformed.
+ * @throws SelfDevelopmentRemoteError with `self-development/config-invalid` when either field is malformed.
  */
 export function parseCreateTaskInput(spec: unknown, expectedRevision: unknown): {
   readonly spec: TaskSpecInput
@@ -251,7 +251,7 @@ export function parseCreateTaskInput(spec: unknown, expectedRevision: unknown): 
  * Validate an actor name.
  * @param actor - actor as received.
  * @returns the same actor once proven non-empty.
- * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_CONFIG_INVALID` when the name is empty.
+ * @throws SelfDevelopmentRemoteError with `self-development/config-invalid` when the name is empty.
  */
 export function parseActor(actor: string): string {
   return parse(nonEmpty, 'actor', actor)
@@ -263,7 +263,7 @@ export function parseActor(actor: string): string {
  * @param expectedRevision - revision the caller observed.
  * @param authorizedBy - human actor granting the authorization.
  * @returns the parsed body.
- * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_CONFIG_INVALID` when a field is malformed.
+ * @throws SelfDevelopmentRemoteError with `self-development/config-invalid` when a field is malformed.
  */
 export function parseAuthorizePlanningInput(
   taskId: string,
@@ -283,7 +283,7 @@ export function parseAuthorizePlanningInput(
  * @param expectedRevision - revision the caller observed.
  * @param draft - plan draft in wire form.
  * @returns the parsed body.
- * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_CONFIG_INVALID` when a field is malformed.
+ * @throws SelfDevelopmentRemoteError with `self-development/config-invalid` when a field is malformed.
  */
 export function parseSubmitPlanDraftInput(taskId: string, expectedRevision: number, draft: unknown): {
   readonly taskId: string
@@ -304,7 +304,7 @@ export function parseSubmitPlanDraftInput(taskId: string, expectedRevision: numb
  * @param plan - confirmed plan in wire form.
  * @param actor - human actor confirming the plan.
  * @returns the parsed body.
- * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_CONFIG_INVALID` when a field is malformed.
+ * @throws SelfDevelopmentRemoteError with `self-development/config-invalid` when a field is malformed.
  */
 export function parseConfirmPlanInput(
   taskId: string,
@@ -331,7 +331,7 @@ export function parseConfirmPlanInput(
  * @param expectedRevision - revision the caller observed.
  * @param approval - budget approval in wire form.
  * @returns the parsed body.
- * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_CONFIG_INVALID` when a field is malformed.
+ * @throws SelfDevelopmentRemoteError with `self-development/config-invalid` when a field is malformed.
  */
 export function parseApproveBudgetInput(taskId: string, expectedRevision: number, approval: unknown): {
   readonly taskId: string
@@ -351,7 +351,7 @@ export function parseApproveBudgetInput(taskId: string, expectedRevision: number
  * @param expectedRevision - revision the caller observed.
  * @param reason - optional stop reason; only `cancelled` exists today.
  * @returns the parsed body.
- * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_CONFIG_INVALID` when a field is malformed.
+ * @throws SelfDevelopmentRemoteError with `self-development/config-invalid` when a field is malformed.
  */
 export function parseStopInput(
   taskId: string,
@@ -371,7 +371,7 @@ export function parseStopInput(
  * @param expectedRevision - revision the caller observed.
  * @param approvedBy - human actor approving the trial.
  * @returns the parsed body.
- * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_CONFIG_INVALID` when a field is malformed.
+ * @throws SelfDevelopmentRemoteError with `self-development/config-invalid` when a field is malformed.
  */
 export function parseRecordTrialApprovalInput(taskId: string, expectedRevision: number, approvedBy: string): {
   readonly taskId: string
@@ -389,7 +389,7 @@ export function parseRecordTrialApprovalInput(taskId: string, expectedRevision: 
  * Validate a `runAttempt` request.
  * @param request - the supervised attempt request in wire form.
  * @returns the parsed request.
- * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_CONFIG_INVALID` when a field is malformed.
+ * @throws SelfDevelopmentRemoteError with `self-development/config-invalid` when a field is malformed.
  */
 export function parseRunAttemptRequest(request: unknown): RemoteRunAttemptRequest {
   return parse(runAttemptSchema, 'request', request)

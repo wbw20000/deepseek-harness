@@ -3871,7 +3871,7 @@ Requires: `selfDevelopmentTasks`
 /** Deployment configuration of the Remote facade. */
 export interface RemoteConfig {
   /**
-   * Master switch. Every method refuses with `SELF_DEV_REMOTE_DISABLED`
+   * Master switch. Every method refuses with `self-development/disabled`
    * while this is `false`, so mounting the plugin alone enables nothing.
    */
   readonly enabled: boolean

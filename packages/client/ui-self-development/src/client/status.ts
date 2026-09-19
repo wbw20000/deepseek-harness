@@ -114,21 +114,21 @@ export function eventKindKey(kind: SelfDevelopmentEventKind): SelfDevelopmentKey
   return EVENT_KEYS[kind]
 }
 
-/** Facade and core error codes the panel maps to fixed wording. */
+/** Facade error codes the panel maps to fixed wording. */
 const ERROR_KEYS: Readonly<Record<string, SelfDevelopmentKey>> = {
-  SELF_DEV_REMOTE_DISABLED: 'errorSelfDevRemoteDisabled',
-  SELF_DEV_REMOTE_CONFIG_INVALID: 'errorSelfDevRemoteConfigInvalid',
-  SELF_DEV_REMOTE_TASK_UNKNOWN: 'errorSelfDevRemoteTaskUnknown',
-  SELF_DEV_REMOTE_ACTOR_FORBIDDEN: 'errorSelfDevRemoteActorForbidden',
-  SELF_DEV_REMOTE_PRESENCE_UNCONFIRMED: 'errorSelfDevRemotePresenceUnconfirmed',
-  SELF_DEV_REMOTE_RUNNER_UNAVAILABLE: 'errorSelfDevRemoteRunnerUnavailable',
-  SELF_DEV_INVALID_STATE: 'errorSelfDevInvalidState',
-  SELF_DEV_RUNNER_ACCEPTANCE_INVALID: 'errorSelfDevRunnerAcceptanceInvalid',
+  'self-development/disabled': 'errorSelfDevRemoteDisabled',
+  'self-development/config-invalid': 'errorSelfDevRemoteConfigInvalid',
+  'self-development/task-unknown': 'errorSelfDevRemoteTaskUnknown',
+  'self-development/actor-forbidden': 'errorSelfDevRemoteActorForbidden',
+  'self-development/presence-unconfirmed': 'errorSelfDevRemotePresenceUnconfirmed',
+  'self-development/runner-unavailable': 'errorSelfDevRemoteRunnerUnavailable',
 }
 
 /**
  * Dictionary key of a Remote rejection. Unknown codes fall back to the
- * generic message, which carries the wire error text verbatim.
+ * generic message, which carries the wire error text verbatim; a
+ * `self-development/core` failure also lands here, its `details.code`
+ * naming the underlying core or runner reason while the message stays verbatim.
  * @param code - the machine-routable code carried by the rejection.
  * @returns the key the `t` seat translates.
  */

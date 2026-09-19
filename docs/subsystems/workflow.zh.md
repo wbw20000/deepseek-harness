@@ -175,8 +175,9 @@ Stable-side Remote facade. The supervised runner is optional: every method that 
 /**
  * List every task under the control directory with its progress row.
  * @returns one row per task journal directory, sorted by task id.
- * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED` while the facade is disabled.
- * @throws whatever the task-control service or a task journal rejects with, verbatim.
+ * @throws SelfDevelopmentRemoteError with `self-development/disabled` while the facade is disabled.
+ * @throws whatever the task-control service or a task journal rejects with, converted at the
+ *   facade boundary into `self-development/core` (`details.code` keeps the original code).
  */
 @Remote('listTasks') async listTasks(): Promise<readonly TaskSummary[]>
 
@@ -184,11 +185,12 @@ Stable-side Remote facade. The supervised runner is optional: every method that 
  * Read one task's full projection and its confirmation-card view.
  * @param taskId - task identity.
  * @returns the projection and the read-only card.
- * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED` while the facade is disabled,
- *   `SELF_DEV_REMOTE_CONFIG_INVALID` when the task id is malformed, or
- *   `SELF_DEV_REMOTE_TASK_UNKNOWN` when the task has no journal yet; the facade never creates a
+ * @throws SelfDevelopmentRemoteError with `self-development/disabled` while the facade is disabled,
+ *   `self-development/config-invalid` when the task id is malformed, or
+ *   `self-development/task-unknown` when the task has no journal yet; the facade never creates a
  *   journal from a read path.
- * @throws whatever the task-control service rejects with, verbatim.
+ * @throws whatever the task-control service rejects with, converted at the facade boundary into
+ *   `self-development/core` (`details.code` keeps the original code).
  */
 @Remote('getTask') async getTask(taskId: string): Promise<TaskDetail>
 
@@ -196,7 +198,7 @@ Stable-side Remote facade. The supervised runner is optional: every method that 
  * Read the retained recent self-development notification events.
  * @returns the events consumer's title-level buffer, oldest first; `[]` when
  *   the events consumer plugin is not loaded in this context.
- * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED` while the facade is disabled.
+ * @throws SelfDevelopmentRemoteError with `self-development/disabled` while the facade is disabled.
  */
 @Remote('recentEvents') async recentEvents(): Promise<readonly RecentEvent[]>
 
@@ -206,11 +208,12 @@ Stable-side Remote facade. The supervised runner is optional: every method that 
  * @param spec - TaskSpec in wire form.
  * @param expectedRevision - revision the caller observed; a new task is at revision 0.
  * @returns the operation id the facade generated plus the core's result.
- * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED`, `SELF_DEV_REMOTE_CONFIG_INVALID`,
- *   `SELF_DEV_REMOTE_ACTOR_FORBIDDEN`, or `SELF_DEV_REMOTE_HOST_ONLY_FIELD` from a non-host caller:
+ * @throws SelfDevelopmentRemoteError with `self-development/disabled`, `self-development/config-invalid`,
+ *   `self-development/actor-forbidden`, or `self-development/host-only-field` from a non-host caller:
  *   the spec fixes `stableBaselineDigest` and `allowedModificationScope`, which are isolation
  *   settings the phone whitelist may not set.
- * @throws whatever the task-control service rejects with, verbatim.
+ * @throws whatever the task-control service rejects with, converted at the facade boundary into
+ *   `self-development/core` (`details.code` keeps the original code).
  */
 @Remote('createTask') async createTask(spec: TaskSpecInput, expectedRevision: number): Promise<RemoteOperationResult>
 
@@ -221,8 +224,9 @@ Stable-side Remote facade. The supervised runner is optional: every method that 
  * @param expectedRevision - revision the caller observed.
  * @param authorizedBy - human actor granting the authorization.
  * @returns the operation id the facade generated plus the core's result.
- * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED` or `SELF_DEV_REMOTE_CONFIG_INVALID`.
- * @throws whatever the task-control service rejects with, verbatim.
+ * @throws SelfDevelopmentRemoteError with `self-development/disabled` or `self-development/config-invalid`.
+ * @throws whatever the task-control service rejects with, converted at the facade boundary into
+ *   `self-development/core` (`details.code` keeps the original code).
  */
 @Remote('authorizePlanning') async authorizePlanning(taskId: string, expectedRevision: number, authorizedBy: string): Promise<RemoteOperationResult>
 
@@ -232,8 +236,9 @@ Stable-side Remote facade. The supervised runner is optional: every method that 
  * @param expectedRevision - revision the caller observed.
  * @param draft - plan draft in wire form.
  * @returns the operation id the facade generated plus the core's result.
- * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED` or `SELF_DEV_REMOTE_CONFIG_INVALID`.
- * @throws whatever the task-control service rejects with, verbatim.
+ * @throws SelfDevelopmentRemoteError with `self-development/disabled` or `self-development/config-invalid`.
+ * @throws whatever the task-control service rejects with, converted at the facade boundary into
+ *   `self-development/core` (`details.code` keeps the original code).
  */
 @Remote('submitPlanDraft') async submitPlanDraft( taskId: string, expectedRevision: number, draft: PlanDraftInput, ): Promise<RemoteOperationResult>
 
@@ -244,9 +249,10 @@ Stable-side Remote facade. The supervised runner is optional: every method that 
  * @param plan - confirmed plan in wire form.
  * @param actor - human actor confirming the plan; checked against `allowedActors`.
  * @returns the operation id the facade generated plus the core's result.
- * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED`, `SELF_DEV_REMOTE_CONFIG_INVALID`,
- *   or `SELF_DEV_REMOTE_ACTOR_FORBIDDEN`.
- * @throws whatever the task-control service rejects with, verbatim.
+ * @throws SelfDevelopmentRemoteError with `self-development/disabled`, `self-development/config-invalid`,
+ *   or `self-development/actor-forbidden`.
+ * @throws whatever the task-control service rejects with, converted at the facade boundary into
+ *   `self-development/core` (`details.code` keeps the original code).
  */
 @Remote('confirmPlan') async confirmPlan( taskId: string, expectedRevision: number, plan: ConfirmedPlanInput, actor: string, ): Promise<RemoteOperationResult>
 
@@ -257,9 +263,10 @@ Stable-side Remote facade. The supervised runner is optional: every method that 
  * @param expectedRevision - revision the caller observed.
  * @param approval - budget approval in wire form.
  * @returns the operation id the facade generated plus the core's result.
- * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED`, `SELF_DEV_REMOTE_CONFIG_INVALID`,
- *   or `SELF_DEV_REMOTE_ACTOR_FORBIDDEN`.
- * @throws whatever the task-control service rejects with, verbatim.
+ * @throws SelfDevelopmentRemoteError with `self-development/disabled`, `self-development/config-invalid`,
+ *   or `self-development/actor-forbidden`.
+ * @throws whatever the task-control service rejects with, converted at the facade boundary into
+ *   `self-development/core` (`details.code` keeps the original code).
  */
 @Remote('approveBudget') async approveBudget( taskId: string, expectedRevision: number, approval: BudgetApprovalInput, ): Promise<RemoteOperationResult>
 
@@ -271,8 +278,9 @@ Stable-side Remote facade. The supervised runner is optional: every method that 
  * @param expectedRevision - revision the caller observed.
  * @param reason - optional stop reason; only `cancelled` exists today.
  * @returns the operation id the facade generated plus the core's result.
- * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED` or `SELF_DEV_REMOTE_CONFIG_INVALID`.
- * @throws whatever the core or the runner rejects with, verbatim.
+ * @throws SelfDevelopmentRemoteError with `self-development/disabled` or `self-development/config-invalid`.
+ * @throws whatever the core or the runner rejects with, converted at the facade boundary into
+ *   `self-development/core` (`details.code` keeps the original code).
  */
 @Remote('stop') async stop(taskId: string, expectedRevision: number, reason?: 'cancelled'): Promise<RemoteOperationResult>
 
@@ -283,9 +291,10 @@ Stable-side Remote facade. The supervised runner is optional: every method that 
  * @param expectedRevision - revision the caller observed.
  * @param approvedBy - human actor approving the trial; checked against `allowedActors`.
  * @returns the operation id the facade generated plus the core's result.
- * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED`, `SELF_DEV_REMOTE_CONFIG_INVALID`,
- *   or `SELF_DEV_REMOTE_ACTOR_FORBIDDEN`.
- * @throws whatever the task-control service rejects with, verbatim.
+ * @throws SelfDevelopmentRemoteError with `self-development/disabled`, `self-development/config-invalid`,
+ *   or `self-development/actor-forbidden`.
+ * @throws whatever the task-control service rejects with, converted at the facade boundary into
+ *   `self-development/core` (`details.code` keeps the original code).
  */
 @Remote('recordTrialApproval') async recordTrialApproval( taskId: string, expectedRevision: number, approvedBy: string, ): Promise<RemoteOperationResult>
 
@@ -296,20 +305,21 @@ Stable-side Remote facade. The supervised runner is optional: every method that 
  * must never default that acknowledgement. Requires the runner plugin.
  * @param request - the supervised attempt request in wire form.
  * @returns the runner's outcome plus the operation id the facade generated.
- * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED`, `SELF_DEV_REMOTE_CONFIG_INVALID`,
- *   `SELF_DEV_REMOTE_ACTOR_FORBIDDEN`, `SELF_DEV_REMOTE_PRESENCE_UNCONFIRMED` when
- *   `presenceAcknowledged` is not exactly `true`, `SELF_DEV_REMOTE_HOST_ONLY_FIELD` from a
+ * @throws SelfDevelopmentRemoteError with `self-development/disabled`, `self-development/config-invalid`,
+ *   `self-development/actor-forbidden`, `self-development/presence-unconfirmed` when
+ *   `presenceAcknowledged` is not exactly `true`, `self-development/host-only-field` from a
  *   non-host caller (the launch assigns the worktree, acceptance, and artifact isolation
  *   settings, and a non-host request may not set the host-only `dataHome`), or
- *   `SELF_DEV_REMOTE_RUNNER_UNAVAILABLE` when the runner plugin is not loaded.
- * @throws whatever the core or the runner rejects with, verbatim.
+ *   `self-development/runner-unavailable` when the runner plugin is not loaded.
+ * @throws whatever the core or the runner rejects with, converted at the facade boundary into
+ *   `self-development/core` (`details.code` keeps the original code).
  */
 @Remote('runAttempt') async runAttempt(request: RemoteRunAttemptRequest): Promise<RemoteRunAttemptOutcome>
 
 /**
  * The task ids of the attempts the runner currently owns.
  * @returns a read-only snapshot, empty when the runner plugin is absent.
- * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED` while the facade is disabled.
+ * @throws SelfDevelopmentRemoteError with `self-development/disabled` while the facade is disabled.
  */
 @Remote('activeTasks') async activeTasks(): Promise<readonly string[]>
 ```

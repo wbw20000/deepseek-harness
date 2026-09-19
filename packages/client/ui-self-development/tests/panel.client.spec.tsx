@@ -75,7 +75,7 @@ describe('SelfDevelopmentPanel', () => {
 
   it('renders the list failure line when the read rejects', async () => {
     const api = scriptableApi({
-      listTasks: vi.fn(async () => ({ ok: false as const, error: { code: 'SELF_DEV_REMOTE_DISABLED', message: 'x' } })),
+      listTasks: vi.fn(async () => ({ ok: false as const, error: { code: 'self-development/disabled', message: 'x' } })),
     })
     const view = render(<SelfDevelopmentPanel {...props({ remote: api })} />)
     await vi.waitFor(() => { expect(view.getByText('The self-development remote service is disabled (enabled: false)')).toBeDefined() })
@@ -117,7 +117,7 @@ describe('SelfDevelopmentPanel', () => {
 
   it('renders the detail failure line when the task is unknown', async () => {
     const api = scriptableApi({
-      getTask: vi.fn(async () => ({ ok: false as const, error: { code: 'SELF_DEV_REMOTE_TASK_UNKNOWN', message: 'missing' } })),
+      getTask: vi.fn(async () => ({ ok: false as const, error: { code: 'self-development/task-unknown', message: 'missing' } })),
     })
     const view = render(<SelfDevelopmentPanel {...props({ remote: api })} />)
     await vi.waitFor(() => { expect(view.getByRole('button', { name: 'Open task task-1' })).toBeDefined() })
@@ -199,7 +199,7 @@ describe('SelfDevelopmentPanel', () => {
 
   it('shows the operation failure line when the launch is refused', async () => {
     const api = scriptableApi({
-      runAttempt: vi.fn(async () => ({ ok: false as const, error: { code: 'SELF_DEV_REMOTE_PRESENCE_UNCONFIRMED', message: 'no' } })),
+      runAttempt: vi.fn(async () => ({ ok: false as const, error: { code: 'self-development/presence-unconfirmed', message: 'no' } })),
     })
     const view = render(<SelfDevelopmentPanel {...props({ remote: api })} />)
     await openTask(view)
@@ -235,15 +235,16 @@ describe('SelfDevelopmentPanel', () => {
     await vi.waitFor(() => { expect(api.stop).toHaveBeenCalledWith('task-1', 3, 'cancelled') })
   })
 
-  it('renders the operation failure line when stopping is refused by the task state', async () => {
+  it('renders the generic failure line when stopping is refused by the task state', async () => {
     const api = scriptableApi({
-      stop: vi.fn(async () => ({ ok: false as const, error: { code: 'SELF_DEV_INVALID_STATE', message: 'busy' } })),
+      // A core rejection arrives as self-development/core; the generic line carries the wire text.
+      stop: vi.fn(async () => ({ ok: false as const, error: { code: 'self-development/core', message: 'busy' } })),
     })
     const view = render(<SelfDevelopmentPanel {...props({ remote: api })} />)
     await openTask(view)
     fireEvent.click(view.getByRole('button', { name: 'Stop' }))
     fireEvent.click(withinDialogConfirm(view, 'Stop task'))
-    await vi.waitFor(() => { expect(view.getByText('The task\'s current state refuses this operation')).toBeDefined() })
+    await vi.waitFor(() => { expect(view.getByText('The operation failed: busy')).toBeDefined() })
   })
 
   it('confirms the plan from the awaiting-plan-confirmation status, showing the cases first', async () => {
@@ -360,7 +361,7 @@ describe('SelfDevelopmentPanel', () => {
 
   it('keeps the timeline area with the empty copy when the recentEvents read fails', async () => {
     const api = scriptableApi({
-      recentEvents: vi.fn(async () => ({ ok: false as const, error: { code: 'SELF_DEV_REMOTE_DISABLED', message: 'x' } })),
+      recentEvents: vi.fn(async () => ({ ok: false as const, error: { code: 'self-development/disabled', message: 'x' } })),
     })
     const view = render(<SelfDevelopmentPanel {...props({ remote: api })} />)
     await vi.waitFor(() => { expect(view.getByText('No round events yet')).toBeDefined() })
