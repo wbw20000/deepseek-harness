@@ -175,7 +175,8 @@ export function checkAcceptanceCoversPlan(cases: readonly AcceptanceCase[], plan
  * bound fails every assertion: an incomplete run is never acceptable
  * evidence. The run rejects on an invalid definition before spawning anything.
  * @param config - runner configuration supplying the node binary, the experiment home, and the kill grace.
- * @param req - the worktree to run in, the validated cases, and an abort signal owned by the caller.
+ * @param req - the worktree to run in, the validated cases, the data directory
+ *   the case processes inherit as `DSH_HOME`, and an abort signal owned by the caller.
  * @returns the observed per-case results and process facts.
  * @throws SelfDevelopmentRunnerError with `SELF_DEV_RUNNER_ACCEPTANCE_INVALID` when a `file-*`
  *   assertion path or a case `cwd` escapes the worktree — lexically or through a
@@ -185,7 +186,7 @@ export function checkAcceptanceCoversPlan(cases: readonly AcceptanceCase[], plan
  */
 export async function runAcceptance(
   config: RunnerConfig,
-  req: { worktree: string; cases: readonly AcceptanceCase[]; signal: AbortSignal },
+  req: { worktree: string; cases: readonly AcceptanceCase[]; signal: AbortSignal; dshHome?: string },
 ): Promise<AcceptanceRun> {
   assertProcessGroupSupport(process.platform)
   for (const testCase of req.cases) {
@@ -210,7 +211,7 @@ export async function runAcceptance(
       cases.push(failedCase(testCase))
       continue
     }
-    const outcome = await runCase(config, req.worktree, testCase, req.signal)
+    const outcome = await runCase(config, req.worktree, testCase, req.signal, req.dshHome)
     timedOut = timedOut || outcome.timedOut
     cancelled = cancelled || outcome.cancelled
     if (outcome.signal !== null) signalName = outcome.signal
@@ -359,12 +360,19 @@ interface CaseOutcome {
  * @param worktree - absolute worktree root the case runs in.
  * @param testCase - the case to execute.
  * @param signal - caller-owned abort signal.
+ * @param dshHome - data directory the case process inherits as `DSH_HOME`; absent runs with `config.dshHome`.
  * @returns the raw process outcome.
  * @throws SelfDevelopmentRunnerError with `SELF_DEV_RUNNER_ACCEPTANCE_INVALID` when the case's
  *   working directory no longer stays inside the worktree at spawn time, or with
  *   `SELF_DEV_RUNNER_EXECUTOR_FAILED` when the command cannot spawn.
  */
-async function runCase(config: RunnerConfig, worktree: string, testCase: AcceptanceCase, signal: AbortSignal): Promise<CaseOutcome> {
+async function runCase(
+  config: RunnerConfig,
+  worktree: string,
+  testCase: AcceptanceCase,
+  signal: AbortSignal,
+  dshHome: string | undefined,
+): Promise<CaseOutcome> {
   const program = testCase.command[0]
   if (program === undefined) {
     throw new SelfDevelopmentRunnerError(
@@ -383,7 +391,7 @@ async function runCase(config: RunnerConfig, worktree: string, testCase: Accepta
     // HOME and DSH_HOME still refer to files accessible under the child's UID.
     const options: SpawnOptionsWithStdioTuple<'ignore', 'pipe', 'pipe'> = {
       cwd: resolve(worktree, testCase.cwd ?? '.'),
-      env: { ...SPAWN_ENV, DSH_HOME: config.dshHome },
+      env: { ...SPAWN_ENV, DSH_HOME: dshHome ?? config.dshHome },
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     }

@@ -113,6 +113,20 @@ describe.skipIf(process.platform === 'win32')('headless executor', () => {
     expect(run).toMatchObject({ exitCode: 0, stepsUsed: 3, stepCapHit: false })
   }, 20_000)
 
+  it('hands the configured dshHome to the child when the request names none', async () => {
+    const config = await makeConfig()
+    await runHeadlessExecutor(config, req('env-dump'))
+    await expect(readFile(join(worktree ?? '', 'dsh-home-dump.txt'), 'utf8')).resolves.toBe(config.dshHome)
+  }, 20_000)
+
+  it('hands the requested data directory to the child as DSH_HOME', async () => {
+    const config = await makeConfig()
+    const dshHome = join(root ?? '', 'per-attempt-home')
+    await mkdir(dshHome, { recursive: true })
+    await runHeadlessExecutor(config, req('env-dump', { dshHome }))
+    await expect(readFile(join(worktree ?? '', 'dsh-home-dump.txt'), 'utf8')).resolves.toBe(dshHome)
+  }, 20_000)
+
   it('tolerates non-JSON and malformed events and keeps the 4 KiB stderr tail', async () => {
     const run = await runHeadlessExecutor(await makeConfig(), req('fail'))
     expect(run.exitCode).toBe(1)

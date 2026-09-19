@@ -58,7 +58,7 @@ Every method below is a `@Remote` method. Ordinary chat messages never reach the
 | `approveBudget(taskId, expectedRevision, approval)` | `approveBudget` | Records or replaces the human budget approval. The actor is `approval.approvedBy`; consumed rounds and time never reset. |
 | `stop(taskId, expectedRevision, reason?)` | runner `stop`, else core `stop` | Stops the task. With the runner loaded, owned process groups and evidence writes finish before the result returns; without it, only the core stop runs. |
 | `recordTrialApproval(taskId, expectedRevision, approvedBy)` | `recordTrialApproval` | Records the human trial approval bound to the current verified result. The actor is `approvedBy`. |
-| `runAttempt(request)` | runner `runAttempt` | Launches one supervised attempt. The facade assembles the `PresenceConfirmation`: `confirmedAt` is one trusted-clock observation taken now, `taskId`, `testPlanDigest` from the frozen plan, `acceptanceDefinitionDigest` from the definition's bytes, `artifactPaths` deduplicated and sorted ascending, and the fixed acknowledgement `supervised-not-unattended`. Requires `presenceAcknowledged: true` explicitly. Returns the runner's outcome plus the `operationId`. |
+| `runAttempt(request)` | runner `runAttempt` | Launches one supervised attempt. The facade assembles the `PresenceConfirmation`: `confirmedAt` is one trusted-clock observation taken now, `taskId`, `testPlanDigest` from the frozen plan, `acceptanceDefinitionDigest` from the definition's bytes, `artifactPaths` deduplicated and sorted ascending, and the fixed acknowledgement `supervised-not-unattended`. Requires `presenceAcknowledged: true` explicitly. The request's optional `dataHome` is host-only and forwarded as the runner's per-attempt `dshHome`; a phone caller must omit it. Returns the runner's outcome plus the `operationId`. |
 | `activeTasks()` | runner `activeTasks` | Returns the task ids of the attempts the runner currently owns; `[]` without the runner. |
 
 Every mutating method generates its `operationId` with `randomUUID()` and returns it to the caller; a retry that wants the core's replay semantics must send that id back. All arguments are validated at the facade before the core or runner sees them, and every core or runner rejection propagates verbatim with the owning package's machine-routable code.
@@ -72,6 +72,8 @@ The facade adds exactly two deployment-owned gates on top of the connection laye
 - **`allowedActors`** — empty means unrestricted; non-empty gates the actor-carrying operations: `createTask` (`spec.createdBy`), `confirmPlan` (the `actor` argument), `approveBudget` (`approval.approvedBy`), `recordTrialApproval` (`approvedBy`), and `runAttempt` (`confirmedBy`). Progress reads, planning authorization, drafting, and stopping stay open to any caller, because watching progress, interjecting, and stopping are the lower-risk operations the phone whitelist exists for.
 
 The human-presence acknowledgement is never inferred: `runAttempt` refuses with `SELF_DEV_REMOTE_PRESENCE_UNCONFIRMED` unless the request carries `presenceAcknowledged: true` literally, and a UI must never default, pre-select, or imply it.
+
+`runAttempt`'s `dataHome` is marked host-only in the wire schema and is accepted only from the stable host: the per-task data directory is assigned by the workspace service's `allocate` result, so the stable side forwards that `dataHome` as the runner's `dshHome`, and a phone request must omit the field — the schema's `hostOnly` marker records that constraint for any future phone channel.
 
 <a id="phone-whitelist-mapping"></a>
 ## Phone whitelist mapping
@@ -88,6 +90,7 @@ The human-review confirmation card allows phone operations to watch progress, in
 | 升级批准 (upgrade approval) | **Does not exist on this facade.** No method records an upgrade, release, or installation approval; the release table lives outside this package. |
 | 访问试验版 (access the trial build) | Not exposed. The facade returns evidence paths from `runAttempt` outcomes only; no method reads experiment artifacts. |
 | 修改隔离与凭据设置 (change isolation or credentials) | Not exposed. The facade's config carries no isolation or credential field, and no method mutates runner configuration. |
+| 指定任务数据目录 (assign a per-task data directory) | Not accepted from the phone. `runAttempt`'s `dataHome` is host-only: the stable side passes the workspace `allocate` result's `dataHome`; a phone request must omit the field. |
 
 <a id="error-codes"></a>
 ## Error codes

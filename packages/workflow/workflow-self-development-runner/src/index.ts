@@ -35,7 +35,7 @@ export type { AcceptanceAssertion, AcceptanceCase, AcceptanceRun } from './accep
 export type { RunnerConfig } from './types.ts'
 export { planAttemptBudget, phaseLimitMs, armDeadline } from './budget.ts'
 export type { ArmedDeadline } from './budget.ts'
-export { assertConfirmationBinds, resolveExperimentWorktree } from './binding.ts'
+export { assertConfirmationBinds, resolveAttemptDshHome, resolveExperimentWorktree } from './binding.ts'
 export type { LaunchFacts } from './binding.ts'
 export { readLaunchRecord, writeLaunchRecord, launchRecordPath } from './launch-record.ts'
 export type { LaunchRecord } from './launch-record.ts'

@@ -8,7 +8,7 @@
  * @module composition.spec
  */
 
-import { readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
@@ -194,6 +194,33 @@ describe('real-Loader composition through the Remote facade', () => {
 
     await expect(facade.runAttempt({ ...attemptRequest(env, revision), acceptancePath: join(env.base, 'missing.json') }))
       .rejects.toMatchObject({ code: 'SELF_DEV_RUNNER_ACCEPTANCE_INVALID' })
+  })
+
+  it('forwards the host-only dataHome to the runner as the attempt data directory', { timeout: 60_000 }, async () => {
+    const env = await makeEnvironment()
+    root = env.base
+    const facade = await bootComposition(env)
+    let revision = (await facade.createTask(SPEC, 0)).revision
+    revision = (await facade.authorizePlanning(TASK_ID, revision, 'phone-user')).revision
+    revision = (await facade.submitPlanDraft(TASK_ID, revision, DRAFT)).revision
+    revision = (await facade.confirmPlan(TASK_ID, revision, PLAN, 'phone-user')).revision
+    revision = (await facade.approveBudget(TASK_ID, revision, APPROVAL)).revision
+
+    // The workspace-assigned data home, laid out like the workspaces service
+    // allocates it. Its launch ledger is pre-seeded, so the fixture's first
+    // launch under it already writes DONE and the attempt can pass.
+    const dataHome = join(env.runnerConfig.experimentsRoot, TASK_ID, 'dsh-home')
+    await mkdir(dataHome, { recursive: true })
+    await writeFile(join(dataHome, 'launches'), 'seed\n')
+
+    const passed = await facade.runAttempt({ ...attemptRequest(env, revision), dataHome })
+    expect(passed.operation.replayed).toBe(false)
+    expect(passed.attemptId).toBeDefined()
+    // The fixture files its launch ledger under the DSH_HOME it was handed:
+    // the seeded line plus this launch proves dataHome was forwarded, and the
+    // configured dshHome stays untouched.
+    await expect(readFile(join(dataHome, 'launches'), 'utf8')).resolves.toBe('seed\ndev\n')
+    await expect(readFile(join(env.runnerConfig.dshHome, 'launches'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('stops a task with an in-flight attempt through the runner-backed stop', { timeout: 60_000 }, async () => {

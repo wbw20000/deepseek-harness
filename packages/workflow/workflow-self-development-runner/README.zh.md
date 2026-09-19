@@ -19,6 +19,7 @@ kind: "package-reference"
 - [人工在场证据](#human-presence-evidence)
 - [尝试预算](#attempt-budget)
 - [启动绑定与启动记录](#launch-binding-and-the-launch-record)
+- [每次尝试的数据目录](#per-attempt-data-directory)
 - [执行与验收](#execution-and-acceptance)
 - [尝试证据](#attempt-evidence)
 - [尝试编排](#attempt-orchestration)
@@ -79,12 +80,35 @@ kind: "package-reference"
 
 [`binding.ts`](src/binding.ts) 拒绝确认未绑定真实启动事实的启动：任务 id、worktree 的文件系统 realpath（必须解析到 experiments root 之内并带有 `.git` 条目）、冻结计划摘要、验收定义摘要与产物路径集。
 
-[`launch-record.ts`](src/launch-record.ts) 把操作绑定的启动记录写到 `<evidenceRoot>/tasks/<taskId>/launches/<operationId>.json`，每个操作只写一次，内容是启动时计算的摘要：worktree realpath、产物路径、验收路径与摘要、测试计划摘要、源码与产物摘要、派生预算以及人工确认。用同一 operation id 重试时读取该记录，而不是重新计算启动输入；记录的内容事实被精确比对，任何分歧都会抛出 `SELF_DEV_RUNNER_LAUNCH_MISMATCH`，把启动拒绝给人工。记录的 `expectedRevision` 记录本次启动期望的 revision，并被刻意排除在比对之外：失败尝试后的重试必然到达更高 revision，绑定重试操作的是核心自己的重放检查。
+[`launch-record.ts`](src/launch-record.ts) 把操作绑定的启动记录写到 `<evidenceRoot>/tasks/<taskId>/launches/<operationId>.json`，每个操作只写一次，内容是启动时计算的摘要：worktree realpath、数据目录 realpath、产物路径、验收路径与摘要、测试计划摘要、源码与产物摘要、派生预算以及人工确认。用同一 operation id 重试时读取该记录，而不是重新计算启动输入；记录的内容事实被精确比对，任何分歧都会抛出 `SELF_DEV_RUNNER_LAUNCH_MISMATCH`，把启动拒绝给人工。记录的 `expectedRevision` 记录本次启动期望的 revision，并被刻意排除在比对之外：失败尝试后的重试必然到达更高 revision，绑定重试操作的是核心自己的重放检查。
+
+<a id="per-attempt-data-directory"></a>
+## 每次尝试的数据目录
+
+`runSupervisedAttempt` 在请求上接受可选的 `dshHome`：本次尝试运行时使用的数据目录。缺省时，尝试与之前完全一致，使用部署配置的 `dshHome`。给定时，该目录必须是绝对路径，必须经过文件系统解析到 `experimentsRoot` 之内——普通目录即可，不要求 `.git` 条目——不得等于配置的 `dshHome`，也不得位于实验 worktree 之内（那里是被启动 Agent 可以自由写入的地方）。其他任何取值都会抛出 `SELF_DEV_RUNNER_WORKTREE_INVALID`，此时验收定义尚未加载，启动记录也不存在。
+
+执行器的子进程与每个验收用例进程都以该尝试的数据目录作为自己的 `DSH_HOME`，因此 harness 写入其 home 的每任务状态都会落进该任务的目录。启动记录把解析出的目录存为 `dshHomeReal` 并参与重试比对：重试时换了数据目录会被 `SELF_DEV_RUNNER_LAUNCH_MISMATCH` 拒绝；在该字段出现之前写入的记录按配置的 `dshHome` 读取，因此旧操作无法在重试时凭空获得数据目录。
+
+这正是 workspaces 服务交付其分配结果的接缝：`allocate` 返回的 `TaskWorkspace` 带有 `dataHome`（`<experimentsRoot>/<taskId>/dsh-home`，从部署的 `dataHomeTemplate` 复制而来）；把该值直接作为尝试的 `dshHome` 传入即可：
+
+```ts ignore-check
+// The workspaces allocation already carries the task's data home.
+const workspace = await workspaces.allocate({ taskId, projectRoot })
+await runner.runAttempt({
+  taskId: workspace.taskId,
+  worktree: workspace.worktree,
+  dshHome: workspace.dataHome,
+  // remaining supervised-attempt fields as usual: expectedRevision,
+  // operationId, artifactPaths, acceptancePath, presence
+})
+```
+
+这种分离只是记账与 spawn 环境的管道，不是隔离。子进程仍以操作用户身份运行，同用户进程——包括被启动的 Agent——可以读写其他每个任务的数据目录、证据根目录与控制目录；保护它们需要外层沙箱或本包不提供的操作系统级访问控制。
 
 <a id="execution-and-acceptance"></a>
 ## 执行与验收
 
-[执行器](src/executor.ts) 通过 headless profile 启动配置的 CLI，并以实验目录为工作目录。[验收器](src/acceptor.ts) 加载独立定义，检查命令结果与文件断言。二者均使用 POSIX 进程组执行取消。上文的在场证据源记录的是一次确认；它不会检测人员是否持续在场，也不会强制执行所记录的回环端口允许清单。
+[执行器](src/executor.ts) 通过 headless profile 启动配置的 CLI，以实验目录为工作目录，并以该尝试的数据目录为 `DSH_HOME`。[验收器](src/acceptor.ts) 加载独立定义，检查命令结果与文件断言，并把同一数据目录交给它的用例进程。二者均使用 POSIX 进程组执行取消。上文的在场证据源记录的是一次确认；它不会检测人员是否持续在场，也不会强制执行所记录的回环端口允许清单。
 
 验收定义必须位于实验根目录之外。这种放置方式可以减少误改，但不能保证同一用户的进程无法修改它。调用方必须独立保护控制文件与已批准输入。只有完整接入任务控制器，才能将这些辅助函数的结果与任务预算、冻结计划及人工试用关联起来。
 
@@ -112,7 +136,7 @@ kind: "package-reference"
 | 代码 | 含义 |
 |---|---|
 | `SELF_DEV_RUNNER_CONFIG_INVALID` | 服务配置或人工在场确认在配置边界未通过形状校验。 |
-| `SELF_DEV_RUNNER_WORKTREE_INVALID` | worktree 不能解析到 experiments root 之内、缺少 `.git` 条目，或者无法计算摘要。 |
+| `SELF_DEV_RUNNER_WORKTREE_INVALID` | worktree 不能解析到 experiments root 之内、缺少 `.git` 条目、无法计算摘要；或请求的每次尝试数据目录是相对路径、解析到 experiments root 之外、等于配置的 `dshHome`、或位于 worktree 之内。 |
 | `SELF_DEV_RUNNER_CLOCK_UNAVAILABLE` | `sysctl kern.boottime` 无法启动、读取或解析成启动记录。 |
 | `SELF_DEV_RUNNER_ACCEPTANCE_INVALID` | 验收定义不可用、位置不对，或者未覆盖冻结计划的必测用例。 |
 | `SELF_DEV_RUNNER_EXECUTOR_FAILED` | headless 执行器无法 spawn 子进程，或无法确认进程组退出。 |
@@ -146,7 +170,7 @@ kind: "package-reference"
 
 - **墙钟敏感性** —— `HostClock.monotonicMs` 派生自 `Date.now()`，墙钟调整可能使时长测量失效。JavaScript 定时器不是能够应对进程故障或主机休眠的独立监督者。
 - **没有自动尝试循环** —— 服务不会重复失败的尝试，也不提供无人值守执行或升级路径。重试是由调用方发起、携带自己幂等键的操作；启动记录要么重放它，要么把它拒绝给人工。
-- **同用户执行** —— 选择工作目录和限制环境变量不是沙箱。子进程仍拥有操作系统用户的权限；所提供的实验 home 可能含有凭据。验收命令也没有外层沙箱。
+- **同用户执行** —— 选择工作目录和限制环境变量不是沙箱。子进程仍拥有操作系统用户的权限；所提供的实验 home 可能含有凭据。验收命令也没有外层沙箱。每次尝试的数据目录只改变子进程 `DSH_HOME` 的指向，不改变它能到达的范围：同用户进程仍可读写其他每个任务的数据目录。
 - **进程组身份与逃逸** —— 离开进程组的后代（例如调用 `setsid`）可以逃过进程组取消。数字进程组 ID 在退出后也可能被复用；发信号并未固定操作系统拥有的进程身份。执行辅助函数在启动进程前拒绝 Windows；它们没有实现 Windows 进程监督机制。
 - **时钟源仅限 macOS** —— `readBootTimeSysctl` 依赖 `sysctl kern.boottime`，Linux 与 Windows 上不存在；没有后备时钟。
 - **监督不是隔离** —— 工作目录选择、环境变量白名单、workspace-write 和路径检查不是外层操作系统沙箱。同一用户的子进程可能访问正式 home、实验凭据、控制目录与其他进程。人工确认不会自动生成配额、隔离或真实在场检测。Node 墙钟差与 JavaScript 定时器不能替代独立监督者的时钟、休眠计账和崩溃清理。当前阶段只能提供明确记录限制的有人监督测试，不得据此放行无人值守。

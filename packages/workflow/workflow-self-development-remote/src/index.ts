@@ -411,6 +411,10 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
       worktree: parsed.worktree,
       artifactPaths: sortedUnique(parsed.artifactPaths),
       acceptancePath: parsed.acceptancePath,
+      // Host-only: only the stable host supplies a data directory, forwarded
+      // verbatim; a phone channel omits the field and the runner keeps its
+      // configured `dshHome`.
+      ...(parsed.dataHome === undefined ? {} : { dshHome: parsed.dataHome }),
       presence,
     })
     return toWireOutcome(outcome, operationId)

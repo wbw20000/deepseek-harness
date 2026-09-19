@@ -41,6 +41,12 @@ export interface LaunchRecord {
   readonly expectedRevision: number
   /** realpath of the experiment worktree the launch runs in. */
   readonly worktreeReal: string
+  /**
+   * realpath of the data directory the launch ran with, or absent on records
+   * written before the field existed. An absent field is read as the
+   * deployment's configured `dshHome`, never as a per-attempt directory.
+   */
+  readonly dshHomeReal?: string
   /** Worktree-relative artifact paths, deduplicated ascending. */
   readonly artifactPaths: readonly string[]
   /** Absolute stable-side acceptance definition path. */
@@ -304,6 +310,7 @@ function parseLaunchRecord(value: unknown): LaunchRecord {
     operationId: validOperationId(record.operationId),
     expectedRevision: requireNonNegativeInteger(record.expectedRevision, 'expectedRevision'),
     worktreeReal: requireAbsolute(record.worktreeReal, 'worktreeReal'),
+    ...(record.dshHomeReal === undefined ? {} : { dshHomeReal: requireAbsolute(record.dshHomeReal, 'dshHomeReal') }),
     artifactPaths: validArtifactPaths(record.artifactPaths),
     acceptancePath: requireAbsolute(record.acceptancePath, 'acceptancePath'),
     acceptanceDefinitionDigest: validDigest(record.acceptanceDefinitionDigest, 'acceptanceDefinitionDigest'),

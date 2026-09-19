@@ -9,7 +9,7 @@
 
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { chmod, mkdir, mkdtemp, rmdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, rmdir, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -40,7 +40,7 @@ import { runSupervisedAttempt, spentBudgetExecution } from '../src/attempt.ts'
 import type { SupervisedAttemptRequest } from '../src/attempt.ts'
 import { artifactDigestOf, sourceDigestOf } from '../src/digests.ts'
 import { readAttemptEvidence } from '../src/evidence.ts'
-import { writeLaunchRecord } from '../src/launch-record.ts'
+import { readLaunchRecord, writeLaunchRecord } from '../src/launch-record.ts'
 import type { LaunchRecord } from '../src/launch-record.ts'
 import type { PresenceConfirmation } from '../src/presence.ts'
 import type { RunnerConfig } from '../src/types.ts'
@@ -326,6 +326,119 @@ async function seedLaunchRecord(
     recordedAt: harness.clock.observe(),
   }))
 }
+
+/**
+ * Create one valid per-attempt data home inside the experiments root. The
+ * launch ledger is pre-seeded with one line: the fixture counts the lines
+ * under `DSH_HOME` and writes `DONE` once this launch is not its first, so an
+ * attempt against a fresh data home can still pass acceptance.
+ */
+async function makeDataHome(harness: Harness, name: string): Promise<string> {
+  const dshHome = join(harness.config.experimentsRoot, name)
+  await mkdir(dshHome, { recursive: true })
+  await writeFile(join(dshHome, 'launches'), 'seed\n')
+  return dshHome
+}
+
+describe('per-attempt data directory', () => {
+  it('runs the executor with the requested data directory and records its realpath', { timeout: 60_000 }, async () => {
+    const harness = await makeHarness({ requirement: 'dev' })
+    const dshHome = await makeDataHome(harness, 'task-home')
+    const outcome = await runSupervisedAttempt(depsOf(harness), attemptRequest(harness, 'op-1', { dshHome }))
+    expect(outcome.operation.replayed).toBe(false)
+    expect(harness.controller.projection.status).toBe('awaiting-trial')
+    // The fixture files its launch ledger under the DSH_HOME the executor
+    // handed it: the seeded line plus this launch proves the child ran with
+    // the requested data directory, not the configured one.
+    await expect(readFile(join(dshHome, 'launches'), 'utf8')).resolves.toBe('seed\ndev\n')
+    await expect(readFile(join(harness.config.dshHome, 'launches'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    const record = await readLaunchRecord(harness.config.evidenceRoot, TASK_ID, 'op-1')
+    expect(record?.dshHomeReal).toBe(await realpath(dshHome))
+  })
+
+  it('hands the requested data directory to the acceptance cases too', { timeout: 60_000 }, async () => {
+    const harness = await makeHarness({
+      requirement: 'dev',
+      caseCommand: ['node', fakeCase, 'write-dsh-home', 'dsh-home-dump.txt'],
+    })
+    const dshHome = await makeDataHome(harness, 'task-home')
+    // The case writes the dump into the worktree, so digest B diverges from
+    // digest A and the run cannot pass; the acceptance still ran, and its
+    // dump proves the case process inherited the requested data directory.
+    await runFailingAttempt(harness, 'op-1', 'SELF_DEV_INVALID_RESULT', { dshHome })
+    const evidence = await readAttemptEvidence(harness.config.evidenceRoot, TASK_ID, await attemptIdOf(harness, 1))
+    expect(evidence?.evidence.acceptance).toBeDefined()
+    await expect(readFile(join(harness.worktree, 'dsh-home-dump.txt'), 'utf8')).resolves.toBe(dshHome)
+  })
+
+  it('refuses a relative data directory without writing a launch record', { timeout: 60_000 }, async () => {
+    const harness = await makeHarness()
+    await runFailingAttempt(harness, 'op-1', 'SELF_DEV_RUNNER_WORKTREE_INVALID', { dshHome: 'relative/home' })
+    await expect(readLaunchRecord(harness.config.evidenceRoot, TASK_ID, 'op-1')).resolves.toBeUndefined()
+  })
+
+  it('refuses a data directory outside the experiments root without writing a launch record', { timeout: 60_000 }, async () => {
+    const harness = await makeHarness()
+    const outside = join(harness.config.experimentsRoot, '..', 'outside-home')
+    await mkdir(outside, { recursive: true })
+    await runFailingAttempt(harness, 'op-1', 'SELF_DEV_RUNNER_WORKTREE_INVALID', { dshHome: outside })
+    await expect(readLaunchRecord(harness.config.evidenceRoot, TASK_ID, 'op-1')).resolves.toBeUndefined()
+  })
+
+  it('refuses a data directory equal to the configured dshHome without writing a launch record', { timeout: 60_000 }, async () => {
+    const harness = await makeHarness()
+    // A deployment may keep its default home inside the experiments root; a
+    // request naming that same directory would collapse the per-attempt
+    // separation back onto the shared home, so it is refused.
+    const sharedHome = join(harness.config.experimentsRoot, 'shared-home')
+    await mkdir(sharedHome, { recursive: true })
+    const config = { ...harness.config, dshHome: sharedHome }
+    await runFailingAttempt({ ...harness, config }, 'op-1', 'SELF_DEV_RUNNER_WORKTREE_INVALID', { dshHome: sharedHome })
+    await expect(readLaunchRecord(harness.config.evidenceRoot, TASK_ID, 'op-1')).resolves.toBeUndefined()
+  })
+
+  it('refuses a data directory inside the experiment worktree without writing a launch record', { timeout: 60_000 }, async () => {
+    const harness = await makeHarness()
+    const inside = join(harness.worktree, 'data-home')
+    await mkdir(inside, { recursive: true })
+    await runFailingAttempt(harness, 'op-1', 'SELF_DEV_RUNNER_WORKTREE_INVALID', { dshHome: inside })
+    await expect(readLaunchRecord(harness.config.evidenceRoot, TASK_ID, 'op-1')).resolves.toBeUndefined()
+  })
+
+  it('refuses a data directory that escapes the experiments root through a symlink', { timeout: 60_000 }, async () => {
+    const harness = await makeHarness()
+    const escape = join(harness.config.experimentsRoot, 'escape')
+    await symlink(join(harness.config.experimentsRoot, '..'), escape)
+    await runFailingAttempt(harness, 'op-1', 'SELF_DEV_RUNNER_WORKTREE_INVALID', { dshHome: escape })
+    await expect(readLaunchRecord(harness.config.evidenceRoot, TASK_ID, 'op-1')).resolves.toBeUndefined()
+  })
+
+  it('refuses a retry whose data directory differs from the recorded one', { timeout: 60_000 }, async () => {
+    const harness = await makeHarness({ requirement: 'fail' })
+    const dshHome = await makeDataHome(harness, 'task-home')
+    await runFailingAttempt(harness, 'op-1', 'SELF_DEV_INVALID_RESULT', { dshHome })
+    const other = join(harness.config.experimentsRoot, 'task-home-other')
+    await mkdir(other, { recursive: true })
+    await expect(runSupervisedAttempt(depsOf(harness), attemptRequest(harness, 'op-1', { dshHome: other })))
+      .rejects.toMatchObject({ code: 'SELF_DEV_RUNNER_LAUNCH_MISMATCH' })
+    await expect(readFile(join(other, 'launches'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('replays a retry against a record written before dshHomeReal existed', { timeout: 60_000 }, async () => {
+    const harness = await makeHarness({ requirement: 'fail' })
+    await seedLaunchRecord(harness, 'op-1')
+    // A record that predates the field is judged against config.dshHome, so
+    // the matching launch runs, fails on the fixture's exit 1, and commits
+    // the operation the retry below replays without launching again.
+    await runFailingAttempt(harness, 'op-1', 'SELF_DEV_INVALID_RESULT')
+    const record = await readLaunchRecord(harness.config.evidenceRoot, TASK_ID, 'op-1')
+    expect(record?.dshHomeReal).toBeUndefined()
+    const replay = await runSupervisedAttempt(depsOf(harness), attemptRequest(harness, 'op-1'))
+    expect(replay.operation.replayed).toBe(true)
+    expect(replay.attemptId).toBeUndefined()
+    expect(await launchCount(harness)).toBe(1)
+  })
+})
 
 describe('supervised attempt', () => {
   it('runs a failed attempt, then a passing attempt, and leaves decided evidence for both', { timeout: 60_000 }, async () => {

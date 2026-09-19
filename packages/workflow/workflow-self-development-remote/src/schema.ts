@@ -69,6 +69,12 @@ const runAttemptSchema = zod.strictObject({
   worktree: zod.string().refine(isAbsolute, 'worktree must be an absolute path'),
   artifactPaths: zod.array(zod.string().min(1)).min(1),
   acceptancePath: zod.string().refine(isAbsolute, 'acceptancePath must be an absolute path'),
+  // host-only: the per-attempt data directory is assigned by the stable-side
+  // workspace service, so a phone caller must omit it; the stable host passes
+  // the workspaces `allocate` result's `dataHome` through as the runner's `dshHome`.
+  dataHome: zod.string().refine(isAbsolute, 'dataHome must be an absolute path')
+    .meta({ hostOnly: true })
+    .optional(),
   confirmedBy: nonEmpty,
   loopbackAllowlist: zod.array(zod.number().int().min(0).max(65535)),
   presenceAcknowledged: zod.boolean(),

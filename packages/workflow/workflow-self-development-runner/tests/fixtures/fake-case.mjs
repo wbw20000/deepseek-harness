@@ -9,6 +9,9 @@
  *   echo <text...>         write the text plus a newline to stdout, exit 0
  *   read <path>            write the file's text to stdout, exit 0
  *   write <relpath> <text> write the text to relpath (relative to cwd), exit 0
+ *   write-dsh-home <relpath>
+ *                          write this process's `DSH_HOME` (or the empty string
+ *                          without one) to relpath (relative to cwd), exit 0
  *   sleep <ms>             stay alive for ms, then exit 0
  *   hang <ms>              stay alive for ms while ignoring SIGTERM
  *   crash                  terminate this process with SIGTERM
@@ -35,6 +38,10 @@ switch (behavior) {
   case 'write':
     mkdirSync(dirname(args[0]), { recursive: true })
     writeFileSync(args[0], args.slice(1).join(' '))
+    break
+  case 'write-dsh-home':
+    mkdirSync(dirname(args[0]), { recursive: true })
+    writeFileSync(args[0], process.env.DSH_HOME ?? '')
     break
   case 'symlink':
     symlinkSync(args[0], args[1])

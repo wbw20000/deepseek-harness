@@ -173,6 +173,8 @@ describe('writeLaunchRecord and readLaunchRecord', () => {
     await expectTamperInvalid((stored) => { stored.expectedRevision = -1 })
     await expectTamperInvalid((stored) => { stored.worktreeReal = 'experiments/wt-1' })
     await expectTamperInvalid((stored) => { stored.worktreeReal = 5 })
+    await expectTamperInvalid((stored) => { stored.dshHomeReal = 'experiments/dsh-home' })
+    await expectTamperInvalid((stored) => { stored.dshHomeReal = 5 })
     await expectTamperInvalid((stored) => { stored.acceptancePath = 'stable/acceptance.md' })
     await expectTamperInvalid((stored) => { stored.operationId = 5 })
     await expectTamperInvalid((stored) => { stored.recordedAt = { bootId: 'zz', monotonicMs: 1 } })
@@ -207,5 +209,17 @@ describe('writeLaunchRecord and readLaunchRecord', () => {
     const emptyBudget = { phaseMs: undefined, totalRemainingMs: undefined, maxSteps: undefined }
     await writeLaunchRecord(base, { ...record, budget: emptyBudget })
     await expect(readLaunchRecord(base, TASK, OPERATION)).resolves.toEqual({ ...record, budget: emptyBudget })
+  })
+
+  it('round-trips a record that carries a data directory and keeps the field absent otherwise', async () => {
+    const base = await tempRoot()
+    const withDataHome = { ...record, dshHomeReal: '/experiments/task-1/dsh-home' }
+    await writeLaunchRecord(base, withDataHome)
+    await expect(readLaunchRecord(base, TASK, OPERATION)).resolves.toEqual(withDataHome)
+    const withoutDataHome = await tempRoot()
+    await writeLaunchRecord(withoutDataHome, record)
+    const read = await readLaunchRecord(withoutDataHome, TASK, OPERATION)
+    expect(read).toEqual(record)
+    expect('dshHomeReal' in (read as object)).toBe(false)
   })
 })
