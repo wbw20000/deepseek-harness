@@ -11,7 +11,7 @@ import type {
 import type { FileUploadReceiptId } from '@deepseek-ai/dsh-client-file-upload/types'
 import type {} from '@deepseek-ai/dsh-client-file-upload'
 import {
-  ReasoningEffortId, assistantStreamChunks, createUserMessage, freezeMessage,
+  ReasoningEffortId, createUserMessage, freezeMessage,
 } from '@deepseek-ai/dsh-llm'
 import type { MessageSource } from '@deepseek-ai/dsh-llm'
 import { SessionLogOffset, SessionSeq } from '@deepseek-ai/dsh-session'
@@ -32,6 +32,7 @@ import {
   hasApiSessionSubagentOwner,
   inspectApiSession,
 } from './agent.ts'
+import { forEachSessionEventAttachment } from './attachment-references.ts'
 import type {
   SessionAttachmentRequest,
   SessionAttachmentValue,
@@ -622,50 +623,16 @@ function hasPromptRequest(agent: Agent, requestId: SessionRequestId): boolean {
     return source.kind === 'user' && 'rpcId' in source && source.rpcId === requestId
   })
 }
-function imageBlockIn(
-  content: unknown,
-  match: (ref: ImageAttachmentRef) => boolean,
-): ImageAttachmentRef | undefined {
-  if (!Array.isArray(content)) return undefined
-  for (const value of content) {
-    if (typeof value !== 'object' || value === null || Array.isArray(value)) continue
-    const block = value as { readonly type?: unknown; readonly attachment?: unknown; readonly content?: unknown }
-    if (block.type === 'image' && typeof block.attachment === 'object' && block.attachment !== null) {
-      const ref = block.attachment as ImageAttachmentRef
-      if (match(ref)) return ref
-    }
-    if (block.type === 'tool-result') {
-      const nested = imageBlockIn(block.content, match)
-      if (nested !== undefined) return nested
-    }
-  }
-  return undefined
-}
-
 function imageInEvent(
   event: SessionEvent,
   match: (ref: ImageAttachmentRef) => boolean,
 ): ImageAttachmentRef | undefined {
-  const data = event.data as {
-    readonly content?: unknown
-    readonly message?: { readonly content?: unknown }
-    readonly inserted?: readonly { readonly content?: unknown }[]
-  }
-  const direct = imageBlockIn(data.content, match)
-  if (direct !== undefined) return direct
-  const message = imageBlockIn(data.message?.content, match)
-  if (message !== undefined) return message
-  for (const inserted of data.inserted ?? []) {
-    const found = imageBlockIn(inserted.content, match)
-    if (found !== undefined) return found
-  }
-  if (event.type === 'assistant/message' || event.type === 'assistant/attempt') {
-    for (const chunk of assistantStreamChunks(event.data.stream, 'block-end')) {
-      const found = imageBlockIn([chunk.block], match)
-      if (found !== undefined) return found
-    }
-  }
-  return undefined
+  let found: ImageAttachmentRef | undefined
+  forEachSessionEventAttachment(event, (attachment) => {
+    const ref = attachment as ImageAttachmentRef
+    if (found === undefined && match(ref)) found = ref
+  })
+  return found
 }
 
 function referencedImage(

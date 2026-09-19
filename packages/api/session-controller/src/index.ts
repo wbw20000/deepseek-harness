@@ -15,6 +15,7 @@ import {
   inspectApiSession,
   type ApiSessionAgentResult,
 } from './agent.ts'
+import { registerAttachmentGarbageReferenceSource } from './attachment-gc.ts'
 import { SessionCommandController } from './commands.ts'
 import { SessionControlController } from './control.ts'
 import { SessionHistoryController } from './history.ts'
@@ -130,6 +131,7 @@ export class SessionController extends TypertRemoteService {
       if ('error' in result) throw result.error
       return result.agent
     }), 'session-controller: file-upload Agent resolver')
+    registerAttachmentGarbageReferenceSource(ctx)
     this.controlState = new SessionControlController(ctx)
     // Registered before history so reverse-order teardown closes every
     // follower before waiting for already-admitted promotions.

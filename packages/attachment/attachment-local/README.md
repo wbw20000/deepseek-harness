@@ -53,6 +53,7 @@ Mount the plugin with no required configuration. The defaults below define what 
 | `budgetWarnRatio` | `0.8` | Budget fraction at or above which one debounced warning is logged |
 | `gcIntervalMs` | `0` (off) | Garbage-collection timer interval; when set, each pass needs a registered reference source |
 | `gcGracePeriodMs` | `24 hours` | Grace period the garbage-collection timer applies to unreferenced objects |
+| `gcReferenceTimeoutMs` | `30 seconds` | Deadline for one asynchronous reference-source read; a still-pending source skips that pass |
 
 The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-attachment-local) is the exhaustive source for every accepted field and its JSDoc.
 
@@ -66,7 +67,9 @@ With `diskBudgetBytes` above zero, every upload reserves its declared byte count
 
 ### How objects are garbage-collected
 
-`collectGarbage({ referenced, olderThanMs })` deletes stored objects whose attachment id is not in the caller's `referenced` set and whose last modification is older than `olderThanMs`, returning the reclaimed bytes and object count. Deleting a file object also removes its read-only name links. Collection never touches referenced objects or anything inside the grace period, and it runs only when a caller triggers it: `gcIntervalMs` enables a timer, but each timed pass skips unless a reference source is registered with `setGarbageReferenceSource()`, because only the caller knows which sessions still reference an attachment.
+`collectGarbage({ referenced, olderThanMs })` deletes stored objects whose attachment id is not in the caller's `referenced` set and whose last modification is older than `olderThanMs`, returning the reclaimed bytes and object count. Deleting a file object also removes its read-only name links. Collection never touches referenced objects or anything inside the grace period, and it runs only when a caller triggers it: `gcIntervalMs` enables a timer, and each timed pass consults the source registered with `setGarbageReferenceSource()`, because only the caller knows which sessions still reference an attachment. The shipped `dsh` composition leaves the timer off; the Session Controller registers the reference source, so turning the timer on makes collection live.
+
+The registered source may resolve asynchronously, for example by reading persisted session logs. A pass skips — deleting nothing — when no source is registered, when the source returns or resolves to `undefined`, when it throws, or when it is still pending after `gcReferenceTimeoutMs`; a skipped pass logs a warning. A pass that is still reading also makes the next timer tick skip instead of racing a concurrent deletion. This bias toward skipping is deliberate: an unreadable reference set must never widen what a pass may delete.
 
 ### Where your images are stored and how long they last
 
@@ -154,7 +157,7 @@ Normalization and request projection are deterministic. An unchanged attachment 
 
 These limits describe what this storage can and cannot do; they are current package constraints.
 
-- **Collection needs the caller's reference set** — `collectGarbage()` deletes only objects the caller's `referenced` set does not name, so no component collects anything until a caller wires session references into a schedule; a second harness process sharing the same home is invisible to the budget ledger, and one process's startup cleanup treats another live process's reservation records as orphans.
+- **Collection covers session references only** — the harness reference source names the attachment ids recorded in session logs and pending queued messages, so attachments consumed by external tools are invisible to collection; a second harness process sharing the same home is invisible to the budget ledger, and one process's startup cleanup treats another live process's reservation records as orphans.
 - **Local to this machine** — images live on the machine that runs the harness; other hosts cannot read them.
 - **Animated GIF becomes static** — normalization retains only the first frame; animation is outside the version-one image contract.
 - **Encoder output is versioned** — the installed Sharp/libvips build pins normalization and request bytes; an encoder or transform-version upgrade re-addresses future variants while existing objects remain valid.
@@ -169,6 +172,6 @@ This Dev Note is working context for maintainers: undecided directions and open 
 
 #### Future: retention and remote storage
 
-The `collectGarbage()` API owns deletion and the timer wiring is available, but no owner for the referenced-set side exists: resumed and forked sessions may share immutable objects, so whoever wires session references into a schedule must account for session lineage. A backend serving remote runtimes or shared storage would need its own durability proof and budget ledger. Both directions are undecided.
+The `collectGarbage()` API owns deletion and the Session Controller wires session references into the timer. Resumed and forked sessions may share immutable objects, so the reference set must stay the union across the whole session corpus; external tool references outside session logs are not counted. A backend serving remote runtimes or shared storage would need its own durability proof and budget ledger. Both directions are undecided.
 
 </details>
