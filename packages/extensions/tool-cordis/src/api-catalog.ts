@@ -1720,6 +1720,13 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         throws: ['SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED` while the facade is disabled, `SELF_DEV_REMOTE_CONFIG_INVALID` when the task id is malformed, or `SELF_DEV_REMOTE_TASK_UNKNOWN` when the task has no journal yet; the facade never creates a journal from a read path.', 'whatever the task-control service rejects with, verbatim.'],
       },
       {
+        signature: '@Remote(\'recentEvents\') async recentEvents(): Promise<readonly RecentEvent[]>',
+        description: 'Read the retained recent self-development notification events.',
+        parameters: [],
+        returns: 'the events consumer\'s title-level buffer, oldest first; `[]` when the events consumer plugin is not loaded in this context.',
+        throws: ['SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED` while the facade is disabled.'],
+      },
+      {
         signature: '@Remote(\'createTask\') async createTask(spec: TaskSpecInput, expectedRevision: number): Promise<RemoteOperationResult>',
         description: 'Create one task from a TaskSpec. The actor is the spec\'s `createdBy` field; it is checked against `allowedActors` when that list is non-empty.',
         parameters: [{ name: 'spec', description: 'TaskSpec in wire form.' }, { name: 'expectedRevision', description: 'revision the caller observed; a new task is at revision 0.' }],
@@ -5833,6 +5840,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type ReasoningEffortId = Branded<\'ReasoningEffortId\'>;',
   },
   {
+    name: 'RecentEvent',
+    declaration: 'export interface RecentEvent {\n    readonly taskId: string;\n    readonly kind: \'turn-finished\' | \'failed\' | \'awaiting-decision\' | \'awaiting-trial\' | \'stopped\';\n    readonly sessionId?: string;\n    readonly title: string;\n    readonly occurredAt: number;\n    readonly revision: number;\n}',
+  },
+  {
     name: 'RedactedSecret',
     declaration: 'export interface RedactedSecret {\n    path: string[];\n    set: boolean;\n}',
   },
@@ -5862,7 +5873,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'RemoteRunAttemptOutcome',
-    declaration: 'export interface RemoteRunAttemptOutcome {\n    readonly operation: {\n        readonly revision: number;\n        readonly replayed: boolean;\n    };\n    readonly attemptId?: string;\n    readonly evidencePath?: string;\n    readonly outcomeWriteError?: {\n        readonly code: string;\n        readonly message: string;\n    };\n    readonly operationId: string;\n}',
+    declaration: 'export interface RemoteRunAttemptOutcome {\n    readonly operation: {\n        readonly revision: number;\n        readonly replayed: boolean;\n    };\n    readonly attemptId?: string;\n    readonly evidencePath?: string;\n    readonly outcomeWriteError?: {\n        readonly code: string;\n        readonly message: string;\n    };\n    readonly worktree?: string;\n    readonly operationId: string;\n}',
   },
   {
     name: 'RemoteRunAttemptRequest',

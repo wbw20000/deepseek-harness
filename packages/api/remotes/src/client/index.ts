@@ -20,6 +20,7 @@ import sessionRemote from '@deepseek-ai/dsh-api-session-controller/remote'
 import workspaceRemote from '@deepseek-ai/dsh-api-workspace-controller/remote'
 import terminalRemote from '@deepseek-ai/dsh-api-terminal-controller/remote'
 import workspaceFilesRemote from '@deepseek-ai/dsh-api-workspace-files/remote'
+import selfDevelopmentRemote from '@deepseek-ai/dsh-workflow-self-development-remote/remote'
 import type { ClientRemote } from '@deepseek-ai/dsh-api-gateway/client'
 
 export type { ClientRemote } from '@deepseek-ai/dsh-api-gateway/client'
@@ -83,6 +84,7 @@ export type {
 } from '@deepseek-ai/dsh-client-connection/client'
 export type {} from '@deepseek-ai/dsh-api-gateway/client'
 export type {} from '@deepseek-ai/dsh-cordis-host-runner/remote'
+export type {} from '@deepseek-ai/dsh-workflow-self-development-remote/remote'
 
 // The payload vocabulary of the selected namespaces, re-exported so a Client
 // contribution can name what it sends and receives without importing a Host
@@ -169,6 +171,7 @@ export async function apply(ctx: Context): Promise<() => Promise<void>> {
       agentPresetsRemote, commandsRemote, settingsControllerRemote, goalsRemote, llmRemote, dynamicRemote,
       pluginInventoryRemote, pluginManagerRemote, messageFeedbackRemote, sessionFeedbackRemote, fileUploadsRemote, sessionReferencesRemote,
       permissionPresetsRemote, subagentsRemote, sessionRemote, workspaceRemote, workspaceFilesRemote, terminalRemote, officeToPdfRemote,
+      selfDevelopmentRemote,
     ]) {
       disposers.push(await ctx.remote.$mount(contribution))
     }

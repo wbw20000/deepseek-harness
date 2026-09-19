@@ -23,6 +23,7 @@
       "default": "./lib/startup.js"
     },
     "./cordis.patch.yml": "./cordis.patch.yml",
+    "./overlays/self-development.overlay.yml": "./overlays/self-development.overlay.yml",
     "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
@@ -30,6 +31,7 @@
     "lib/index.js",
     "lib/startup.js",
     "cordis.patch.yml",
+    "overlays/self-development.overlay.yml",
     "lib/types/**/*.d.ts"
   ],
   "license": "MIT",
@@ -84,6 +86,7 @@
     "@deepseek-ai/dsh-client-ui-settings-plugin-inventory": "workspace:^",
     "@deepseek-ai/dsh-client-ui-settings-plugins": "workspace:^",
     "@deepseek-ai/dsh-client-ui-settings-unarchive-sessions": "workspace:^",
+    "@deepseek-ai/dsh-client-ui-self-development": "workspace:^",
     "@deepseek-ai/dsh-client-ui-sidebar": "workspace:^",
     "@deepseek-ai/dsh-client-ui-sidebar-browser": "workspace:^",
     "@deepseek-ai/dsh-client-ui-sidebar-files": "workspace:^",
@@ -118,6 +121,10 @@
     "@deepseek-ai/dsh-subprocess": "workspace:^",
     "@deepseek-ai/dsh-tool-subagent": "workspace:^",
     "@deepseek-ai/dsh-web-frontend": "workspace:^",
+    "@deepseek-ai/dsh-workflow-self-development": "workspace:^",
+    "@deepseek-ai/dsh-workflow-self-development-events": "workspace:^",
+    "@deepseek-ai/dsh-workflow-self-development-remote": "workspace:^",
+    "@deepseek-ai/dsh-workflow-self-development-runner": "workspace:^",
     "@deepseek-ai/dsh-workspace": "workspace:^",
     "@deepseek-ai/schemastery": "workspace:^",
     "commander": "^15.0.0",

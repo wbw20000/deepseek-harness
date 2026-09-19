@@ -49,6 +49,7 @@
   },
   "dependencies": {
     "@deepseek-ai/dsh-workflow-self-development": "workspace:^",
+    "@deepseek-ai/dsh-workflow-self-development-events": "workspace:^",
     "@deepseek-ai/dsh-workflow-self-development-runner": "workspace:^",
     "@deepseek-ai/schemastery": "workspace:^",
     "zod": "^4.4.3"

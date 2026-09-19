@@ -33,9 +33,12 @@ import type {
   PresenceConfirmation,
   SelfDevelopmentRunner,
 } from '@deepseek-ai/dsh-workflow-self-development-runner'
+// Type-only: pulls the events consumer's Context merge so the optional
+// `selfDevelopmentEvents` read below is typed.
+import type {} from '@deepseek-ai/dsh-workflow-self-development-events'
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { buildConfirmationCard, taskTitle } from './card.ts'
-import { toWireOutcome, toWireProjection } from './wire.ts'
+import { toWireEvent, toWireOutcome, toWireProjection } from './wire.ts'
 import { SelfDevelopmentRemoteError } from './errors.ts'
 import {
   parseApproveBudgetInput,
@@ -52,6 +55,7 @@ import type {
   BudgetApprovalInput,
   ConfirmedPlanInput,
   PlanDraftInput,
+  RecentEvent,
   RemoteConfig,
   RemoteOperationResult,
   RemoteRunAttemptOutcome,
@@ -69,6 +73,7 @@ export type {
   ConfirmedPlanInput,
   ConfirmationCard,
   PlanDraftInput,
+  RecentEvent,
   RemoteConfig,
   RemoteOperationResult,
   RemoteRunAttemptOutcome,
@@ -78,7 +83,7 @@ export type {
   TaskSpecInput,
   TaskSummary,
 } from './types.ts'
-export { toWireOutcome, toWireProjection } from './wire.ts'
+export { toWireEvent, toWireOutcome, toWireProjection } from './wire.ts'
 
 /**
  * The facade's own deployment configuration. `controlDirectory` repeats the
@@ -170,6 +175,19 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
     await this.assertTaskExists(id)
     const projection = await this.ctx.selfDevelopmentTasks.state(id, this.clock())
     return { projection: toWireProjection(projection), card: buildConfirmationCard(id, projection) }
+  }
+
+  /**
+   * Read the retained recent self-development notification events.
+   * @returns the events consumer's title-level buffer, oldest first; `[]` when
+   *   the events consumer plugin is not loaded in this context.
+   * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED` while the facade is disabled.
+   */
+  @Remote('recentEvents')
+  async recentEvents(): Promise<readonly RecentEvent[]> {
+    this.assertEnabled()
+    const events = this.ctx.get('selfDevelopmentEvents')
+    return await Promise.resolve(events === undefined ? [] : events.recent().map(toWireEvent))
   }
 
   /**
@@ -417,7 +435,7 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
       ...(parsed.dataHome === undefined ? {} : { dshHome: parsed.dataHome }),
       presence,
     })
-    return toWireOutcome(outcome, operationId)
+    return toWireOutcome(outcome, operationId, parsed.worktree)
   }
 
   /**

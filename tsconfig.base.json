@@ -204,6 +204,8 @@
       "@deepseek-ai/dsh-client-ui-renderer/invariant": ["./packages/client/ui-renderer/src/invariant.ts"],
       "@deepseek-ai/dsh-client-ui-session": ["./packages/client/ui-session/src"],
       "@deepseek-ai/dsh-client-ui-session/client": ["./packages/client/ui-session/src/client"],
+      "@deepseek-ai/dsh-client-ui-self-development": ["./packages/client/ui-self-development/src"],
+      "@deepseek-ai/dsh-client-ui-self-development/client": ["./packages/client/ui-self-development/src/client"],
       "@deepseek-ai/dsh-client-connection": ["./packages/client/connection/src"],
       "@deepseek-ai/dsh-client-file-upload": ["./packages/client/file-upload/src"],
       "@deepseek-ai/dsh-client-file-upload/client": ["./packages/client/file-upload/src/client/index.ts"],

@@ -51,6 +51,7 @@ kind: "package-reference"
 |---|---|---|
 | `listTasks()` | 只读 | 扫描 `<controlDirectory>/tasks/*`，每个任务一行：`taskId`、`status`、`revision`、`title`（requirement 前 80 字）。尚无任务时返回 `[]`；该读路径从不创建任务日志目录。 |
 | `getTask(taskId)` | 只读 | 返回任务的 `TaskProjection` 与 `card`（只读确认卡视图）。任务尚无日志时以 `SELF_DEV_REMOTE_TASK_UNKNOWN` 拒绝。 |
+| `recentEvents()` | 只读 | 返回事件消费方的标题级通知缓冲（从旧到新）；事件消费方插件未加载时返回 `[]`。 |
 | `createTask(spec, expectedRevision)` | `createTask` | 按 TaskSpec 线上形式创建任务。actor 为 `spec.createdBy`。返回门面生成的 `operationId`。 |
 | `authorizePlanning(taskId, expectedRevision, authorizedBy)` | `authorizePlanning` | 授予独立的规划授权；它不批准开发，也不消耗轮数。 |
 | `submitPlanDraft(taskId, expectedRevision, draft)` | `submitPlanDraft` | 提交草拟计划，等待人工确认。 |

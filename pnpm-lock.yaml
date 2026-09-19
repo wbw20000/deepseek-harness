@@ -1048,6 +1048,9 @@ importers:
       '@deepseek-ai/dsh-user-questions':
         specifier: workspace:^
         version: link:../../interaction/user-questions
+      '@deepseek-ai/dsh-workflow-self-development-remote':
+        specifier: workspace:^
+        version: link:../../workflow/workflow-self-development-remote
       zod:
         specifier: ^4.4.3
         version: 4.4.3
@@ -2163,6 +2166,9 @@ importers:
       '@deepseek-ai/dsh-client-ui-schedule':
         specifier: workspace:^
         version: link:../../client/ui-schedule
+      '@deepseek-ai/dsh-client-ui-self-development':
+        specifier: workspace:^
+        version: link:../../client/ui-self-development
       '@deepseek-ai/dsh-client-ui-session':
         specifier: workspace:^
         version: link:../../client/ui-session
@@ -3983,6 +3989,63 @@ importers:
       react-dom:
         specifier: ^18.2.0
         version: 18.3.1(react@18.3.1)
+
+  packages/client/ui-self-development:
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-api-gateway':
+        specifier: workspace:^
+        version: link:../../api/gateway
+      '@deepseek-ai/dsh-api-remotes':
+        specifier: workspace:^
+        version: link:../../api/remotes
+      '@deepseek-ai/dsh-client-connection':
+        specifier: workspace:^
+        version: link:../connection
+      '@deepseek-ai/dsh-client-locale':
+        specifier: workspace:^
+        version: link:../locale
+      '@deepseek-ai/dsh-client-store':
+        specifier: workspace:^
+        version: link:../store
+      '@deepseek-ai/dsh-client-test-runtime':
+        specifier: workspace:^
+        version: link:../../test-support/client-runtime
+      '@deepseek-ai/dsh-client-ui-primitives':
+        specifier: workspace:^
+        version: link:../ui-primitives
+      '@deepseek-ai/dsh-client-ui-renderer':
+        specifier: workspace:^
+        version: link:../ui-renderer
+      '@deepseek-ai/dsh-client-ui-sidebar-right':
+        specifier: workspace:^
+        version: link:../ui-sidebar-right
+      '@deepseek-ai/dsh-client-ui-slots':
+        specifier: workspace:^
+        version: link:../ui-slots
+      '@deepseek-ai/dsh-typert-protocol':
+        specifier: workspace:^
+        version: link:../../typert/protocol
+      '@deepseek-ai/dsh-typert-registry':
+        specifier: workspace:^
+        version: link:../../typert/registry
+      '@deepseek-ai/dsh-workflow-self-development':
+        specifier: workspace:^
+        version: link:../../workflow/workflow-self-development
+      '@deepseek-ai/dsh-workflow-self-development-events':
+        specifier: workspace:^
+        version: link:../../workflow/workflow-self-development-events
+      '@deepseek-ai/dsh-workflow-self-development-remote':
+        specifier: workspace:^
+        version: link:../../workflow/workflow-self-development-remote
+      '@types/react':
+        specifier: ~18.3.1
+        version: 18.3.31
+      react:
+        specifier: ^18.2.0
+        version: 18.3.1
 
   packages/client/ui-session:
     devDependencies:
@@ -12464,6 +12527,9 @@ importers:
       '@deepseek-ai/dsh-workflow-self-development':
         specifier: workspace:^
         version: link:../workflow-self-development
+      '@deepseek-ai/dsh-workflow-self-development-events':
+        specifier: workspace:^
+        version: link:../workflow-self-development-events
       '@deepseek-ai/dsh-workflow-self-development-runner':
         specifier: workspace:^
         version: link:../workflow-self-development-runner

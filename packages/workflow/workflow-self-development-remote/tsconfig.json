@@ -27,6 +27,9 @@
       "path": "../workflow-self-development"
     },
     {
+      "path": "../workflow-self-development-events"
+    },
+    {
       "path": "../workflow-self-development-runner"
     }
   ]
