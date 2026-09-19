@@ -68,6 +68,8 @@ Disabled Send and Stop buttons suppress their tooltips, including a Stop button 
 
 File chips and editable skill references share a whole-reference hover background and follow the composer's line height and text baseline. The first click delegates preview opening to the registered reference source immediately, including the first click of a double-click sequence. Subsequent clicks retain native text selection; an existing noncollapsed selection suppresses pointer preview activation. Previewing does not change the draft, its clipboard projection, or submission.
 
+“全部停止” differs from “停止生成”: Stop generating cancels only the current turn and keeps the Queue, while Stop all (the outlined button beside it, enabled while a turn is active or the Queue is non-empty) calls the Session's `stopAll` — it cancels the turn, discards every queued message, and holds automatic continuations off until the user sends a new message. Stop all asks for confirmation that names how many queued messages will be discarded, toasts the discarded count, and a dismissible banner above the composer mirrors the durable full-stop state until the next send clears it.
+
 When another writer owns the Session, the send-error toast asks the user to quit other running DSH instances and retry.
 
 <a id="temporary-composer-entries"></a>

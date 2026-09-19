@@ -12,6 +12,7 @@ import type { SessionId } from '@deepseek-ai/dsh-api-remotes/client'
 import { RemoteStreamCarrierError } from '@deepseek-ai/dsh-api-gateway/client'
 import { RemoteError, type RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
 import { ok, type RemoteMock } from '@deepseek-ai/dsh-remote-mock'
+import { MessageId } from '@deepseek-ai/dsh-llm/brand'
 import { createClientTest, type TestClient, webApp } from '@deepseek-ai/dsh-client-test-runtime/src/assembly/index.ts'
 import { JUMP_PAGE_MESSAGES, Session } from '../src/client/sessions/session.ts'
 import { SessionEventStream } from '../src/client/transport.ts'
@@ -452,6 +453,55 @@ describe('prompt and cancel errors', () => {
     expect(cancelled).toMatchObject({ ok: false, error: { code: 'subagent/unauthorized' } })
     expect(session.getSnapshot().promptError).toMatchObject({
       op: 'stop', error: { code: 'subagent/unauthorized' },
+    })
+  })
+
+  it('stopAll routes an ordinary session through session/stopAll and reports the discarded identities', async ({ mock, start }) => {
+    const session = await sessionBench(mock, start, SID)
+    mock.remote.session.stopAll.mockResolvedValue(ok({ accepted: true, discardedItemIds: [MessageId('i1'), MessageId('i2')] }))
+    await session.open()
+    const stopped = await session.stopAll()
+
+    expect(stopped).toEqual({
+      ok: true, value: { accepted: true, discardedItemIds: ['i1', 'i2'] },
+    })
+    expect(mock.log.requests('session/stopAll')).toEqual([{ sessionId: SID }])
+    expect(mock.log.requests('session/cancel')).toEqual([])
+    expect(mock.log.calls('subagents/interruptByParent')).toEqual([])
+    expect(session.getSnapshot().promptError).toBeNull()
+  })
+
+  it('stopAll routes an addressed child through interruptByParent with an empty discard list', async ({ mock, start }) => {
+    const session = await sessionBench(mock, start, SID, { address: CHILD, parentAvailable: true })
+    await session.open()
+    const stopped = await session.stopAll()
+
+    expect(stopped).toEqual({ ok: true, value: { accepted: true, discardedItemIds: [] } })
+    expect(mock.log.calls('subagents/interruptByParent').map(call => call.args)).toEqual([[SID, PARENT, 'continuable']])
+    expect(mock.log.requests('session/stopAll')).toEqual([])
+    expect(session.getSnapshot().promptError).toBeNull()
+  })
+
+  it('lands a subagent full-stop failure in promptError with op=stop', async ({ mock, start }) => {
+    const session = await sessionBench(mock, start, SID, { address: CHILD, parentAvailable: true })
+    mock.remote.subagents.interruptByParent.mockResolvedValue(err(new RemoteError('subagent/unauthorized', 'nope', { childSessionId: SID })))
+    await session.open()
+    const stopped = await session.stopAll()
+    expect(stopped).toMatchObject({ ok: false, error: { code: 'subagent/unauthorized' } })
+    expect(mock.log.requests('session/stopAll')).toEqual([])
+    expect(session.getSnapshot().promptError).toMatchObject({
+      op: 'stop', error: { code: 'subagent/unauthorized' },
+    })
+  })
+
+  it('lands a full-stop business failure in promptError with op=stop', async ({ mock, start }) => {
+    const session = await sessionBench(mock, start, SID)
+    mock.remote.session.stopAll.mockResolvedValue(err(new RemoteError('session/agent-busy', 'busy', { reason: 'r' })))
+    await session.open()
+    const stopped = await session.stopAll()
+    expect(stopped).toMatchObject({ ok: false, error: { code: 'session/agent-busy' } })
+    expect(session.getSnapshot().promptError).toMatchObject({
+      op: 'stop', error: { code: 'session/agent-busy' },
     })
   })
 

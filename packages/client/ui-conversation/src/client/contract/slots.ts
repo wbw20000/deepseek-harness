@@ -365,6 +365,11 @@ export interface ComposerBarInjected {
   retryFileUpload: ((id: DraftAttachmentId) => void) | undefined
   toggleCommandMenu: ((selection: EditSelection) => void) | undefined
   stop: (() => void) | undefined
+  /**
+   * Full stop of the current session — cancel the turn and clear the Queue;
+   * resolves with the discarded queued-message count. Absent without a session.
+   */
+  stopAll: (() => Promise<number>) | undefined
   hooks: {
     /**
      * Live busy-state submission preference: the delivery mode plain Enter

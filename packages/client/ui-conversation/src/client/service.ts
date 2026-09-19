@@ -64,6 +64,12 @@ export interface IConversation {
    */
   cancel(): Promise<void>
   /**
+   * Stop the scoped session completely: cancel the active turn, discard its
+   * pending Queue, and hold automatic continuations off until the next send.
+   * @returns the number of discarded queued messages; failures reject as in send.
+   */
+  stopAll(): Promise<number>
+  /**
    * Pull one older history page for the scoped session.
    * @returns completion of the page pull.
    */
@@ -509,6 +515,19 @@ export class ConversationController extends Service implements IConversation {
     const session = this.scopedSession('cancel')
     const result = await session.cancel()
     if (!result.ok) throw new Error(`conversation.cancel failed: ${result.error.code}: ${result.error.message}`)
+  }
+
+  /**
+   * Full stop of the scoped session (failures land in promptError and reject,
+   * as in send): the turn cancels without preserving the Queue and automatic
+   * continuations stay off until the next send.
+   * @returns the number of discarded queued messages.
+   */
+  async stopAll(): Promise<number> {
+    const session = this.scopedSession('stopAll')
+    const result = await session.stopAll()
+    if (!result.ok) throw new Error(`conversation.stopAll failed: ${result.error.code}: ${result.error.message}`)
+    return result.value.discardedItemIds.length
   }
 
   /** Pull one older history page for the scoped Session. */

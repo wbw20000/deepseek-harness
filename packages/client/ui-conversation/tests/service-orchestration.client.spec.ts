@@ -31,10 +31,14 @@ async function bench(maxConcurrentFileUploads = 2) {
   ) => Promise.resolve({ ok: true as const, value: { accepted: true as const } }))
   const updateQueue = vi.fn(() => Promise.resolve({ ok: true as const, value: { accepted: true as const } }))
   const cancel = vi.fn(() => Promise.resolve({ ok: true as const, value: { accepted: true as const } }))
+  const stopAll = vi.fn(() => Promise.resolve({
+    ok: true as const,
+    value: { accepted: true as const, discardedItemIds: [] as readonly MessageId[] },
+  }))
   const loadOlder = vi.fn(() => Promise.resolve())
   await runtime.sessions.add({
     id: 's1',
-    session: { prompt, updateQueue, cancel, loadOlder },
+    session: { prompt, updateQueue, cancel, stopAll, loadOlder },
   })
   const reference = runtime.sessions.retain('s1' as SessionId)
   await reference.ready
@@ -50,7 +54,7 @@ async function bench(maxConcurrentFileUploads = 2) {
   const root = runtime.ctx.get('conversation') as ConversationController
   const scoped = runtime.sessions.scope('s1')!.get('conversation') as ConversationController
   const shell = hub.shellFor(runtime.sessions.binding('s1')!)
-  return { runtime, fiber, root, scoped, hub, shell, prompt, updateQueue, cancel, loadOlder, reference }
+  return { runtime, fiber, root, scoped, hub, shell, prompt, updateQueue, cancel, stopAll, loadOlder, reference }
 }
 
 describe('ConversationController', () => {
@@ -96,6 +100,19 @@ describe('ConversationController', () => {
     } as never)
     await expect(b.scoped.updateQueue('item-1' as never, { kind: 'steer' }))
       .rejects.toThrow('conversation.updateQueue failed: gateway/internal: broken')
+    b.stopAll.mockResolvedValueOnce({ ok: false, error: new RemoteError('gateway/internal', 'gone', {}) } as never)
+    await expect(b.scoped.stopAll()).rejects.toThrow('conversation.stopAll failed: gateway/internal: gone')
+    await b.runtime.dispose()
+  })
+
+  it('stopAll reports the discarded queued-message count', async () => {
+    const b = await bench()
+    b.stopAll.mockResolvedValueOnce({
+      ok: true,
+      value: { accepted: true, discardedItemIds: ['i-1' as MessageId, 'i-2' as MessageId] },
+    } as never)
+    await expect(b.scoped.stopAll()).resolves.toBe(2)
+    expect(b.stopAll).toHaveBeenCalledOnce()
     await b.runtime.dispose()
   })
 

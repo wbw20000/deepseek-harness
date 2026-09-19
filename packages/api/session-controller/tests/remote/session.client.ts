@@ -138,6 +138,7 @@ export const sessionWorld: RemoteTable = {
   unary: {
     'session/prompt': ok({ accepted: true }),
     'session/cancel': ok({ accepted: true }),
+    'session/stopAll': ok({ accepted: true, discardedItemIds: [] }),
     'session/updateQueue': ok({ accepted: true }),
     'session/rename': ok({ title: 'fk-renamed', seq: 0 }),
     'session/attachment': ok({

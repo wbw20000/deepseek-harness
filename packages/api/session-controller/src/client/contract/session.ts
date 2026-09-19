@@ -12,7 +12,9 @@ import type { MessageId } from '@deepseek-ai/dsh-llm/brand'
 import type { SessionId, SessionSeq } from '@deepseek-ai/dsh-session/types'
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
 import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
-import type { PromptContentPart, QueueAction, SessionRequestId } from '../../types.ts'
+import type {
+  PromptContentPart, QueueAction, SessionRequestId, SessionStopAllValue,
+} from '../../types.ts'
 import type { PendingSubmissionAttachment, SessionSnapshot } from './snapshot.ts'
 
 /**
@@ -110,6 +112,13 @@ export interface ISession {
    * @returns acceptance, or the business error.
    */
   cancel(): Promise<RemoteResult<{ accepted: true }>>
+  /**
+   * Stop the session completely: cancel the running turn, discard every
+   * pending queue occurrence, and hold automatic continuations off until the
+   * next explicit user message.
+   * @returns the discarded pending identities plus acceptance, or the business error.
+   */
+  stopAll(): Promise<RemoteResult<SessionStopAllValue>>
   /**
    * Rename this session (explicit user title; pins it against automatic
    * regeneration).

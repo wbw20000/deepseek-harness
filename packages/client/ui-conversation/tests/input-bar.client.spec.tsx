@@ -11,7 +11,7 @@
 import type { InboxState } from '@deepseek-ai/dsh-agent/types'
 import type { GlobalStandardProps } from '@deepseek-ai/dsh-client-ui-slots'
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
-import { act, cleanup, fireEvent, render } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, within } from '@testing-library/react'
 import { $getRoot, $isTextNode } from 'lexical'
 import {
   bindSnapshotSelector, conversationSnapshot as conversationFixture, makeTranslate, RemoteError,
@@ -71,6 +71,10 @@ interface BenchOptions {
     maxImageDimension: number
     mediaTypes: readonly ('image/png' | 'image/jpeg' | 'image/webp' | 'image/gif')[]
   }
+  /** The `stopAll` projection value (absent = no full-stop gate frame yet). */
+  stopAll?: { stopped: boolean }
+  /** The full-stop callback (`false` = absent inject, as without a session). */
+  stopAllCallback?: false | (() => Promise<number>)
   draft?: string
   running?: boolean
   subagent?: Exclude<SessionSnapshot['subagent'], null>
@@ -149,6 +153,7 @@ function bench(over?: BenchOptions) {
   if (over?.draft !== undefined && over.draft !== '') shell.setDraft(over.draft)
   if (over?.attachments !== undefined) shell.addAttachments(over.attachments.map(attachment => attachment.id))
   const stop = vi.fn()
+  const stopAll = vi.fn(() => Promise.resolve(0))
   const removeAttachment = vi.fn((id: DraftAttachmentId) => { shell.removeAttachment(id) })
   const menuLauncher = createSnapshotStore<string | null>(over?.commandMenuOpen === true ? 'command' : null)
   const busyEnter = createSnapshotStore<'queue' | 'steer'>(over?.busyEnter ?? 'queue')
@@ -184,7 +189,8 @@ function bench(over?: BenchOptions) {
       (selector ?? (v => v))(key === 'plan'
         ? over?.plan
         : key === 'goal' ? over?.goal
-          : key === 'imageLimits' ? over?.imageLimits : undefined)),
+          : key === 'imageLimits' ? over?.imageLimits
+            : key === 'stopAll' ? over?.stopAll : undefined)),
     useInput: bindSnapshotSelector(shell.state),
     inputActions: shell.actions,
     keyboard: shell,
@@ -197,6 +203,7 @@ function bench(over?: BenchOptions) {
       return attachment === undefined ? [] : [attachment]
     }),
     toggleCommandMenu: over?.toggleCommandMenu ?? vi.fn(),
+    stopAll: over?.stopAllCallback === false ? undefined : over?.stopAllCallback ?? stopAll,
     useBusyEnter: bindSnapshotSelector(busyEnter),
     useNotices: bindSnapshotSelector(shell.notices),
     useLexicon: bindSnapshotSelector(shell.lexicon),
@@ -239,10 +246,11 @@ function bench(over?: BenchOptions) {
   const button = view.container.querySelector<HTMLButtonElement>(`button[aria-label="${primaryLabel}"]`)!
   const interruptButton = view.container.querySelector<HTMLButtonElement>('button[aria-label="停止生成"]')
   return {
-    view, textarea, button, interruptButton, props, sink, shell, wiring: shell, session, stop, removeAttachment, slotCalls,
+    view, textarea, button, interruptButton, props, sink, shell, wiring: shell, session, stop, stopAll, removeAttachment, slotCalls,
     menuLauncher, busyEnter,
     steerQueue: over?.steerQueue,
     get placeholder() { return placeholderOf(view.container) },
+    get stopAllButton() { return view.container.querySelector<HTMLButtonElement>('button[aria-label="全部停止"]') },
     get inputDisabled() { return textarea.getAttribute('aria-disabled') === 'true' },
   }
 }
@@ -1671,5 +1679,135 @@ describe('command launcher chrome and control seats', () => {
     cleanup()
     const live = bench({ running: true })
     expect((live.view.getByLabelText('添加文件或调用指令') as HTMLButtonElement).disabled).toBe(false)
+  })
+})
+
+describe('full stop (stopAll)', () => {
+  const DIALOG = '全部停止？'
+
+  it('disables 全部停止 while idle with an empty queue and enables it when running or queued', () => {
+    expect(bench().stopAllButton!.disabled).toBe(true)
+    cleanup()
+    expect(bench({ running: true }).stopAllButton!.disabled).toBe(false)
+    cleanup()
+    expect(bench({ queue: [row('q-1')] }).stopAllButton!.disabled).toBe(false)
+  })
+
+  it('opens the confirmation dialog, keeps cancel a no-op, and confirms with the acknowledgement', async () => {
+    vi.useFakeTimers()
+    try {
+      const stopAll = vi.fn(() => Promise.resolve(2))
+      const { view } = bench({
+        running: true,
+        queue: [row('q-1'), row('q-2')],
+        stopAllCallback: stopAll,
+      })
+      fireEvent.click(view.getByLabelText('全部停止'))
+      const dialog = view.getByRole('dialog')
+      expect(dialog.textContent).toContain(DIALOG)
+      expect(dialog.textContent).toContain('将停止当前回合并清空 2 条排队消息；在你再次发送前不会自动开始新回合。')
+
+      // Cancel closes without calling the remote.
+      fireEvent.click(within(dialog).getByRole('button', { name: '取消' }))
+      expect(view.queryByRole('dialog')).toBeNull()
+      expect(stopAll).not.toHaveBeenCalled()
+
+      // The confirm arm waits for the acknowledgement checkbox.
+      fireEvent.click(view.getByLabelText('全部停止'))
+      const reopened = view.getByRole('dialog')
+      fireEvent.click(within(reopened).getByRole('button', { name: '全部停止' }))
+      expect(stopAll).not.toHaveBeenCalled()
+      fireEvent.click(within(reopened).getByRole('checkbox'))
+      fireEvent.click(within(reopened).getByRole('button', { name: '全部停止' }))
+      expect(view.queryByRole('dialog')).toBeNull()
+      expect(stopAll).toHaveBeenCalledTimes(1)
+      await act(async () => { vi.advanceTimersByTime(0) })
+      expect(view.getByRole('alert').textContent).toContain('已全部停止，丢弃 2 条排队消息')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('describes a queue-free full stop and toasts without a discard count', async () => {
+    vi.useFakeTimers()
+    try {
+      const { view, stopAll } = bench({ running: true })
+      fireEvent.click(view.getByLabelText('全部停止'))
+      const dialog = view.getByRole('dialog')
+      expect(dialog.textContent).toContain('将停止当前回合，当前没有排队消息；在你再次发送前不会自动开始新回合。')
+      fireEvent.click(within(dialog).getByRole('checkbox'))
+      fireEvent.click(within(dialog).getByRole('button', { name: '全部停止' }))
+      expect(stopAll).toHaveBeenCalledTimes(1)
+      await act(async () => { vi.advanceTimersByTime(0) })
+      expect(view.getByRole('alert').textContent).toContain('已全部停止，没有排队消息')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a failed full stop publishes no toast itself; the promptError path announces it', async () => {
+    vi.useFakeTimers()
+    try {
+      const { view } = bench({
+        running: true,
+        stopAllCallback: () => Promise.reject(new Error('conversation.stopAll failed')),
+      })
+      fireEvent.click(view.getByLabelText('全部停止'))
+      const dialog = view.getByRole('dialog')
+      fireEvent.click(within(dialog).getByRole('checkbox'))
+      fireEvent.click(within(dialog).getByRole('button', { name: '全部停止' }))
+      await act(async () => { vi.advanceTimersByTime(0) })
+      // The rejection is swallowed here: Session promptError owns the failure toast.
+      expect(view.queryByRole('alert')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps the dialog openable with the callback absent and confirms as a silent no-op', async () => {
+    vi.useFakeTimers()
+    try {
+      const { view } = bench({ running: true, stopAllCallback: false })
+      fireEvent.click(view.getByLabelText('全部停止'))
+      const dialog = view.getByRole('dialog')
+      fireEvent.click(within(dialog).getByRole('checkbox'))
+      fireEvent.click(within(dialog).getByRole('button', { name: '全部停止' }))
+      expect(view.queryByRole('dialog')).toBeNull()
+      await act(async () => { vi.advanceTimersByTime(0) })
+      expect(view.queryByRole('alert')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('shows the fully-stopped banner while the gate holds, dismisses it, and re-announces on re-arm', () => {
+    // The banner mirrors the gate: absent without it, present while it holds.
+    expect(bench().view.queryByText('已全部停止：发送新消息后恢复')).toBeNull()
+    cleanup()
+    // The option object is the live projection source: mutating it drives the
+    // gate edge through the same rendered component.
+    const opts: BenchOptions = { stopAll: { stopped: true } }
+    const armed = bench(opts)
+    expect(armed.view.getByText('已全部停止：发送新消息后恢复')).toBeTruthy()
+
+    // Dismissal is local; the gate still holding keeps it hidden.
+    fireEvent.click(armed.view.getByRole('button', { name: '关闭已全部停止横幅' }))
+    expect(armed.view.queryByText('已全部停止：发送新消息后恢复')).toBeNull()
+
+    // The gate clearing (the next send) leaves the dismissed banner hidden.
+    act(() => {
+      opts.stopAll = { stopped: false }
+      // A fresh callback identity defeats memo's bail-out so the new
+      // projection value is actually read.
+      armed.view.rerender(<InputBar {...armed.props} stopAll={() => Promise.resolve(0)} />)
+    })
+    expect(armed.view.queryByText('已全部停止：发送新消息后恢复')).toBeNull()
+
+    // A later re-arm re-announces: the dismissal reset with the gate edge.
+    act(() => {
+      opts.stopAll = { stopped: true }
+      armed.view.rerender(<InputBar {...armed.props} />)
+    })
+    expect(armed.view.getByText('已全部停止：发送新消息后恢复')).toBeTruthy()
   })
 })
