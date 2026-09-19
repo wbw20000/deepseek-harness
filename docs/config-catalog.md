@@ -3818,6 +3818,27 @@ export interface Config {
 
 Source: [`packages/workflow/workflow-self-development/src/index.ts:80`](../packages/workflow/workflow-self-development/src/index.ts)
 
+<a id="deepseek-aidsh-workflow-self-development-events"></a>
+
+## `@deepseek-ai/dsh-workflow-self-development-events`
+
+Requires: `selfDevelopmentTasks`
+
+```ts config-catalog
+/** Deployment configuration for the events service. */
+export interface SelfDevelopmentEventsConfig {
+  /**
+   * Local notification command argv, spawned once per event with the event
+   * JSON on its stdin. `undefined` — the default — disables notifications.
+   */
+  readonly localNotificationCommand?: readonly string[] | undefined
+  /** Events retained in the in-memory recent buffer; older events are dropped. */
+  readonly recentLimit?: number | undefined
+}
+```
+
+Source: [`packages/workflow/workflow-self-development-events/src/types.ts:34`](../packages/workflow/workflow-self-development-events/src/types.ts)
+
 <a id="deepseek-aidsh-workflow-self-development-runner"></a>
 
 ## `@deepseek-ai/dsh-workflow-self-development-runner`

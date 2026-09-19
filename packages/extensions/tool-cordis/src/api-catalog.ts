@@ -1682,6 +1682,25 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'selfDevelopmentEvents',
+    summary: 'Unified self-development event projection.',
+    description: 'Unified self-development event projection. Subscribing consumers and the recent buffer see every mapped event exactly once, in commit order. Without a configured `localNotificationCommand` the service never spawns.',
+    methods: [
+      {
+        signature: 'recent(limit?: number): readonly SelfDevelopmentEvent[]',
+        description: 'Read the retained recent events, oldest first.',
+        parameters: [{ name: 'limit', description: 'maximum number of events to return, taken from the most recent tail of the buffer; defaults to every retained event.' }],
+        returns: 'the retained events in chronological order, oldest first.',
+      },
+      {
+        signature: 'subscribe(listener: (event: SelfDevelopmentEvent) => void): () => void',
+        description: 'Subscribe one listener to every mapped event from now on. The buffer is not replayed: a subscriber sees only events observed after subscribing.',
+        parameters: [{ name: 'listener', description: 'callback invoked once per event in commit order.' }],
+        returns: 'the disposer that removes the listener.',
+      },
+    ],
+  },
+  {
     key: 'selfDevelopmentRunner',
     summary: 'Cordis service composing the supervised-mode attempt pipeline.',
     description: 'Cordis service composing the supervised-mode attempt pipeline.',
@@ -3848,6 +3867,14 @@ export const EVENT_API: readonly EventApiEntry[] = [
     parameters: [{ name: 'progress', description: 'the installation\'s request id and phase.' }],
   },
   {
+    name: 'self-development/committed',
+    mode: 'emit',
+    signature: '\'self-development/committed\'(payload: SelfDevelopmentCommittedPayload): void',
+    summary: 'One task event reached its durable journal: every successful controller commit, including the `attempt/failed` and `handoff/raised` commits a restart recovery appends.',
+    description: 'One task event reached its durable journal: every successful controller commit, including the `attempt/failed` and `handoff/raised` commits a restart recovery appends. The payload carries the hash-chained record and the frozen post-commit projection. Listener failures are contained and logged; they never affect the commit or the task state.',
+    parameters: [{ name: 'payload', description: 'the task id, the committed journal record, and the frozen projection after the commit.' }],
+  },
+  {
     name: 'session-telemetry/record',
     mode: 'waterfall',
     signature: '\'session-telemetry/record\'(record: SessionTelemetryRecord, next: () => SessionTelemetryRecord): SessionTelemetryRecord',
@@ -5840,8 +5867,20 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type SelfDevAttemptId = Branded<\'self-dev-attempt-id\'>;',
   },
   {
+    name: 'SelfDevelopmentCommittedPayload',
+    declaration: 'export interface SelfDevelopmentCommittedPayload {\n    readonly taskId: string;\n    readonly record: CommittedRecord;\n    readonly projection: TaskProjection;\n}',
+  },
+  {
+    name: 'SelfDevelopmentEvent',
+    declaration: 'export interface SelfDevelopmentEvent {\n    readonly taskId: string;\n    readonly kind: SelfDevelopmentEventKind;\n    readonly sessionId: string | undefined;\n    readonly title: string;\n    readonly occurredAt: number;\n    readonly revision: number;\n}',
+  },
+  {
+    name: 'SelfDevelopmentEventKind',
+    declaration: 'export type SelfDevelopmentEventKind = \'turn-finished\' | \'failed\' | \'awaiting-decision\' | \'awaiting-trial\' | \'stopped\';',
+  },
+  {
     name: 'SelfDevelopmentTaskController',
-    declaration: 'export class SelfDevelopmentTaskController {\n    static async open(params: {\n        taskId: string;\n        journal: TaskJournal;\n        clock: TrustedClock;\n    }): Promise<SelfDevelopmentTaskController>;\n    get projection(): TaskProjection;\n    get spec(): TaskSpec | undefined;\n    get plan(): FrozenTestPlan | undefined;\n    #enqueue<T>(body: () => Promise<T>): Promise<T>;\n    async #execute<T>(method: string, request: OperationHeader & object, body: (header: ParsedOperationHeader, payloadDigest: string) => Promise<T>): Promise<T>;\n    #assertJournalIntact(): void;\n    #assertNotHandoff(): void;\n    createTask(request: OperationHeader & ControllerRequests[\'createTask\']): Promise<TaskOperationResult>;\n    authorizePlanning(request: OperationHeader & ControllerRequests[\'authorizePlanning\']): Promise<TaskOperationResult>;\n    submitPlanDraft(request: OperationHeader & ControllerRequests[\'submitPlanDraft\']): Promise<TaskOperationResult>;\n    confirmPlan(request: OperationHeader & ControllerRequests[\'confirmPlan\']): Promise<TaskOperationResult>;\n    approveBudget(request: OperationHeader & ControllerRequests[\'approveBudget\']): Promise<TaskOperationResult>;\n    startAttempt(request: OperationHeader & ControllerRequests[\'startAttempt\']): Promise<TaskOperationResult>;\n    async #beginAttempt(header: ParsedOperationHeader, payloadDigest: string, externalSignal: AbortSignal | undefined, request: OperationHeader & ControllerRequests[\'startAttempt\']): Promise<AttemptLaunch>;\n    asy /* …truncated — full shape in source */',
+    declaration: 'export class SelfDevelopmentTaskController {\n    static async open(params: {\n        taskId: string;\n        journal: TaskJournal;\n        clock: TrustedClock;\n        onCommitted?: (record: CommittedRecord, projection: TaskProjection) => void;\n    }): Promise<SelfDevelopmentTaskController>;\n    get projection(): TaskProjection;\n    get spec(): TaskSpec | undefined;\n    get plan(): FrozenTestPlan | undefined;\n    #enqueue<T>(body: () => Promise<T>): Promise<T>;\n    async #execute<T>(method: string, request: OperationHeader & object, body: (header: ParsedOperationHeader, payloadDigest: string) => Promise<T>): Promise<T>;\n    #assertJournalIntact(): void;\n    #assertNotHandoff(): void;\n    createTask(request: OperationHeader & ControllerRequests[\'createTask\']): Promise<TaskOperationResult>;\n    authorizePlanning(request: OperationHeader & ControllerRequests[\'authorizePlanning\']): Promise<TaskOperationResult>;\n    submitPlanDraft(request: OperationHeader & ControllerRequests[\'submitPlanDraft\']): Promise<TaskOperationResult>;\n    confirmPlan(request: OperationHeader & ControllerRequests[\'confirmPlan\']): Promise<TaskOperationResult>;\n    approveBudget(request: OperationHeader & ControllerRequests[\'approveBudget\']): Promise<TaskOperationResult>;\n    startAttempt(request: OperationHeader & ControllerRequests[\'startAttempt\']): Promise<TaskOperationResult>;\n    async #beginAttempt(header: ParsedOperationHeader, payloadDigest: string, externalSignal: AbortSignal | undefined, request: O /* …truncated — full shape in source */',
   },
   {
     name: 'SelfDevOperationId',

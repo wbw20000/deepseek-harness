@@ -211,6 +211,7 @@ const SENTENCE_MODEL_EXPERIENCE: Readonly<Record<string, SentenceContract>> = {
   'packages/web/web-search-exa': { kind: 'indirect', reason: 'The provider backend delegates model rendering to dsh-tool-web.' },
   'packages/workflow/workflow': { kind: 'indirect', reason: 'The service delegates parent and child model rendering to its consumer and engine.' },
   'packages/workflow/workflow-self-development-runner': { kind: 'none', reason: 'The opt-in service registers no model-facing tool, prompt, or event; its separate executor helper explicitly launches a headless Agent and does not establish isolation.' },
+  'packages/workflow/workflow-self-development-events': { kind: 'none', reason: 'The opt-in service folds already-durable task commits into title-level human notifications; it registers no model-facing tool, prompt, or event.' },
   'packages/notify/push-registry': { kind: 'none', reason: 'The opt-in service registers no model-facing tool, prompt, or event; its notifications stay title-level and reach lock screens, never model requests or Session events.' },
 }
 

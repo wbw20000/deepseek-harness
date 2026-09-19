@@ -556,6 +556,14 @@ const SERVICE_ROLES: ServiceRole[] = [
     note: 'Opt-in supervised-mode runner: host clock, human-presence evidence, headless executor, and independent acceptor; it registers no tool, prompt, or event and enables no unattended execution.',
   },
   {
+    key: 'selfDevelopmentEvents',
+    pkg: 'workflow-self-development-events',
+    title: 'Self-development notification events',
+    mode: 'core',
+    consumers: ['workflow-self-development'],
+    note: 'Opt-in event projection over committed task events: unified title-level notification events, a bounded in-memory recent buffer, in-process subscribers, and an optional macOS local-notification command; it registers no tool, prompt, or durable store.',
+  },
+  {
     key: 'ssh',
     pkg: 'ssh',
     title: 'POSIX SSH connection owner',

@@ -26,7 +26,9 @@ Record a development requirement, confirm its test plan, and approve a finite bu
 <a id="service"></a>
 ## Service
 
-`SelfDevelopmentTasks` (default export, Cordis service `selfDevelopmentTasks`) owns one configured private control directory and caches one `SelfDevelopmentTaskController` per task. It is opt-in: it ships in no default bundle and registers no tool, prompt, event, or daemon.
+`SelfDevelopmentTasks` (default export, Cordis service `selfDevelopmentTasks`) owns one configured private control directory and caches one `SelfDevelopmentTaskController` per task. It is opt-in: it ships in no default bundle and registers no tool, prompt, or daemon.
+
+Every successful durable commit — including the recovery commits a reopen appends — emits the `self-development/committed` Cordis event carrying `{ taskId, record, projection }`. Emission runs after the journal append, so the event always names a committed record; a throwing listener is contained and logged, and it never fails the calling operation or changes the task state. The event is a process-local notification, not a durable stream.
 
 | Config field | Meaning |
 |---|---|
@@ -80,7 +82,7 @@ Every capability evidence item names its source kind: `machine` when the trusted
 
 The first record creates a checkpoint; later checkpoints follow the configured interval or segment rotation. The chain detects changed records and the checkpoint detects truncation of records it covers. Complete-record truncation after the latest checkpoint is not detected. Neither mechanism protects against an administrator or an attacker that can rewrite both files; the control directory must stay outside the experiment's writable scope.
 
-No runtime invariant companion is published; task state derives from a single validated journal fold, while file durability and projection recovery require filesystem round-trip tests. The package exposes no independent runtime event stream to cross-check.
+No runtime invariant companion is published; task state derives from a single validated journal fold, while file durability and projection recovery require filesystem round-trip tests. The `self-development/committed` Cordis event notifies listeners after each commit; it is not a durable stream, so it cannot cross-check the journal.
 
 -----
 

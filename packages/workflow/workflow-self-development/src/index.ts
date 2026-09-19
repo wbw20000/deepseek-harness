@@ -14,7 +14,7 @@ import z from '@deepseek-ai/schemastery'
 import { SelfDevelopmentTaskController } from './controller.ts'
 import { SelfDevelopmentError, validateTaskId } from './runtime.ts'
 import { TaskJournal } from './journal.ts'
-import type { TaskProjection, TrustedClock } from './types.ts'
+import type { CommittedRecord, TaskProjection, TrustedClock } from './types.ts'
 
 export { SelfDevelopmentTaskController } from './controller.ts'
 export { TaskJournal } from './journal.ts'
@@ -147,7 +147,12 @@ export class SelfDevelopmentTasks extends Service {
         maxRecordsPerSegment: this.resolved.maxRecordsPerSegment,
         checkpointInterval: this.resolved.checkpointInterval,
       })
-      return SelfDevelopmentTaskController.open({ taskId, journal, clock })
+      return SelfDevelopmentTaskController.open({
+        taskId,
+        journal,
+        clock,
+        onCommitted: (record, projection) => { this.emitCommitted(taskId, record, projection) },
+      })
     })().catch((error: unknown) => {
       // A refused journal stays refused until a human resolves it; drop the
       // cached promise so a later open re-verifies the files as they are.
@@ -177,12 +182,50 @@ export class SelfDevelopmentTasks extends Service {
   isJournalHandoff(error: unknown): boolean {
     return error instanceof SelfDevelopmentError && error.code === 'SELF_DEV_JOURNAL_UNAVAILABLE'
   }
+
+  /**
+   * Emit one durable commit to Cordis listeners. The commit already reached
+   * the journal when this runs, so a throwing listener is contained: it is
+   * logged and can never turn the commit or the calling operation into a
+   * failure.
+   */
+  private emitCommitted(taskId: string, record: CommittedRecord, projection: TaskProjection): void {
+    try {
+      this.ctx.emit('self-development/committed', { taskId, record, projection })
+    } catch (error: unknown) {
+      this.ctx.logger.warn('self-development: a self-development/committed listener failed for task "%s"', taskId)
+      this.ctx.logger.warn(error)
+    }
+  }
 }
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
     selfDevelopmentTasks: SelfDevelopmentTasks
   }
+
+  interface Events {
+    /**
+     * One task event reached its durable journal: every successful
+     * controller commit, including the `attempt/failed` and `handoff/raised`
+     * commits a restart recovery appends. The payload carries the hash-chained
+     * record and the frozen post-commit projection. Listener failures are
+     * contained and logged; they never affect the commit or the task state.
+     * @param payload - the task id, the committed journal record, and the frozen projection after the commit.
+     * @mode emit
+     */
+    'self-development/committed'(payload: SelfDevelopmentCommittedPayload): void
+  }
+}
+
+/** Payload of the `self-development/committed` event. */
+export interface SelfDevelopmentCommittedPayload {
+  /** Task the committed event belongs to. */
+  readonly taskId: string
+  /** Hash-chained journal record as durably stored. */
+  readonly record: CommittedRecord
+  /** Frozen task projection after the commit. */
+  readonly projection: TaskProjection
 }
 
 export default SelfDevelopmentTasks

@@ -129,7 +129,7 @@ The top-level `dsh-tool-workflow` consumer projects display facts into its calli
 
 ## Self-development task control and the supervised runner
 
-The workflow group also owns the opt-in self-development pair, which lives outside the script seam. [dsh-workflow-self-development](../../packages/workflow/workflow-self-development/README.md) owns one durable lifecycle per task — versioned spec, frozen test plan, human budget approval, verified attempt results, trial approval — in a private control directory, and caches one serialized controller per task. [dsh-workflow-self-development-runner](../../packages/workflow/workflow-self-development-runner/README.md) composes one supervised attempt against that controller: the trusted clock, human-presence evidence, the operation-bound launch record, the headless executor, the independent acceptor, and durable attempt evidence with its terminal outcome. Every launch requires a recorded human confirmation and a finite budget; the pair provides supervised testing with recorded limits, never unattended operation. Both services appear in the [Cordis API](#cordis-surface) as `ctx.selfDevelopmentTasks` and `ctx.selfDevelopmentRunner`.
+The workflow group also owns the opt-in self-development trio, which lives outside the script seam. [dsh-workflow-self-development](../../packages/workflow/workflow-self-development/README.md) owns one durable lifecycle per task — versioned spec, frozen test plan, human budget approval, verified attempt results, trial approval — in a private control directory, and caches one serialized controller per task. [dsh-workflow-self-development-runner](../../packages/workflow/workflow-self-development-runner/README.md) composes one supervised attempt against that controller: the trusted clock, human-presence evidence, the operation-bound launch record, the headless executor, the independent acceptor, and durable attempt evidence with its terminal outcome. Every launch requires a recorded human confirmation and a finite budget; the trio provides supervised testing with recorded limits, never unattended operation. The services appear in the [Cordis API](#cordis-surface) as `ctx.selfDevelopmentTasks` and `ctx.selfDevelopmentRunner`, and [dsh-workflow-self-development-events](../../packages/workflow/workflow-self-development-events/README.md) folds the committed task events into unified notification events for human consumers.
 
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
@@ -138,6 +138,32 @@ The workflow group also owns the opt-in self-development pair, which lives outsi
 ## Cordis API
 
 Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnpm run verify-cordis-catalog` in doc-sync; regenerate with `pnpm run gen-cordis-catalog`) — the language sides differ only in locale-specific paired document paths. Signature blocks use a `ts cordis-catalog` fence and keep the original source JSDoc; dispatch modes are defined in the [primer](../cordis-primer.md#dispatch-modes), and the framework-inherited `ctx` API lives in [cordis-api/inherited.md](../cordis-api/inherited.md).
+
+<a id="ctxselfdevelopmentevents--selfdevelopmentevents"></a>
+
+### `ctx.selfDevelopmentEvents` — `SelfDevelopmentEvents`
+
+Unified self-development event projection. Subscribing consumers and the recent buffer see every mapped event exactly once, in commit order. Without a configured `localNotificationCommand` the service never spawns.
+
+```ts cordis-catalog
+/**
+ * Read the retained recent events, oldest first.
+ * @param limit - maximum number of events to return, taken from the most
+ *   recent tail of the buffer; defaults to every retained event.
+ * @returns the retained events in chronological order, oldest first.
+ */
+recent(limit?: number): readonly SelfDevelopmentEvent[]
+
+/**
+ * Subscribe one listener to every mapped event from now on. The buffer is
+ * not replayed: a subscriber sees only events observed after subscribing.
+ * @param listener - callback invoked once per event in commit order.
+ * @returns the disposer that removes the listener.
+ */
+subscribe(listener: (event: SelfDevelopmentEvent) => void): () => void
+```
+
+Source: [`packages/workflow/workflow-self-development-events/src/index.ts`](../../packages/workflow/workflow-self-development-events/src/index.ts)
 
 <a id="ctxselfdevelopmentrunner--selfdevelopmentrunner"></a>
 
@@ -245,6 +271,31 @@ abstract start(request: WorkflowStartRequest): WorkflowRun
 ```
 
 Source: [`packages/workflow/workflow/src/index.ts`](../../packages/workflow/workflow/src/index.ts)
+
+<a id="self-development-events"></a>
+
+### `self-development/*` events
+
+<a id="self-developmentcommitted--emit"></a>
+
+#### `self-development/committed` — emit
+
+One task event reached its durable journal: every successful controller commit, including the `attempt/failed` and `handoff/raised` commits a restart recovery appends. The payload carries the hash-chained record and the frozen post-commit projection. Listener failures are contained and logged; they never affect the commit or the task state.
+
+```ts cordis-catalog
+/**
+ * One task event reached its durable journal: every successful
+ * controller commit, including the `attempt/failed` and `handoff/raised`
+ * commits a restart recovery appends. The payload carries the hash-chained
+ * record and the frozen post-commit projection. Listener failures are
+ * contained and logged; they never affect the commit or the task state.
+ * @param payload - the task id, the committed journal record, and the frozen projection after the commit.
+ * @mode emit
+ */
+'self-development/committed'(payload: SelfDevelopmentCommittedPayload): void
+```
+
+Source: [`packages/workflow/workflow-self-development/src/index.ts`](../../packages/workflow/workflow-self-development/src/index.ts)
 
 <a id="workflow-events"></a>
 

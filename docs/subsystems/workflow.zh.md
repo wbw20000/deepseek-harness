@@ -129,7 +129,7 @@ interface WorkflowRun {
 
 ## 自开发任务控制与有人监督的 runner
 
-workflow 组还拥有脚本 seam 之外的可选自开发组合。[dsh-workflow-self-development](../../packages/workflow/workflow-self-development/README.zh.md) 在私有控制目录中为每个任务拥有一条持久生命周期——版本化 spec、冻结测试计划、人工预算批准、已验证尝试结果、试用批准——并为每个任务缓存一个串行化控制器。[dsh-workflow-self-development-runner](../../packages/workflow/workflow-self-development-runner/README.zh.md) 针对该控制器组合一次有人监督的尝试：受信时钟、人工在场证据、操作绑定的启动记录、headless 执行器、独立验收器，以及带终局结果的持久尝试证据。每次启动都要求一条已记录的人工确认和有限预算；这对包提供的是带明确记录限制的有人监督测试，绝不是无人值守运行。两个服务都以 `ctx.selfDevelopmentTasks` 与 `ctx.selfDevelopmentRunner` 出现在 [Cordis API](#cordis-surface) 中。
+workflow 组还拥有脚本 seam 之外的可选自开发三件套。[dsh-workflow-self-development](../../packages/workflow/workflow-self-development/README.zh.md) 在私有控制目录中为每个任务拥有一条持久生命周期——版本化 spec、冻结测试计划、人工预算批准、已验证尝试结果、试用批准——并为每个任务缓存一个串行化控制器。[dsh-workflow-self-development-runner](../../packages/workflow/workflow-self-development-runner/README.zh.md) 针对该控制器组合一次有人监督的尝试：受信时钟、人工在场证据、操作绑定的启动记录、headless 执行器、独立验收器，以及带终局结果的持久尝试证据。每次启动都要求一条已记录的人工确认和有限预算；这组包提供的是带明确记录限制的有人监督测试，绝不是无人值守运行。各服务以 `ctx.selfDevelopmentTasks` 与 `ctx.selfDevelopmentRunner` 出现在 [Cordis API](#cordis-surface) 中，而 [dsh-workflow-self-development-events](../../packages/workflow/workflow-self-development-events/README.zh.md) 把已提交的任务事件折叠为供人类消费方的统一通知事件。
 
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
@@ -138,6 +138,32 @@ workflow 组还拥有脚本 seam 之外的可选自开发组合。[dsh-workflow-
 ## Cordis API
 
 Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnpm run verify-cordis-catalog` in doc-sync; regenerate with `pnpm run gen-cordis-catalog`) — the language sides differ only in locale-specific paired document paths. Signature blocks use a `ts cordis-catalog` fence and keep the original source JSDoc; dispatch modes are defined in the [primer](../cordis-primer.zh.md#dispatch-modes), and the framework-inherited `ctx` API lives in [cordis-api/inherited.md](../cordis-api/inherited.md).
+
+<a id="ctxselfdevelopmentevents--selfdevelopmentevents"></a>
+
+### `ctx.selfDevelopmentEvents` — `SelfDevelopmentEvents`
+
+Unified self-development event projection. Subscribing consumers and the recent buffer see every mapped event exactly once, in commit order. Without a configured `localNotificationCommand` the service never spawns.
+
+```ts cordis-catalog
+/**
+ * Read the retained recent events, oldest first.
+ * @param limit - maximum number of events to return, taken from the most
+ *   recent tail of the buffer; defaults to every retained event.
+ * @returns the retained events in chronological order, oldest first.
+ */
+recent(limit?: number): readonly SelfDevelopmentEvent[]
+
+/**
+ * Subscribe one listener to every mapped event from now on. The buffer is
+ * not replayed: a subscriber sees only events observed after subscribing.
+ * @param listener - callback invoked once per event in commit order.
+ * @returns the disposer that removes the listener.
+ */
+subscribe(listener: (event: SelfDevelopmentEvent) => void): () => void
+```
+
+Source: [`packages/workflow/workflow-self-development-events/src/index.ts`](../../packages/workflow/workflow-self-development-events/src/index.ts)
 
 <a id="ctxselfdevelopmentrunner--selfdevelopmentrunner"></a>
 
@@ -245,6 +271,31 @@ abstract start(request: WorkflowStartRequest): WorkflowRun
 ```
 
 Source: [`packages/workflow/workflow/src/index.ts`](../../packages/workflow/workflow/src/index.ts)
+
+<a id="self-development-events"></a>
+
+### `self-development/*` events
+
+<a id="self-developmentcommitted--emit"></a>
+
+#### `self-development/committed` — emit
+
+One task event reached its durable journal: every successful controller commit, including the `attempt/failed` and `handoff/raised` commits a restart recovery appends. The payload carries the hash-chained record and the frozen post-commit projection. Listener failures are contained and logged; they never affect the commit or the task state.
+
+```ts cordis-catalog
+/**
+ * One task event reached its durable journal: every successful
+ * controller commit, including the `attempt/failed` and `handoff/raised`
+ * commits a restart recovery appends. The payload carries the hash-chained
+ * record and the frozen post-commit projection. Listener failures are
+ * contained and logged; they never affect the commit or the task state.
+ * @param payload - the task id, the committed journal record, and the frozen projection after the commit.
+ * @mode emit
+ */
+'self-development/committed'(payload: SelfDevelopmentCommittedPayload): void
+```
+
+Source: [`packages/workflow/workflow-self-development/src/index.ts`](../../packages/workflow/workflow-self-development/src/index.ts)
 
 <a id="workflow-events"></a>
 

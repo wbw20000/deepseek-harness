@@ -131,6 +131,7 @@ export const SERVICE_PAGE: Record<string, string> = {
   workflowEngine: 'workflow.md',
   selfDevelopmentTasks: 'workflow.md',
   selfDevelopmentRunner: 'workflow.md',
+  selfDevelopmentEvents: 'workflow.md',
   webhookRuntime: 'webhook.md',
   workspaceRegistry: 'workspace.md',
   workspaceController: 'workspace.md',
@@ -232,6 +233,7 @@ export const EVENT_SCOPE_PAGE: Record<string, string> = {
   'user-questions': 'user-questions.md',
   'webserver': 'web-server.md',
   'workflow': 'workflow.md',
+  'self-development': 'workflow.md',
 }
 
 /**
@@ -846,6 +848,7 @@ export const TYPE_LINK_EXEMPTIONS: Readonly<Record<string, string>> = {
   WebTerminalId: 'Browser terminal identity is owned by packages/api/terminal-controller/README.md',
   CapabilitySource: 'per-call capability-evidence source is owned by packages/workflow/workflow-self-development/README.md',
   SelfDevelopmentTaskController: 'task lifecycle controller is owned by packages/workflow/workflow-self-development/README.md',
+  SelfDevelopmentCommittedPayload: 'self-development committed-event payload is owned by packages/workflow/workflow-self-development/README.md',
   TaskProjection: 'task state projection is owned by packages/workflow/workflow-self-development/README.md',
   TrustedClock: 'per-call trusted-clock observation source is owned by packages/workflow/workflow-self-development/README.md',
   HostClock: 'sysctl-derived boot-session clock is owned by packages/workflow/workflow-self-development-runner/README.md',
@@ -856,6 +859,9 @@ export const TYPE_LINK_EXEMPTIONS: Readonly<Record<string, string>> = {
   AttemptEvidence: 'stable-side attempt evidence record is owned by packages/workflow/workflow-self-development-runner/README.md',
   SupervisedAttemptRequest: 'one supervised attempt request is owned by packages/workflow/workflow-self-development-runner/README.md',
   SupervisedAttemptOutcome: 'one supervised attempt outcome is owned by packages/workflow/workflow-self-development-runner/README.md',
+  SelfDevelopmentEvent: 'one unified self-development notification event is owned by packages/workflow/workflow-self-development-events/README.md',
+  SelfDevelopmentEventKind: 'self-development notification event kinds are owned by packages/workflow/workflow-self-development-events/README.md',
+  SelfDevelopmentEventsConfig: 'self-development events deployment configuration is owned by packages/workflow/workflow-self-development-events/README.md',
   TaskOperationResult: 'core task operation result is owned by packages/workflow/workflow-self-development/README.md',
 }
 
