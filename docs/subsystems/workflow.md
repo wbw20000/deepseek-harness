@@ -129,7 +129,7 @@ The top-level `dsh-tool-workflow` consumer projects display facts into its calli
 
 ## Self-development task control and the supervised runner
 
-The workflow group also owns the opt-in self-development pair, which lives outside the script seam. [dsh-workflow-self-development](../../packages/workflow/workflow-self-development/README.md) owns one durable lifecycle per task — versioned spec, frozen test plan, human budget approval, verified attempt results, trial approval — in a private control directory, and caches one serialized controller per task. [dsh-workflow-self-development-runner](../../packages/workflow/workflow-self-development-runner/README.md) composes one supervised attempt against that controller: the trusted clock, human-presence evidence, the operation-bound launch record, the headless executor, the independent acceptor, and durable attempt evidence with its terminal outcome. Every launch requires a recorded human confirmation and a finite budget; the pair provides supervised testing with recorded limits, never unattended operation. Both services appear in the [Cordis API](#cordis-surface) as `ctx.selfDevelopmentTasks` and `ctx.selfDevelopmentRunner`.
+The workflow group also owns the opt-in self-development trio, which lives outside the script seam. [dsh-workflow-self-development](../../packages/workflow/workflow-self-development/README.md) owns one durable lifecycle per task — versioned spec, frozen test plan, human budget approval, verified attempt results, trial approval — in a private control directory, and caches one serialized controller per task. [dsh-workflow-self-development-runner](../../packages/workflow/workflow-self-development-runner/README.md) composes one supervised attempt against that controller: the trusted clock, human-presence evidence, the operation-bound launch record, the headless executor, the independent acceptor, and durable attempt evidence with its terminal outcome. Every launch requires a recorded human confirmation and a finite budget; the trio provides supervised testing with recorded limits, never unattended operation. [dsh-workflow-self-development-remote](../../packages/workflow/workflow-self-development-remote/README.md) exposes the stable Remote face the M4 UI and the phone whitelist call: read-only progress views, the confirmation card, and the explicit planning, budget, stop, and trial-approval operations; it is disabled until enabled and mounts no upgrade approval. The services appear in the [Cordis API](#cordis-surface) as `ctx.selfDevelopmentTasks`, `ctx.selfDevelopmentRunner`, and `ctx.selfDevelopmentRemote`.
 
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
@@ -138,6 +138,145 @@ The workflow group also owns the opt-in self-development pair, which lives outsi
 ## Cordis API
 
 Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnpm run verify-cordis-catalog` in doc-sync; regenerate with `pnpm run gen-cordis-catalog`) — the language sides differ only in locale-specific paired document paths. Signature blocks use a `ts cordis-catalog` fence and keep the original source JSDoc; dispatch modes are defined in the [primer](../cordis-primer.md#dispatch-modes), and the framework-inherited `ctx` API lives in [cordis-api/inherited.md](../cordis-api/inherited.md).
+
+<a id="ctxselfdevelopmentremote--selfdevelopmentremote"></a>
+
+### `ctx.selfDevelopmentRemote` — `SelfDevelopmentRemote`
+
+Stable-side Remote facade. The supervised runner is optional: every method that needs it refuses with a facade code when the runner plugin is not loaded, and the read paths work against the task-control service alone.
+
+```ts cordis-catalog
+/**
+ * List every task under the control directory with its progress row.
+ * @returns one row per task journal directory, sorted by task id.
+ * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED` while the facade is disabled.
+ * @throws whatever the task-control service or a task journal rejects with, verbatim.
+ */
+@Remote('listTasks') async listTasks(): Promise<readonly TaskSummary[]>
+
+/**
+ * Read one task's full projection and its confirmation-card view.
+ * @param taskId - task identity.
+ * @returns the projection and the read-only card.
+ * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED` while the facade is disabled,
+ *   `SELF_DEV_REMOTE_CONFIG_INVALID` when the task id is malformed, or
+ *   `SELF_DEV_REMOTE_TASK_UNKNOWN` when the task has no journal yet; the facade never creates a
+ *   journal from a read path.
+ * @throws whatever the task-control service rejects with, verbatim.
+ */
+@Remote('getTask') async getTask(taskId: string): Promise<TaskDetail>
+
+/**
+ * Create one task from a TaskSpec. The actor is the spec's `createdBy`
+ * field; it is checked against `allowedActors` when that list is non-empty.
+ * @param spec - TaskSpec in wire form.
+ * @param expectedRevision - revision the caller observed; a new task is at revision 0.
+ * @returns the operation id the facade generated plus the core's result.
+ * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED`, `SELF_DEV_REMOTE_CONFIG_INVALID`,
+ *   or `SELF_DEV_REMOTE_ACTOR_FORBIDDEN`.
+ * @throws whatever the task-control service rejects with, verbatim.
+ */
+@Remote('createTask') async createTask(spec: TaskSpecInput, expectedRevision: number): Promise<RemoteOperationResult>
+
+/**
+ * Grant the separate planning authorization. This never approves
+ * development and consumes no development round.
+ * @param taskId - task identity.
+ * @param expectedRevision - revision the caller observed.
+ * @param authorizedBy - human actor granting the authorization.
+ * @returns the operation id the facade generated plus the core's result.
+ * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED` or `SELF_DEV_REMOTE_CONFIG_INVALID`.
+ * @throws whatever the task-control service rejects with, verbatim.
+ */
+@Remote('authorizePlanning') async authorizePlanning(taskId: string, expectedRevision: number, authorizedBy: string): Promise<RemoteOperationResult>
+
+/**
+ * Submit a drafted plan for human confirmation.
+ * @param taskId - task identity.
+ * @param expectedRevision - revision the caller observed.
+ * @param draft - plan draft in wire form.
+ * @returns the operation id the facade generated plus the core's result.
+ * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED` or `SELF_DEV_REMOTE_CONFIG_INVALID`.
+ * @throws whatever the task-control service rejects with, verbatim.
+ */
+@Remote('submitPlanDraft') async submitPlanDraft( taskId: string, expectedRevision: number, draft: PlanDraftInput, ): Promise<RemoteOperationResult>
+
+/**
+ * Freeze the human-confirmed plan. The actor is the explicit confirmer.
+ * @param taskId - task identity.
+ * @param expectedRevision - revision the caller observed.
+ * @param plan - confirmed plan in wire form.
+ * @param actor - human actor confirming the plan; checked against `allowedActors`.
+ * @returns the operation id the facade generated plus the core's result.
+ * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED`, `SELF_DEV_REMOTE_CONFIG_INVALID`,
+ *   or `SELF_DEV_REMOTE_ACTOR_FORBIDDEN`.
+ * @throws whatever the task-control service rejects with, verbatim.
+ */
+@Remote('confirmPlan') async confirmPlan( taskId: string, expectedRevision: number, plan: ConfirmedPlanInput, actor: string, ): Promise<RemoteOperationResult>
+
+/**
+ * Record a human budget approval, or replace the current one. The actor is
+ * the approval's `approvedBy` field; consumed rounds and time never reset.
+ * @param taskId - task identity.
+ * @param expectedRevision - revision the caller observed.
+ * @param approval - budget approval in wire form.
+ * @returns the operation id the facade generated plus the core's result.
+ * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED`, `SELF_DEV_REMOTE_CONFIG_INVALID`,
+ *   or `SELF_DEV_REMOTE_ACTOR_FORBIDDEN`.
+ * @throws whatever the task-control service rejects with, verbatim.
+ */
+@Remote('approveBudget') async approveBudget( taskId: string, expectedRevision: number, approval: BudgetApprovalInput, ): Promise<RemoteOperationResult>
+
+/**
+ * Stop a task at human request. When the runner is loaded, the stop goes
+ * through it so owned process groups and evidence writes finish before the
+ * result returns; otherwise only the core stop runs.
+ * @param taskId - task identity.
+ * @param expectedRevision - revision the caller observed.
+ * @param reason - optional stop reason; only `cancelled` exists today.
+ * @returns the operation id the facade generated plus the core's result.
+ * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED` or `SELF_DEV_REMOTE_CONFIG_INVALID`.
+ * @throws whatever the core or the runner rejects with, verbatim.
+ */
+@Remote('stop') async stop(taskId: string, expectedRevision: number, reason?: 'cancelled'): Promise<RemoteOperationResult>
+
+/**
+ * Record a human trial approval bound to the current verified result. The
+ * actor is the approver. No upgrade path exists in this facade.
+ * @param taskId - task identity.
+ * @param expectedRevision - revision the caller observed.
+ * @param approvedBy - human actor approving the trial; checked against `allowedActors`.
+ * @returns the operation id the facade generated plus the core's result.
+ * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED`, `SELF_DEV_REMOTE_CONFIG_INVALID`,
+ *   or `SELF_DEV_REMOTE_ACTOR_FORBIDDEN`.
+ * @throws whatever the task-control service rejects with, verbatim.
+ */
+@Remote('recordTrialApproval') async recordTrialApproval( taskId: string, expectedRevision: number, approvedBy: string, ): Promise<RemoteOperationResult>
+
+/**
+ * Launch one supervised attempt. The facade assembles the
+ * `PresenceConfirmation` from the request and the frozen plan, and refuses
+ * unless the caller explicitly passed `presenceAcknowledged: true` — a UI
+ * must never default that acknowledgement. Requires the runner plugin.
+ * @param request - the supervised attempt request in wire form.
+ * @returns the runner's outcome plus the operation id the facade generated.
+ * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED`, `SELF_DEV_REMOTE_CONFIG_INVALID`,
+ *   `SELF_DEV_REMOTE_ACTOR_FORBIDDEN`, `SELF_DEV_REMOTE_PRESENCE_UNCONFIRMED` when
+ *   `presenceAcknowledged` is not exactly `true`, or
+ *   `SELF_DEV_REMOTE_RUNNER_UNAVAILABLE` when the runner plugin is not loaded.
+ * @throws whatever the core or the runner rejects with, verbatim.
+ */
+@Remote('runAttempt') async runAttempt(request: RemoteRunAttemptRequest): Promise<RemoteRunAttemptOutcome>
+
+/**
+ * The task ids of the attempts the runner currently owns.
+ * @returns a read-only snapshot, empty when the runner plugin is absent.
+ * @throws SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED` while the facade is disabled.
+ */
+@Remote('activeTasks') async activeTasks(): Promise<readonly string[]>
+```
+
+Source: [`packages/workflow/workflow-self-development-remote/src/index.ts`](../../packages/workflow/workflow-self-development-remote/src/index.ts)
 
 <a id="ctxselfdevelopmentrunner--selfdevelopmentrunner"></a>
 

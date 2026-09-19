@@ -1682,6 +1682,90 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'selfDevelopmentRemote',
+    summary: 'Stable-side Remote facade.',
+    description: 'Stable-side Remote facade. The supervised runner is optional: every method that needs it refuses with a facade code when the runner plugin is not loaded, and the read paths work against the task-control service alone.',
+    methods: [
+      {
+        signature: '@Remote(\'listTasks\') async listTasks(): Promise<readonly TaskSummary[]>',
+        description: 'List every task under the control directory with its progress row.',
+        parameters: [],
+        returns: 'one row per task journal directory, sorted by task id.',
+        throws: ['SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED` while the facade is disabled.', 'whatever the task-control service or a task journal rejects with, verbatim.'],
+      },
+      {
+        signature: '@Remote(\'getTask\') async getTask(taskId: string): Promise<TaskDetail>',
+        description: 'Read one task\'s full projection and its confirmation-card view.',
+        parameters: [{ name: 'taskId', description: 'task identity.' }],
+        returns: 'the projection and the read-only card.',
+        throws: ['SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED` while the facade is disabled, `SELF_DEV_REMOTE_CONFIG_INVALID` when the task id is malformed, or `SELF_DEV_REMOTE_TASK_UNKNOWN` when the task has no journal yet; the facade never creates a journal from a read path.', 'whatever the task-control service rejects with, verbatim.'],
+      },
+      {
+        signature: '@Remote(\'createTask\') async createTask(spec: TaskSpecInput, expectedRevision: number): Promise<RemoteOperationResult>',
+        description: 'Create one task from a TaskSpec. The actor is the spec\'s `createdBy` field; it is checked against `allowedActors` when that list is non-empty.',
+        parameters: [{ name: 'spec', description: 'TaskSpec in wire form.' }, { name: 'expectedRevision', description: 'revision the caller observed; a new task is at revision 0.' }],
+        returns: 'the operation id the facade generated plus the core\'s result.',
+        throws: ['SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED`, `SELF_DEV_REMOTE_CONFIG_INVALID`, or `SELF_DEV_REMOTE_ACTOR_FORBIDDEN`.', 'whatever the task-control service rejects with, verbatim.'],
+      },
+      {
+        signature: '@Remote(\'authorizePlanning\') async authorizePlanning(taskId: string, expectedRevision: number, authorizedBy: string): Promise<RemoteOperationResult>',
+        description: 'Grant the separate planning authorization. This never approves development and consumes no development round.',
+        parameters: [{ name: 'taskId', description: 'task identity.' }, { name: 'expectedRevision', description: 'revision the caller observed.' }, { name: 'authorizedBy', description: 'human actor granting the authorization.' }],
+        returns: 'the operation id the facade generated plus the core\'s result.',
+        throws: ['SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED` or `SELF_DEV_REMOTE_CONFIG_INVALID`.', 'whatever the task-control service rejects with, verbatim.'],
+      },
+      {
+        signature: '@Remote(\'submitPlanDraft\') async submitPlanDraft( taskId: string, expectedRevision: number, draft: PlanDraftInput, ): Promise<RemoteOperationResult>',
+        description: 'Submit a drafted plan for human confirmation.',
+        parameters: [{ name: 'taskId', description: 'task identity.' }, { name: 'expectedRevision', description: 'revision the caller observed.' }, { name: 'draft', description: 'plan draft in wire form.' }],
+        returns: 'the operation id the facade generated plus the core\'s result.',
+        throws: ['SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED` or `SELF_DEV_REMOTE_CONFIG_INVALID`.', 'whatever the task-control service rejects with, verbatim.'],
+      },
+      {
+        signature: '@Remote(\'confirmPlan\') async confirmPlan( taskId: string, expectedRevision: number, plan: ConfirmedPlanInput, actor: string, ): Promise<RemoteOperationResult>',
+        description: 'Freeze the human-confirmed plan. The actor is the explicit confirmer.',
+        parameters: [{ name: 'taskId', description: 'task identity.' }, { name: 'expectedRevision', description: 'revision the caller observed.' }, { name: 'plan', description: 'confirmed plan in wire form.' }, { name: 'actor', description: 'human actor confirming the plan; checked against `allowedActors`.' }],
+        returns: 'the operation id the facade generated plus the core\'s result.',
+        throws: ['SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED`, `SELF_DEV_REMOTE_CONFIG_INVALID`, or `SELF_DEV_REMOTE_ACTOR_FORBIDDEN`.', 'whatever the task-control service rejects with, verbatim.'],
+      },
+      {
+        signature: '@Remote(\'approveBudget\') async approveBudget( taskId: string, expectedRevision: number, approval: BudgetApprovalInput, ): Promise<RemoteOperationResult>',
+        description: 'Record a human budget approval, or replace the current one. The actor is the approval\'s `approvedBy` field; consumed rounds and time never reset.',
+        parameters: [{ name: 'taskId', description: 'task identity.' }, { name: 'expectedRevision', description: 'revision the caller observed.' }, { name: 'approval', description: 'budget approval in wire form.' }],
+        returns: 'the operation id the facade generated plus the core\'s result.',
+        throws: ['SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED`, `SELF_DEV_REMOTE_CONFIG_INVALID`, or `SELF_DEV_REMOTE_ACTOR_FORBIDDEN`.', 'whatever the task-control service rejects with, verbatim.'],
+      },
+      {
+        signature: '@Remote(\'stop\') async stop(taskId: string, expectedRevision: number, reason?: \'cancelled\'): Promise<RemoteOperationResult>',
+        description: 'Stop a task at human request. When the runner is loaded, the stop goes through it so owned process groups and evidence writes finish before the result returns; otherwise only the core stop runs.',
+        parameters: [{ name: 'taskId', description: 'task identity.' }, { name: 'expectedRevision', description: 'revision the caller observed.' }, { name: 'reason', description: 'optional stop reason; only `cancelled` exists today.' }],
+        returns: 'the operation id the facade generated plus the core\'s result.',
+        throws: ['SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED` or `SELF_DEV_REMOTE_CONFIG_INVALID`.', 'whatever the core or the runner rejects with, verbatim.'],
+      },
+      {
+        signature: '@Remote(\'recordTrialApproval\') async recordTrialApproval( taskId: string, expectedRevision: number, approvedBy: string, ): Promise<RemoteOperationResult>',
+        description: 'Record a human trial approval bound to the current verified result. The actor is the approver. No upgrade path exists in this facade.',
+        parameters: [{ name: 'taskId', description: 'task identity.' }, { name: 'expectedRevision', description: 'revision the caller observed.' }, { name: 'approvedBy', description: 'human actor approving the trial; checked against `allowedActors`.' }],
+        returns: 'the operation id the facade generated plus the core\'s result.',
+        throws: ['SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED`, `SELF_DEV_REMOTE_CONFIG_INVALID`, or `SELF_DEV_REMOTE_ACTOR_FORBIDDEN`.', 'whatever the task-control service rejects with, verbatim.'],
+      },
+      {
+        signature: '@Remote(\'runAttempt\') async runAttempt(request: RemoteRunAttemptRequest): Promise<RemoteRunAttemptOutcome>',
+        description: 'Launch one supervised attempt. The facade assembles the `PresenceConfirmation` from the request and the frozen plan, and refuses unless the caller explicitly passed `presenceAcknowledged: true` — a UI must never default that acknowledgement. Requires the runner plugin.',
+        parameters: [{ name: 'request', description: 'the supervised attempt request in wire form.' }],
+        returns: 'the runner\'s outcome plus the operation id the facade generated.',
+        throws: ['SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED`, `SELF_DEV_REMOTE_CONFIG_INVALID`, `SELF_DEV_REMOTE_ACTOR_FORBIDDEN`, `SELF_DEV_REMOTE_PRESENCE_UNCONFIRMED` when `presenceAcknowledged` is not exactly `true`, or `SELF_DEV_REMOTE_RUNNER_UNAVAILABLE` when the runner plugin is not loaded.', 'whatever the core or the runner rejects with, verbatim.'],
+      },
+      {
+        signature: '@Remote(\'activeTasks\') async activeTasks(): Promise<readonly string[]>',
+        description: 'The task ids of the attempts the runner currently owns.',
+        parameters: [],
+        returns: 'a read-only snapshot, empty when the runner plugin is absent.',
+        throws: ['SelfDevelopmentRemoteError with `SELF_DEV_REMOTE_DISABLED` while the facade is disabled.'],
+      },
+    ],
+  },
+  {
     key: 'selfDevelopmentRunner',
     summary: 'Cordis service composing the supervised-mode attempt pipeline.',
     description: 'Cordis service composing the supervised-mode attempt pipeline.',
@@ -4340,8 +4424,8 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface BudgetApproval {\n    readonly mode: BudgetMode;\n    readonly maxRounds?: number;\n    readonly durationMs?: number;\n    readonly phaseTimeoutMs?: number;\n    readonly maxStepsPerAttempt?: number;\n    readonly noProgressAttemptLimit?: number;\n    readonly testPlanVersion: TestPlanVersion;\n    readonly taskSpecVersion: TaskSpecVersion;\n    readonly approvedBy: string;\n}',
   },
   {
-    name: 'BudgetMode',
-    declaration: 'export type BudgetMode = \'rounds\' | \'time\' | \'both\';',
+    name: 'BudgetApprovalInput',
+    declaration: 'export interface BudgetApprovalInput {\n    readonly mode: BudgetMode;\n    readonly maxRounds?: number | undefined;\n    readonly durationMs?: number | undefined;\n    readonly phaseTimeoutMs?: number | undefined;\n    readonly maxStepsPerAttempt?: number | undefined;\n    readonly noProgressAttemptLimit?: number | undefined;\n    readonly testPlanVersion: number;\n    readonly taskSpecVersion: number;\n    readonly approvedBy: string;\n}',
   },
   {
     name: 'BundleInfo',
@@ -4366,6 +4450,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'CapabilitySourceKind',
     declaration: 'export type CapabilitySourceKind = \'human-presence\' | \'machine\';',
+  },
+  {
+    name: 'CardBudget',
+    declaration: 'export interface CardBudget {\n    readonly mode?: BudgetMode;\n    readonly maxRounds?: number;\n    readonly durationMs?: number;\n    readonly phaseTimeoutMs?: number;\n    readonly maxStepsPerAttempt?: number;\n    readonly noProgressAttemptLimit?: number;\n}',
   },
   {
     name: 'ChangeResult',
@@ -4464,8 +4552,8 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type ConfinedSandboxMode = Exclude<SandboxMode, \'danger-full-access\'>;',
   },
   {
-    name: 'ConfirmedPlanInput',
-    declaration: 'export interface ConfirmedPlanInput {\n    readonly testPlanId: string;\n    readonly version: number;\n    readonly taskSpecVersion: number;\n    readonly requiredCases: readonly RequiredCase[];\n    readonly manualCases: readonly string[];\n}',
+    name: 'ConfirmationCard',
+    declaration: 'export interface ConfirmationCard {\n    readonly taskId: string;\n    readonly taskAndGoal: string;\n    readonly acceptanceCases: readonly RequiredCase[];\n    readonly manualCases: readonly string[];\n    readonly planningAuthorized: boolean;\n    readonly suggestedBudgetBasis: string;\n    readonly stableBaselineDigest?: string;\n    readonly allowedModificationScope: readonly string[];\n    readonly budget: CardBudget;\n    readonly consumedBudget: {\n        readonly rounds: number;\n        readonly timeMs: number;\n    };\n    readonly costLimits: string;\n}',
   },
   {
     name: 'ConnectionFetchHandler',
@@ -5444,6 +5532,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface PermissionCatalog {\n    options: PresetOption[];\n}',
   },
   {
+    name: 'PlanDraftInput',
+    declaration: 'export interface PlanDraftInput {\n    readonly requiredCases: readonly RequiredCase[];\n    readonly manualCases: readonly string[];\n}',
+  },
+  {
     name: 'PluginChange',
     declaration: 'export interface PluginChange {\n    readonly reason: \'plugin\' | \'bundle\' | \'install\' | \'remove\';\n}',
   },
@@ -5690,6 +5782,22 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'RemoteEventHostInfo',
     declaration: 'export interface RemoteEventHostInfo {\n    readonly home: string;\n}',
+  },
+  {
+    name: 'RemoteOperationResult',
+    declaration: 'export interface RemoteOperationResult {\n    readonly taskId: string;\n    readonly operationId: string;\n    readonly revision: number;\n    readonly replayed: boolean;\n}',
+  },
+  {
+    name: 'RemoteRunAttemptOutcome',
+    declaration: 'export interface RemoteRunAttemptOutcome {\n    readonly operation: {\n        readonly revision: number;\n        readonly replayed: boolean;\n    };\n    readonly attemptId?: string;\n    readonly evidencePath?: string;\n    readonly outcomeWriteError?: {\n        readonly code: string;\n        readonly message: string;\n    };\n    readonly operationId: string;\n}',
+  },
+  {
+    name: 'RemoteRunAttemptRequest',
+    declaration: 'export interface RemoteRunAttemptRequest {\n    readonly taskId: string;\n    readonly expectedRevision: number;\n    readonly worktree: string;\n    readonly artifactPaths: readonly string[];\n    readonly acceptancePath: string;\n    readonly confirmedBy: string;\n    readonly loopbackAllowlist: readonly number[];\n    readonly presenceAcknowledged: boolean;\n}',
+  },
+  {
+    name: 'RemoteTaskProjection',
+    declaration: 'export interface RemoteTaskProjection {\n    readonly status: TaskStatus;\n    readonly spec?: TaskSpec;\n    readonly plan?: FrozenTestPlan;\n    readonly approval?: BudgetApproval;\n    readonly planningAuthorized: boolean;\n    readonly consumedRounds: number;\n    readonly consumedTimeMs: number;\n    readonly timeBudgetFrozen: boolean;\n    readonly currentAttempt?: Attempt;\n    readonly verifiedResultDigest?: string;\n    readonly trialApproval?: {\n        readonly approvedBy: string;\n        readonly resultDigest: string;\n    };\n    readonly noProgressCount: number;\n    readonly stopReason?: TaskStopReason;\n    readonly handoffReason?: TaskHandoffReason;\n    readonly handoffDetail?: string;\n    readonly revision: number;\n}',
   },
   {
     name: 'RenderedDocumentBytes',
@@ -6744,6 +6852,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type TableValueOf<S extends DomainSpec, N extends keyof S[\'tables\']> = S[\'tables\'][N] extends DomainTableSpec<string, infer V> ? V : never;',
   },
   {
+    name: 'TaskDetail',
+    declaration: 'export interface TaskDetail {\n    readonly projection: RemoteTaskProjection;\n    readonly card: ConfirmationCard;\n}',
+  },
+  {
     name: 'TaskEvent',
     declaration: 'export type TaskEvent = {\n    readonly type: \'task/created\';\n    readonly spec: TaskSpec;\n} | {\n    readonly type: \'task/planning-authorized\';\n    readonly authorizedBy: string;\n} | {\n    readonly type: \'plan/drafted\';\n    readonly draft: TestPlanDraft;\n} | {\n    readonly type: \'plan/confirmed\';\n    readonly plan: FrozenTestPlan;\n} | {\n    readonly type: \'budget/approved\';\n    readonly approval: BudgetApproval;\n} | {\n    readonly type: \'attempt/started\';\n    readonly attempt: Attempt;\n} | {\n    readonly type: \'attempt/failed\';\n    readonly attemptId: SelfDevAttemptId;\n    readonly reason: string;\n    readonly failureDigest: string;\n    readonly elapsedMs: number;\n    readonly timeAccounting: TimeAccounting;\n} | {\n    readonly type: \'task/passed\';\n    readonly attemptId: SelfDevAttemptId;\n    readonly resultDigest: string;\n    readonly elapsedMs: number;\n    readonly timeAccounting: TimeAccounting;\n} | {\n    readonly type: \'trial/approved\';\n    readonly approvedBy: string;\n    readonly resultDigest: string;\n} | {\n    readonly type: \'task/stopped\';\n    readonly reason: TaskStopReason;\n} | {\n    readonly type: \'handoff/raised\';\n    readonly reason: TaskHandoffReason;\n    readonly detail: string;\n};',
   },
@@ -6768,6 +6880,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface TaskSpec {\n    readonly taskId: SelfDevTaskId;\n    readonly version: TaskSpecVersion;\n    readonly requirement: string;\n    readonly allowedModificationScope: readonly string[];\n    readonly stableBaselineDigest: string;\n    readonly createdBy: string;\n}',
   },
   {
+    name: 'TaskSpecInput',
+    declaration: 'export interface TaskSpecInput {\n    readonly taskId: string;\n    readonly version: number;\n    readonly requirement: string;\n    readonly allowedModificationScope: readonly string[];\n    readonly stableBaselineDigest: string;\n    readonly createdBy: string;\n}',
+  },
+  {
     name: 'TaskSpecVersion',
     declaration: 'export type TaskSpecVersion = BrandedNumber<\'self-dev-task-spec-version\'>;',
   },
@@ -6778,6 +6894,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'TaskStopReason',
     declaration: 'export type TaskStopReason = \'cancelled\' | \'budget-exhausted\' | \'no-progress\';',
+  },
+  {
+    name: 'TaskSummary',
+    declaration: 'export interface TaskSummary {\n    readonly taskId: string;\n    readonly status: TaskStatus;\n    readonly revision: number;\n    readonly title: string;\n}',
   },
   {
     name: 'TeamId',

@@ -3818,6 +3818,36 @@ export interface Config {
 
 Source: [`packages/workflow/workflow-self-development/src/index.ts:80`](../packages/workflow/workflow-self-development/src/index.ts)
 
+<a id="deepseek-aidsh-workflow-self-development-remote"></a>
+
+## `@deepseek-ai/dsh-workflow-self-development-remote`
+
+Requires: `selfDevelopmentTasks`
+
+```ts config-catalog
+/** Deployment configuration of the Remote facade. */
+export interface RemoteConfig {
+  /**
+   * Master switch. Every method refuses with `SELF_DEV_REMOTE_DISABLED`
+   * while this is `false`, so mounting the plugin alone enables nothing.
+   */
+  readonly enabled: boolean
+  /**
+   * Actors allowed to drive mutating operations. Empty means no restriction;
+   * non-empty requires the operation's actor field (spec creator, budget
+   * approver, plan confirmer, confirmed human, trial approver) to appear here.
+   */
+  readonly allowedActors: readonly string[]
+  /**
+   * The task-control service's private control directory. The facade reads it
+   * only to list task journal directories; it never writes under it.
+   */
+  readonly controlDirectory: string
+}
+```
+
+Source: [`packages/workflow/workflow-self-development-remote/src/types.ts:35`](../packages/workflow/workflow-self-development-remote/src/types.ts)
+
 <a id="deepseek-aidsh-workflow-self-development-runner"></a>
 
 ## `@deepseek-ai/dsh-workflow-self-development-runner`
