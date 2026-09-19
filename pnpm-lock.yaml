@@ -2298,6 +2298,18 @@ importers:
       '@deepseek-ai/dsh-web-frontend':
         specifier: workspace:^
         version: link:../../../apps/web
+      '@deepseek-ai/dsh-workflow-self-development':
+        specifier: workspace:^
+        version: link:../../workflow/workflow-self-development
+      '@deepseek-ai/dsh-workflow-self-development-events':
+        specifier: workspace:^
+        version: link:../../workflow/workflow-self-development-events
+      '@deepseek-ai/dsh-workflow-self-development-remote':
+        specifier: workspace:^
+        version: link:../../workflow/workflow-self-development-remote
+      '@deepseek-ai/dsh-workflow-self-development-runner':
+        specifier: workspace:^
+        version: link:../../workflow/workflow-self-development-runner
       '@deepseek-ai/dsh-workspace':
         specifier: workspace:^
         version: link:../../workspace/workspace
