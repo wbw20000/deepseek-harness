@@ -213,7 +213,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/api/session-controller/src/index.ts:73`](../packages/api/session-controller/src/index.ts)
+Source: [`packages/api/session-controller/src/index.ts:74`](../packages/api/session-controller/src/index.ts)
 
 <a id="deepseek-aidsh-api-settings-controller"></a>
 
@@ -348,10 +348,15 @@ export interface Config {
   gcIntervalMs?: number
   /** Grace period the garbage-collection timer applies to unreferenced objects. Default: 24 hours. */
   gcGracePeriodMs?: number
+  /**
+   * Deadline one asynchronous garbage-reference read may take; a source still
+   * pending past it skips that collection pass. Default: 30 seconds.
+   */
+  gcReferenceTimeoutMs?: number
 }
 ```
 
-Source: [`packages/attachment/attachment-local/src/index.ts:78`](../packages/attachment/attachment-local/src/index.ts)
+Source: [`packages/attachment/attachment-local/src/index.ts:89`](../packages/attachment/attachment-local/src/index.ts)
 
 <a id="deepseek-aidsh-bash-local"></a>
 

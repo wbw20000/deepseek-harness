@@ -11,6 +11,8 @@
     "src/remote-events.ts",
     "src/agent.ts",
     "src/assistant-stream.ts",
+    "src/attachment-gc.ts",
+    "src/attachment-references.ts",
     "src/catalog.ts",
     "src/commands.ts",
     "src/control.ts",

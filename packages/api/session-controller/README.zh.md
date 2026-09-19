@@ -15,6 +15,7 @@ kind: "package-reference"
 - [使用本包](#use-this-package)
 - [Client 引用](#client-references)
 - [会话媒体引用](#session-media-references)
+- [附件垃圾引用](#attachment-garbage-references)
 - [配置](#configuration)
 - [模型体验](#model-experience)
 - [已知限制与延期工作](#known-limitations-and-deferred-work)
@@ -57,6 +58,15 @@ Session 对象还承载本地提交回显：`session.beginSubmission` 在调用�
 ## 会话媒体引用
 
 当 `connection`、`fs` 与 `attachments` 均被组合时，`SessionMediaReferences` 在鉴权 `connection.fetch` 通道上挂载 `GET|HEAD /api/file?path=<绝对路径>`。它通过 `ctx.fs` 读取普通文件，包括已注册工作区之外的临时路径与远程提供方中的文件。目录包含关系与 MIME 类别均不限制访问；`mime-types` 提供响应类型，未知扩展名使用 `application/octet-stream`。GET 复用 `readBytes` 执行读取前及读取中的字节限制；HEAD 只读取元数据。所有文件均使用 `ctx.attachments.imageLimits.maxImageBytes`（通常为 20 MiB）；超过此上限返回 413。响应包含完整文件，忽略 Range，并携带 `private, no-store`、`nosniff` 与沙箱 CSP，使直接打开的 HTML/SVG 无法以 API 源身份执行脚本。客户端重写位于 `ui-chat`（`AssistantMarkdown`）；音视频文件响应已可用，Markdown 音视频播放器节点仍是独立工作。
+
+-----
+
+<a id="attachment-garbage-references"></a>
+## 附件垃圾引用
+
+Host 组合本控制器时，会在附件后端的 `setGarbageReferenceSource()` 接缝上注册一个引用来源（结构化探测；没有该方法的后端记录一条 info 日志，其定时器保持跳过语义）。引用集合是以下附件 id 的并集：所有已持久化会话——包括未加载到内存的会话——记录的引用，加上内存中的活动会话，以及每个已注册 Agent 的待处理排队消息。因此删除会话会释放其附件：会话消失后，它引用的对象在保留期过后即可被回收。
+
+附件定时器本身默认关闭；用 [attachment-local](../../attachment/attachment-local/README.zh.md) 的 `gcIntervalMs` 字段启用定时回收，并用其 `gcGracePeriodMs`（默认 24 小时）调整保留期。一轮回收只删除超过该宽限期且无引用的对象，因此刚删除会话的附件会先度过保留窗口。引用集合不可读即跳过，绝不删除：会话语料列举失败、某个会话日志无法读取，或引用来源超过 attachment-local 的读取时限时，该轮会记录告警且不删除任何对象。被外部工具使用的附件——用户在外部编辑器中打开的文件、交给 shell 命令的路径——不属于引用集合：其会话引用消失且宽限期过后，它们与其他未引用对象一样被回收。
 
 -----
 

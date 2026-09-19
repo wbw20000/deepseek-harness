@@ -15,6 +15,7 @@ English | [中文](README.zh.md)
 - [Use this package](#use-this-package)
 - [Client references](#client-references)
 - [Session media references](#session-media-references)
+- [Attachment garbage references](#attachment-garbage-references)
 - [Configuration](#configuration)
 - [Model Experience](#model-experience)
 - [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
@@ -57,6 +58,15 @@ References keep local Session data, scoped Contexts, and history streams alive, 
 ## Session media references
 
 `SessionMediaReferences` mounts `GET|HEAD /api/file?path=<absolute path>` on the authenticated `connection.fetch` channel when `connection`, `fs`, and `attachments` are composed. It reads ordinary files through `ctx.fs`, including temporary paths outside registered workspaces and files in remote providers. Neither directory containment nor MIME categories restrict access; `mime-types` supplies the response type, with `application/octet-stream` for unknown extensions. GET reuses `readBytes` for preflight and ongoing byte limits; HEAD reads metadata only. All files use `ctx.attachments.imageLimits.maxImageBytes` (normally 20 MiB); exceeding this limit returns 413. Responses contain the complete file, ignore Range, and carry `private, no-store`, `nosniff`, and a sandbox CSP so directly opened HTML/SVG cannot execute with the API origin. The Client rewrite lives in `ui-chat` (`AssistantMarkdown`); audio/video responses are available, while Markdown audio/video player nodes remain separate work.
+
+-----
+
+<a id="attachment-garbage-references"></a>
+## Attachment garbage references
+
+When the Host composes this controller, it registers one reference source on the attachment backend's `setGarbageReferenceSource()` seam (structurally detected; a backend without the method logs one info line and keeps its timer skip-based). The reference set is the union of the attachment ids recorded in every persisted session — including sessions not loaded into memory — plus the live in-memory sessions and the pending queued messages of every registered Agent. Deleting a session therefore frees its attachments: once a session is gone, the objects it referenced become collectable after the retention period.
+
+The attachment timer itself stays off by default; enable scheduled collection with the [attachment-local](../../attachment/attachment-local/README.md) `gcIntervalMs` field, and tune retention with its `gcGracePeriodMs` (default 24 hours). A pass deletes only unreferenced objects older than that grace period, so a freshly deleted session's attachments survive the retention window. Every unreadable reference set is a skip, never a deletion: if the Session corpus listing fails, a session log cannot be read, or the source exceeds the attachment-local read deadline, the pass logs a warning and deletes nothing. Attachments consumed by external tools — files a user opened in an outside editor, paths handed to shell commands — are not part of the reference set and are collected like any other unreferenced object once their session references disappear and the grace period passes.
 
 -----
 

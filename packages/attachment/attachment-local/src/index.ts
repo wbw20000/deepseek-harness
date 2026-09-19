@@ -36,8 +36,17 @@ import { readRequestImageFile, requestImageVariantId } from './request-image.ts'
 import { StorageBudget } from './budget.ts'
 import { collectUnreferencedObjects } from './gc.ts'
 
-/** Caller-registered source of attachment ids some session still references. */
-export type GarbageReferenceSource = () => Iterable<AttachmentId> | undefined
+/**
+ * Caller-registered source of attachment ids some session still references.
+ * The source may resolve asynchronously (enumerating persisted session logs
+ * cannot stay synchronous); a source that cannot read its references returns
+ * or resolves to `undefined`, which makes the scheduled pass skip instead of
+ * deleting.
+ */
+export type GarbageReferenceSource = () =>
+  | Iterable<AttachmentId>
+  | Promise<Iterable<AttachmentId> | undefined>
+  | undefined
 
 export { canPassThroughNormalization, normalizeImage } from './normalization.ts'
 export type { NormalizedImage, NormalizationPolicy } from './normalization.ts'
@@ -73,6 +82,8 @@ export const DEFAULT_IMAGE_COMPRESSION_CONCURRENCY = 2
 export const MAX_IMAGE_COMPRESSION_CONCURRENCY = 8
 /** Default grace period the garbage-collection timer applies to unreferenced objects. */
 export const DEFAULT_GC_GRACE_PERIOD_MS = 24 * 60 * 60 * 1000
+/** Default deadline one asynchronous garbage-reference read may take before the pass skips. */
+export const DEFAULT_GC_REFERENCE_TIMEOUT_MS = 30 * 1000
 
 /** Local attachment backend configuration. */
 export interface Config {
@@ -115,6 +126,11 @@ export interface Config {
   gcIntervalMs?: number
   /** Grace period the garbage-collection timer applies to unreferenced objects. Default: 24 hours. */
   gcGracePeriodMs?: number
+  /**
+   * Deadline one asynchronous garbage-reference read may take; a source still
+   * pending past it skips that collection pass. Default: 30 seconds.
+   */
+  gcReferenceTimeoutMs?: number
 }
 
 function abortReason(signal: AbortSignal): Error {
@@ -201,6 +217,7 @@ export class LocalAttachmentStore extends AttachmentStore {
     }).default(0.8),
     gcIntervalMs: z.number().step(1).min(0).default(0),
     gcGracePeriodMs: z.number().step(1).min(1).default(DEFAULT_GC_GRACE_PERIOD_MS),
+    gcReferenceTimeoutMs: z.number().step(1).min(1).default(DEFAULT_GC_REFERENCE_TIMEOUT_MS),
   })
 
   /** Absolute versioned storage root. */
@@ -213,11 +230,14 @@ export class LocalAttachmentStore extends AttachmentStore {
   readonly imageCompressionConcurrency: number
   /** Grace period the garbage-collection timer applies to unreferenced objects. */
   readonly gcGracePeriodMs: number
+  /** Deadline one asynchronous garbage-reference read may take before the pass skips. */
+  readonly gcReferenceTimeoutMs: number
   private readonly cacheRoot: string
   private readonly compression: CompressionLimiter
   private readonly budget: StorageBudget
   private readonly requestInflight = new Map<string, SharedRequest<RequestImageAttachment>>()
   private garbageReferenceSource: GarbageReferenceSource | undefined
+  private garbageCollectionRunning = false
 
   constructor(ctx: Context, config: Config) {
     super(ctx)
@@ -242,6 +262,7 @@ export class LocalAttachmentStore extends AttachmentStore {
       throw new Error('attachment-local: budgetWarnRatio must be greater than 0 and at most 1')
     }
     this.gcGracePeriodMs = config.gcGracePeriodMs ?? DEFAULT_GC_GRACE_PERIOD_MS
+    this.gcReferenceTimeoutMs = config.gcReferenceTimeoutMs ?? DEFAULT_GC_REFERENCE_TIMEOUT_MS
     this.budget = new StorageBudget(
       this.root,
       config.diskBudgetBytes ?? 0,
@@ -430,8 +451,9 @@ export class LocalAttachmentStore extends AttachmentStore {
 
   /**
    * Register the source the garbage-collection timer consults for referenced
-   * attachment ids. The timer skips a run while no source returns a set.
-   * @param source - source returning the referenced attachment ids, or `undefined` when references are not yet readable.
+   * attachment ids. The timer skips a run while the source reports no
+   * readable reference set, fails, or exceeds {@link gcReferenceTimeoutMs}.
+   * @param source - source resolving the referenced attachment ids, or `undefined` when references are not yet readable.
    * @returns disposer removing this source.
    */
   setGarbageReferenceSource(source: GarbageReferenceSource): () => void {
@@ -444,14 +466,54 @@ export class LocalAttachmentStore extends AttachmentStore {
 
   /** Run one timer-driven collection pass against the registered reference source. */
   private async collectGarbageScheduled(): Promise<void> {
-    const source = this.garbageReferenceSource
-    if (source === undefined) {
-      this.budget.warnMissingGarbageSource()
-      return
+    // An asynchronous source can outlive its interval tick; a still-running
+    // pass makes the next tick skip instead of racing a concurrent deletion.
+    if (this.garbageCollectionRunning) return
+    this.garbageCollectionRunning = true
+    try {
+      const source = this.garbageReferenceSource
+      if (source === undefined) {
+        this.budget.warnMissingGarbageSource()
+        return
+      }
+      const referenced = await this.readReferences(source)
+      if (referenced === undefined) return
+      await this.collectGarbage({ referenced, olderThanMs: this.gcGracePeriodMs })
+    } finally {
+      this.garbageCollectionRunning = false
     }
-    const referenced = source()
-    if (referenced === undefined) return
-    await this.collectGarbage({ referenced, olderThanMs: this.gcGracePeriodMs })
+  }
+
+  /**
+   * Read one reference set under the timeout and failure safety valve. A
+   * source that throws, hangs past `gcReferenceTimeoutMs`, or reports no
+   * readable references yields `undefined`, and the pass deletes nothing.
+   * @param source - the registered garbage-reference source.
+   * @returns the referenced attachment ids, or `undefined` when the pass must skip.
+   */
+  private async readReferences(source: GarbageReferenceSource): Promise<Iterable<AttachmentId> | undefined> {
+    try {
+      const read = source()
+      if (read === undefined) return undefined
+      let timer: NodeJS.Timeout | undefined
+      try {
+        return await Promise.race([
+          Promise.resolve(read),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => {
+              reject(new Error(`garbage-reference source exceeded ${String(this.gcReferenceTimeoutMs)}ms`))
+            }, this.gcReferenceTimeoutMs)
+          }),
+        ])
+      } finally {
+        clearTimeout(timer)
+      }
+    } catch (error) {
+      this.ctx.logger.warn(
+        `attachment-local: garbage-reference source failed; skipping this collection pass: ${String(error)}`,
+      )
+      return undefined
+    }
   }
 
   override readFileStream(ref: FileAttachmentRef, signal?: AbortSignal): AsyncIterable<Uint8Array> {
