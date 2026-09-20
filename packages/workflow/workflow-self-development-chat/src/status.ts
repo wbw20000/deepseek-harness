@@ -42,6 +42,7 @@ export async function buildStatusReport(deps: StatusDeps, taskId: string): Promi
     const detail = await deps.facade.getTask(taskId)
     const campaign = await deps.facade.campaign(taskId).catch(() => undefined)
     const trialUrl = await trialUrlFor(deps.trial, taskId)
+    const trialBuilding = trialUrl === undefined && await trialPendingFor(deps.trial, taskId)
     const launchProfile = detail.card.launchProfile
     const latestEvent = deps.latestEvents.get(taskId)
     return {
@@ -63,6 +64,7 @@ export async function buildStatusReport(deps: StatusDeps, taskId: string): Promi
         campaignRecord: paths.campaignRecord,
       },
       ...(trialUrl === undefined ? {} : { trialUrl }),
+      ...(trialBuilding ? { trialState: 'building' as const } : {}),
       ...(latestEvent === undefined
         ? {}
         : { latestEvent: { kind: latestEvent.kind, title: latestEvent.title, occurredAt: latestEvent.occurredAt } }),
@@ -74,6 +76,23 @@ export async function buildStatusReport(deps: StatusDeps, taskId: string): Promi
       paths,
       error: errorOf(error),
     }
+  }
+}
+
+/**
+ * Whether the trial service is still building or starting the task's
+ * instance — an automatic open that has not settled yet. A trial service
+ * without `pending`, or a failing one, answers `false`.
+ * @param trial - the optional trial service.
+ * @param taskId - the task whose trial state is wanted.
+ * @returns `true` only when the service lists the task as in flight.
+ */
+async function trialPendingFor(trial: TrialPort | undefined, taskId: string): Promise<boolean> {
+  if (trial?.pending === undefined) return false
+  try {
+    return (await trial.pending()).includes(taskId)
+  } catch {
+    return false
   }
 }
 

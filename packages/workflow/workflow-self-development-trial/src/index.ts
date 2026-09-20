@@ -97,6 +97,14 @@ export class SelfDevelopmentTrial extends TypertRemoteService {
   /** Live instances this service owns, by task id. */
   private readonly instances = new Map<string, TrialInstance>()
 
+  /**
+   * Opens in flight, by task id: a build plus a web-process start take
+   * minutes, and a second `openTrial` for the same task in that window — a
+   * status poll racing the automatic open — joins the first instead of
+   * building and spawning a second instance on another port.
+   */
+  private readonly opening = new Map<string, Promise<OpenTrialResult>>()
+
   /** Test-replaceable integrations. */
   private readonly internals: SelfDevelopmentTrialInternals
 
@@ -154,6 +162,38 @@ export class SelfDevelopmentTrial extends TypertRemoteService {
     if (existing !== undefined) {
       return { url: existing.record.url, port: existing.record.port, pid: existing.record.pid }
     }
+    const inFlight = this.opening.get(id)
+    if (inFlight !== undefined) return inFlight
+    const opened = this.openFresh(id)
+    this.opening.set(id, opened)
+    try {
+      return await opened
+    } finally {
+      this.opening.delete(id)
+    }
+  }
+
+  /**
+   * The task ids whose trial is being built or started right now — an
+   * `openTrial` that has not settled yet. A status surface reports these as
+   * "trial building" instead of "no trial", since a build takes minutes.
+   * @returns the in-flight task ids, sorted.
+   * @throws SelfDevelopmentTrialError with `self-development/host-only-field` from a non-host caller.
+   */
+  @Remote('pending')
+  // oxlint-disable-next-line typescript/require-await -- see trials(): the async turns the host check's throw into a rejection.
+  async pending(): Promise<readonly string[]> {
+    this.assertCallerIsHost('pending')
+    return [...this.opening.keys()].sort((left, right) => left.localeCompare(right))
+  }
+
+  /**
+   * Build and start one task's trial instance; `openTrial` owns the
+   * in-flight bookkeeping around this.
+   * @param id - the validated task id.
+   * @returns the ready instance's URL, port, and pid, or the refusal for a non-DSH worktree.
+   */
+  private async openFresh(id: string): Promise<OpenTrialResult> {
     const profile = (await this.getTask(id)).card.launchProfile
     if (profile === undefined) {
       throw new SelfDevelopmentTrialError(

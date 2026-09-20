@@ -886,6 +886,17 @@ describe('self_development_status tool', () => {
     expect((rendered[0] as { text: string }).text).toBe('Task status: ready, campaign running, round 1, last failed; trial http://127.0.0.1:4173/?token=t')
   })
 
+  it('renders a still-building trial instead of a URL while the trial service lists the task as pending', async () => {
+    const facade = new FakeFacade()
+    facade.campaigns.set('task-1', { ...CAMPAIGN, status: 'passed', lastOutcome: 'passed' })
+    const trial = { trials: async () => [], closeTrial: async () => {}, pending: async () => ['task-1'] }
+    const { tools } = makeService({ facade, trial })
+    const def = tools.find('self_development_status')
+    const value = await def.execute({ taskId: 'task-1' }, fakeExec())
+    const rendered = def.output.render({ taskId: 'task-1' }, value as never)
+    expect((rendered[0] as { text: string }).text).toBe('Task status: ready, campaign passed, round 1, last passed; trial instance still building, ask again in a minute')
+  })
+
   it('renders the reason when a failure carries no structured error', () => {
     const { tools } = makeService({ facade: new FakeFacade() })
     const def = tools.find('self_development_status')

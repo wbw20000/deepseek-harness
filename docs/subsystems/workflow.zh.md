@@ -565,6 +565,15 @@ Host-only trial-instance service. Ordinary chat messages never reach its methods
 @Remote('openTrial') async openTrial(taskId: string): Promise<OpenTrialResult>
 
 /**
+ * The task ids whose trial is being built or started right now — an
+ * `openTrial` that has not settled yet. A status surface reports these as
+ * "trial building" instead of "no trial", since a build takes minutes.
+ * @returns the in-flight task ids, sorted.
+ * @throws SelfDevelopmentTrialError with `self-development/host-only-field` from a non-host caller.
+ */
+@Remote('pending') // oxlint-disable-next-line typescript/require-await -- see trials(): the async turns the host check's throw into a rejection. async pending(): Promise<readonly string[]>
+
+/**
  * Close one task's trial instance: SIGTERM to the registered process
  * group, a five-second grace, then SIGKILL, and a bounded wait for the
  * group leader this service spawned to exit. The registration and the

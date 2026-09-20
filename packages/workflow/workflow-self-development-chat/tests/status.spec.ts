@@ -117,6 +117,15 @@ class FakeTrial implements TrialPort {
   async closeTrial(taskId: string): Promise<void> {
     this.instances = this.instances.filter(instance => instance.taskId !== taskId)
   }
+
+  /** Task ids `pending()` reports; `undefined` removes the method, as an older trial service would. */
+  building: string[] | undefined = []
+  pendingFails = false
+
+  async pending(): Promise<readonly string[]> {
+    if (this.pendingFails) throw new Error('trial service is down')
+    return this.building ?? []
+  }
 }
 
 /** The event the events service delivered for the task. */
@@ -197,6 +206,31 @@ describe('buildStatusReport', () => {
     expect(report.ok).toBe(true)
     if (!report.ok) return
     expect(report.trialUrl).toBeUndefined()
+  })
+
+  it('reports a trial that is still building, and only while no ready URL exists', async () => {
+    const { trial, deps } = makeDeps()
+    trial.instances = []
+    trial.building = ['task-1']
+    const building = await buildStatusReport(deps, 'task-1')
+    expect(building.ok && building.trialState).toBe('building')
+    expect(building.ok && building.trialUrl).toBeUndefined()
+    // A ready instance wins: the pending list is not consulted.
+    trial.instances = [{ taskId: 'task-1', url: 'http://127.0.0.1:8980/?token=t', port: 8980, startedAt: 1 }]
+    const ready = await buildStatusReport(deps, 'task-1')
+    expect(ready.ok && ready.trialUrl).toBe('http://127.0.0.1:8980/?token=t')
+    expect(ready.ok && ready.trialState).toBeUndefined()
+  })
+
+  it('treats a trial service without pending(), or whose pending() fails, as not building', async () => {
+    const { trial, deps } = makeDeps()
+    trial.instances = []
+    trial.pendingFails = true
+    const failing = await buildStatusReport(deps, 'task-1')
+    expect(failing.ok && failing.trialState).toBeUndefined()
+    const older = { trials: async () => [], closeTrial: async () => {} }
+    const report = await buildStatusReport({ ...deps, trial: older }, 'task-1')
+    expect(report.ok && report.trialState).toBeUndefined()
   })
 
   it('fails with the facade error when getTask rejects', async () => {

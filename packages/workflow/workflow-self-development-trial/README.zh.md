@@ -31,9 +31,10 @@ kind: "package-reference"
 
 | 方法 | 约定 |
 |---|---|
-| `openTrial(taskId)` | 打开（或复用）某任务的试验版实例；细节见[openTrial 做了什么](#what-opentrial-does)。仅限宿主。 |
+| `openTrial(taskId)` | 打开（或复用）某任务的试验版实例；细节见[openTrial 做了什么](#what-opentrial-does)。同一任务的打开还在进行中时，再来一次调用会并入那次打开，而不是再构建、再启动第二个实例。仅限宿主。 |
 | `closeTrial(taskId)` | 停止某任务的实例（先 SIGTERM，等五秒宽限，再 SIGKILL），并删除其登记。任务没有存活实例时仍会清掉过期的 sidecar。仅限宿主。 |
 | `trials()` | 列出本进程当前拥有的存活实例，按任务 id 排序。进程重启后从 `[]` 开始：实例从不从 sidecar 复活。仅限宿主。 |
+| `pending()` | 列出打开仍在进行中的任务 id——正在构建，或在等 web 进程的就绪行——已排序。状态面把它们报成"试验版还在构建"而不是"没有试验版"，因为构建要花几分钟。仅限宿主。 |
 
 | 配置字段 | 含义 |
 |---|---|

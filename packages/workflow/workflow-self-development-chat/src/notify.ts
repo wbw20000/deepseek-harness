@@ -43,9 +43,9 @@ export function isSettledCampaignEvent(event: Pick<CampaignEvent, 'origin'>): bo
 export function campaignNoticeMessage(event: CampaignEvent, locale: CardLocale): UserMessage {
   const passed = event.kind === 'awaiting-trial'
   const text = locale === 'zh'
-    ? `任务 ${event.taskId} 的自开发战役${passed ? '已通过' : '已结束'}：${event.title}。用 self_development_status 查看详情${passed ? '和试验版地址' : ''}。`
+    ? `任务 ${event.taskId} 的自开发战役${passed ? '已通过' : '已结束'}：${event.title}。用 self_development_status 查看详情${passed ? '和试验版地址（试验版实例要先构建，通常需要几分钟；地址还没出来就过一会儿再查）' : ''}。`
     : `Task ${event.taskId}'s self-development campaign ${passed ? 'passed' : 'ended'}: ${event.title}. `
-      + `Use self_development_status for details${passed ? ' and the trial URL' : ''}.`
+      + `Use self_development_status for details${passed ? ' and the trial URL (the trial instance builds first, usually a few minutes; ask again if the URL is not there yet)' : ''}.`
   return createUserMessage({
     content: [{ type: 'text', text }],
     source: {

@@ -166,6 +166,30 @@ describe('openTrial', () => {
     expect(await service.trials()).toHaveLength(1)
   })
 
+  it('joins an open already in flight instead of building a second instance, and lists it as pending meanwhile', async () => {
+    const { service } = await makeService()
+    expect(await service.pending()).toEqual([])
+    const first = service.openTrial('task-inflight')
+    const other = service.openTrial('task-b-inflight')
+    // Sorted, whatever order the opens started in.
+    expect(await service.pending()).toEqual(['task-b-inflight', 'task-inflight'])
+    const second = service.openTrial('task-inflight')
+    const [opened, joined] = await Promise.all([first, second, other])
+    expect(joined).toEqual(opened)
+    expect(await service.trials()).toHaveLength(2)
+    expect(await service.pending()).toEqual([])
+  })
+
+  it('drops a failed open from the pending list', async () => {
+    environment = await makeEnvironment()
+    const failing = await makeWorktree(environment.base, 'failing-pending', { pnpm: 'fail' })
+    const { service } = await makeService({ environment, worktree: failing.root })
+    const opening = service.openTrial('task-fail-pending')
+    expect(await service.pending()).toEqual(['task-fail-pending'])
+    await expect(opening).rejects.toMatchObject({ code: 'self-development/trial-build-failed' })
+    expect(await service.pending()).toEqual([])
+  })
+
   it('skips ports already handed to live instances', async () => {
     const { service } = await makeService()
     const first = expectOpened(await service.openTrial('task-b'))
@@ -345,6 +369,8 @@ describe('openTrial', () => {
     await expect(refused.service.closeTrial('task-phone'))
       .rejects.toMatchObject({ code: 'self-development/host-only-field' })
     await expect(refused.service.trials())
+      .rejects.toMatchObject({ code: 'self-development/host-only-field' })
+    await expect(refused.service.pending())
       .rejects.toMatchObject({ code: 'self-development/host-only-field' })
 
     const admitted = await makeService({ callerLoopback: true })

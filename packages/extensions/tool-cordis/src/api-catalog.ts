@@ -1920,6 +1920,13 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         throws: ['SelfDevelopmentTrialError with `self-development/host-only-field` from a non-host caller, `self-development/config-invalid` when the task id is malformed or the task has no launch profile, `self-development/task-unknown` when the facade does not know the task, `self-development/trial-unavailable` when neither the profile nor the runner supplies a data home, `self-development/trial-build-failed` when the worktree build fails or times out, `self-development/trial-port-exhausted` when no port in the range is free, or `self-development/trial-start-failed` when the web process never becomes ready.', 'whatever the facade rejects with, verbatim: the facade owns its own error codes.'],
       },
       {
+        signature: '@Remote(\'pending\') // oxlint-disable-next-line typescript/require-await -- see trials(): the async turns the host check\'s throw into a rejection. async pending(): Promise<readonly string[]>',
+        description: 'The task ids whose trial is being built or started right now — an `openTrial` that has not settled yet. A status surface reports these as "trial building" instead of "no trial", since a build takes minutes.',
+        parameters: [],
+        returns: 'the in-flight task ids, sorted.',
+        throws: ['SelfDevelopmentTrialError with `self-development/host-only-field` from a non-host caller.'],
+      },
+      {
         signature: '@Remote(\'closeTrial\') async closeTrial(taskId: string): Promise<void>',
         description: 'Close one task\'s trial instance: SIGTERM to the registered process group, a five-second grace, then SIGKILL, and a bounded wait for the group leader this service spawned to exit. The registration and the sidecar are removed. Closing a task without a live instance still removes a stale sidecar.',
         parameters: [{ name: 'taskId', description: 'task identity.' }],

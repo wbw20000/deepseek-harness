@@ -63,7 +63,7 @@ describe('campaignNoticeMessage', () => {
   })
 
   it('renders bilingual Chinese notices for both outcomes', () => {
-    expect(textOf(campaignNoticeMessage(PASSED_EVENT, 'zh'))).toBe('任务 task-1 的自开发战役已通过：Round 2 passed。用 self_development_status 查看详情和试验版地址。')
+    expect(textOf(campaignNoticeMessage(PASSED_EVENT, 'zh'))).toBe('任务 task-1 的自开发战役已通过：Round 2 passed。用 self_development_status 查看详情和试验版地址（试验版实例要先构建，通常需要几分钟；地址还没出来就过一会儿再查）。')
     expect(textOf(campaignNoticeMessage(ENDED_EVENT, 'zh'))).toBe('任务 task-1 的自开发战役已结束：Task stopped (cancelled)。用 self_development_status 查看详情。')
   })
 })

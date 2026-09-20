@@ -384,6 +384,8 @@ export interface TrialPort {
   trials(): Promise<readonly TrialInstance[]>
   /** Stop one task's trial instance; called before that task's worktree is released. */
   closeTrial(taskId: string): Promise<void>
+  /** Task ids whose trial is still being built or started; optional because an older trial service may not expose it. */
+  pending?(): Promise<readonly string[]>
 }
 
 /** Successful proposal outcome. */
@@ -430,6 +432,8 @@ export interface StatusReport {
     readonly campaignRecord: string
   }
   readonly trialUrl?: string
+  /** `building` while the trial service is still building or starting the task's instance; absent otherwise. */
+  readonly trialState?: 'building'
   /** The most recent campaign event the events service delivered for this task, when one arrived. */
   readonly latestEvent?: {
     readonly kind: string

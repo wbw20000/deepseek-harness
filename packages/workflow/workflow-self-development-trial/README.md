@@ -31,9 +31,10 @@ See a self-development task's experiment running, not just read about it. Call `
 
 | Method | Contract |
 |---|---|
-| `openTrial(taskId)` | Opens (or reuses) one task's trial instance; see [What `openTrial` does](#what-opentrial-does). Host-only. |
+| `openTrial(taskId)` | Opens (or reuses) one task's trial instance; see [What `openTrial` does](#what-opentrial-does). A second call for a task whose open is still in flight joins that open instead of building and spawning a second instance. Host-only. |
 | `closeTrial(taskId)` | Stops one task's instance (SIGTERM, a five-second grace, then SIGKILL) and removes its registration. A task with no live instance still clears a stale sidecar. Host-only. |
 | `trials()` | Lists the live instances this process owns, sorted by task id. A process restart starts from `[]`: instances are never resurrected from sidecars. Host-only. |
+| `pending()` | Lists the task ids whose open is still in flight — building or waiting for the web process's readiness line — sorted. A status surface reports these as "trial still building" rather than "no trial", since a build takes minutes. Host-only. |
 
 | Config field | Meaning |
 |---|---|

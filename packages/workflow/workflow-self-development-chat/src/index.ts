@@ -543,7 +543,9 @@ function statusResultLine(value: JsonValue): string {
   const campaignText = campaign === undefined
     ? 'no campaign'
     : `${campaign.status}, round ${campaign.rounds}${campaign.lastOutcome === undefined ? '' : `, last ${campaign.lastOutcome}`}`
-  const trialText = report.trialUrl === undefined ? '' : `; trial ${report.trialUrl}`
+  const trialText = report.trialUrl === undefined
+    ? (report.trialState === 'building' ? '; trial instance still building, ask again in a minute' : '')
+    : `; trial ${report.trialUrl}`
   return `Task status: ${report.task?.status}, campaign ${campaignText}${trialText}`
 }
 

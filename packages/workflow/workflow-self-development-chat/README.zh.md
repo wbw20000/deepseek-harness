@@ -275,7 +275,7 @@ self_development_propose and stop after the tool result.
 - **通知投递依赖事件服务自身的监听器容错** ——`deliverCampaignNotice` 在事件服务的订阅回调里同步运行，自己不捕获投递失败；它依赖上游事件服务把每个监听器包在 try/catch 里（`@deepseek-ai/dsh-workflow-self-development-events` 目前就是这样做的），这样一个通知失败才不会连累其他订阅者或事件服务自身的记账。如果未来某个事件源不提供这种容错，投递失败（比如 `Agent.followup`/`Agent.inject` 抛出异常）就可能从订阅回调里冒出来。
 - **被停止任务的工作区会留到下一次提案** ——`self_development_stop` 不释放它停掉的工作区（操作者可能还想看看它）；下一次 `self_development_propose` 会把它回收，所以名额只在一次停止与下一次提案之间被占着。
 - **已存在目录的工作区回退不分配任何东西** ——没有工作区服务时，`self_development_propose` 只检查 `<experimentsRoot>/<taskId>` 是否已存在；不会创建、填充或隔离它。
-- **没有 DH-c 就无法访问试验版地址** ——`self_development_status` 的 `trialUrl` 字段在挂载 `selfDevelopmentTrial` 服务并汇报有运行实例之前始终为空。
+- **没有 DH-c 就无法访问试验版地址** ——`self_development_status` 的 `trialUrl` 字段在挂载 `selfDevelopmentTrial` 服务并汇报有运行实例之前始终为空；该服务把该任务的打开列为进行中（`pending()`）期间，报告带 `trialState: 'building'`，结果行会说实例还在构建——战役通过后试验版要构建几分钟。
 - **`parallel: false` 是礼貌性预检查，不是执行边界** ——它在请求审批之前读取每个已知任务的 `campaign()` 状态，但状态读取失败会被当作"未运行"处理（失败开放）而非阻塞提案；真正的权威上限是 DH-a 自身在 `startCampaign` 上的 `maxConcurrentCampaigns` 拒绝。
 - **只读战役的操作面，不是试验版体验本身** ——DH-c 的试验实例地址只读取、不打开；本包不提供也不代理试验版本身的访问。
 - **`self_development_merge` 的 host-only 只是约定，不是强制** ——本仓库没有任何运行时信号能区分"调用方进程就是正在升级的那个部署"和其它任何调用方；没有可 `ctx.get` 的调用方身份端口可供判断（本代码库里唯一的 host/phone 区分机制在 Remote 门面自己的字段级 `assertCallerIsHost` 检查里，并不覆盖 Agent 工具调用）。今天唯一的防线是审批卡上的文案。
