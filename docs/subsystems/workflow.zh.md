@@ -182,11 +182,15 @@ Stable-side Remote facade. The supervised runner is optional: every method that 
 @Remote('listTasks') async listTasks(): Promise<readonly TaskSummary[]>
 
 /**
- * Read one task's full projection and its confirmation-card view.
+ * Read one task's full projection and its confirmation-card view. The card
+ * carries the task's stored launch profile, when the host has set one; a
+ * stored but unreadable profile refuses the read with
+ * `self-development/config-invalid` rather than rendering without it.
  * @param taskId - task identity.
  * @returns the projection and the read-only card.
  * @throws SelfDevelopmentRemoteError with `self-development/disabled` while the facade is disabled,
- *   `self-development/config-invalid` when the task id is malformed, or
+ *   `self-development/config-invalid` when the task id is malformed or the stored launch profile
+ *   fails its shape validation, or
  *   `self-development/task-unknown` when the task has no journal yet; the facade never creates a
  *   journal from a read path.
  * @throws whatever the task-control service rejects with, converted at the facade boundary into
@@ -203,19 +207,42 @@ Stable-side Remote facade. The supervised runner is optional: every method that 
 @Remote('recentEvents') async recentEvents(): Promise<readonly RecentEvent[]>
 
 /**
- * Create one task from a TaskSpec. The actor is the spec's `createdBy`
- * field; it is checked against `allowedActors` when that list is non-empty.
+ * Create one task from a TaskSpec, optionally storing a launch profile in
+ * the same call. The actor is the spec's `createdBy` field; it is checked
+ * against `allowedActors` when that list is non-empty. The profile's
+ * derived `confirmedBy` and the spec's `createdBy` are both actor-checked.
+ * The profile is written only after the core commits the creation: a
+ * failed create leaves no profile file behind.
  * @param spec - TaskSpec in wire form.
  * @param expectedRevision - revision the caller observed; a new task is at revision 0.
+ * @param launchProfile - optional launch profile; host-only, and every field of it derives or
+ *   stores an isolation or confirmation setting.
  * @returns the operation id the facade generated plus the core's result.
  * @throws SelfDevelopmentRemoteError with `self-development/disabled`, `self-development/config-invalid`,
  *   `self-development/actor-forbidden`, or `self-development/host-only-field` from a non-host caller:
- *   the spec fixes `stableBaselineDigest` and `allowedModificationScope`, which are isolation
- *   settings the phone whitelist may not set.
+ *   the spec fixes `stableBaselineDigest` and `allowedModificationScope`, and a present
+ *   `launchProfile` fixes the launch isolation and confirmation settings, which the phone
+ *   whitelist may not set.
  * @throws whatever the task-control service rejects with, converted at the facade boundary into
  *   `self-development/core` (`details.code` keeps the original code).
  */
-@Remote('createTask') async createTask(spec: TaskSpecInput, expectedRevision: number): Promise<RemoteOperationResult>
+@Remote('createTask') async createTask( spec: TaskSpecInput, expectedRevision: number, launchProfile?: LaunchProfileInput, ): Promise<RemoteOperationResult>
+
+/**
+ * Store one task's launch profile, replacing any previous one. The profile
+ * resolves its derived fields against the task's current spec and the
+ * facade's `allowedActors` before anything is written.
+ * @param taskId - task identity.
+ * @param profile - launch profile in wire form; every field is host-only.
+ * @returns the task id and the stored profile with every derived field filled.
+ * @throws SelfDevelopmentRemoteError with `self-development/disabled`, `self-development/config-invalid`
+ *   (malformed id, malformed profile, or an underivable `artifactPaths`/`confirmedBy`),
+ *   `self-development/actor-forbidden`, `self-development/host-only-field` from a non-host caller,
+ *   or `self-development/task-unknown` when the task has no journal yet.
+ * @throws whatever the task-control service rejects with, converted at the facade boundary into
+ *   `self-development/core` (`details.code` keeps the original code).
+ */
+@Remote('setLaunchProfile') async setLaunchProfile(taskId: string, profile: LaunchProfileInput): Promise<LaunchProfileResult>
 
 /**
  * Grant the separate planning authorization. This never approves
@@ -303,10 +330,17 @@ Stable-side Remote facade. The supervised runner is optional: every method that 
  * `PresenceConfirmation` from the request and the frozen plan, and refuses
  * unless the caller explicitly passed `presenceAcknowledged: true` — a UI
  * must never default that acknowledgement. Requires the runner plugin.
+ *
+ * The five launch fields (`worktree`, `artifactPaths`, `acceptancePath`,
+ * `loopbackAllowlist`, `confirmedBy`) are optional: an absent field is
+ * derived from the task's stored launch profile, and an explicit value
+ * overrides the profile. A field that is neither explicit nor derivable
+ * refuses with `self-development/config-invalid`, naming the field.
  * @param request - the supervised attempt request in wire form.
  * @returns the runner's outcome plus the operation id the facade generated.
- * @throws SelfDevelopmentRemoteError with `self-development/disabled`, `self-development/config-invalid`,
- *   `self-development/actor-forbidden`, `self-development/presence-unconfirmed` when
+ * @throws SelfDevelopmentRemoteError with `self-development/disabled`, `self-development/config-invalid`
+ *   (a malformed field, an unreadable stored profile, or an underivable launch field),
+ *   `self-development/presence-unconfirmed` when
  *   `presenceAcknowledged` is not exactly `true`, `self-development/host-only-field` from a
  *   non-host caller (the launch assigns the worktree, acceptance, and artifact isolation
  *   settings, and a non-host request may not set the host-only `dataHome`), or

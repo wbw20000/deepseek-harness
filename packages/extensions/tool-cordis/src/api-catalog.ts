@@ -1731,10 +1731,10 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: '@Remote(\'getTask\') async getTask(taskId: string): Promise<TaskDetail>',
-        description: 'Read one task\'s full projection and its confirmation-card view.',
+        description: 'Read one task\'s full projection and its confirmation-card view. The card carries the task\'s stored launch profile, when the host has set one; a stored but unreadable profile refuses the read with `self-development/config-invalid` rather than rendering without it.',
         parameters: [{ name: 'taskId', description: 'task identity.' }],
         returns: 'the projection and the read-only card.',
-        throws: ['SelfDevelopmentRemoteError with `self-development/disabled` while the facade is disabled, `self-development/config-invalid` when the task id is malformed, or `self-development/task-unknown` when the task has no journal yet; the facade never creates a journal from a read path.', 'whatever the task-control service rejects with, converted at the facade boundary into `self-development/core` (`details.code` keeps the original code).'],
+        throws: ['SelfDevelopmentRemoteError with `self-development/disabled` while the facade is disabled, `self-development/config-invalid` when the task id is malformed or the stored launch profile fails its shape validation, or `self-development/task-unknown` when the task has no journal yet; the facade never creates a journal from a read path.', 'whatever the task-control service rejects with, converted at the facade boundary into `self-development/core` (`details.code` keeps the original code).'],
       },
       {
         signature: '@Remote(\'recentEvents\') async recentEvents(): Promise<readonly RecentEvent[]>',
@@ -1744,11 +1744,18 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         throws: ['SelfDevelopmentRemoteError with `self-development/disabled` while the facade is disabled.'],
       },
       {
-        signature: '@Remote(\'createTask\') async createTask(spec: TaskSpecInput, expectedRevision: number): Promise<RemoteOperationResult>',
-        description: 'Create one task from a TaskSpec. The actor is the spec\'s `createdBy` field; it is checked against `allowedActors` when that list is non-empty.',
-        parameters: [{ name: 'spec', description: 'TaskSpec in wire form.' }, { name: 'expectedRevision', description: 'revision the caller observed; a new task is at revision 0.' }],
+        signature: '@Remote(\'createTask\') async createTask( spec: TaskSpecInput, expectedRevision: number, launchProfile?: LaunchProfileInput, ): Promise<RemoteOperationResult>',
+        description: 'Create one task from a TaskSpec, optionally storing a launch profile in the same call. The actor is the spec\'s `createdBy` field; it is checked against `allowedActors` when that list is non-empty. The profile\'s derived `confirmedBy` and the spec\'s `createdBy` are both actor-checked. The profile is written only after the core commits the creation: a failed create leaves no profile file behind.',
+        parameters: [{ name: 'spec', description: 'TaskSpec in wire form.' }, { name: 'expectedRevision', description: 'revision the caller observed; a new task is at revision 0.' }, { name: 'launchProfile', description: 'optional launch profile; host-only, and every field of it derives or stores an isolation or confirmation setting.' }],
         returns: 'the operation id the facade generated plus the core\'s result.',
-        throws: ['SelfDevelopmentRemoteError with `self-development/disabled`, `self-development/config-invalid`, `self-development/actor-forbidden`, or `self-development/host-only-field` from a non-host caller: the spec fixes `stableBaselineDigest` and `allowedModificationScope`, which are isolation settings the phone whitelist may not set.', 'whatever the task-control service rejects with, converted at the facade boundary into `self-development/core` (`details.code` keeps the original code).'],
+        throws: ['SelfDevelopmentRemoteError with `self-development/disabled`, `self-development/config-invalid`, `self-development/actor-forbidden`, or `self-development/host-only-field` from a non-host caller: the spec fixes `stableBaselineDigest` and `allowedModificationScope`, and a present `launchProfile` fixes the launch isolation and confirmation settings, which the phone whitelist may not set.', 'whatever the task-control service rejects with, converted at the facade boundary into `self-development/core` (`details.code` keeps the original code).'],
+      },
+      {
+        signature: '@Remote(\'setLaunchProfile\') async setLaunchProfile(taskId: string, profile: LaunchProfileInput): Promise<LaunchProfileResult>',
+        description: 'Store one task\'s launch profile, replacing any previous one. The profile resolves its derived fields against the task\'s current spec and the facade\'s `allowedActors` before anything is written.',
+        parameters: [{ name: 'taskId', description: 'task identity.' }, { name: 'profile', description: 'launch profile in wire form; every field is host-only.' }],
+        returns: 'the task id and the stored profile with every derived field filled.',
+        throws: ['SelfDevelopmentRemoteError with `self-development/disabled`, `self-development/config-invalid` (malformed id, malformed profile, or an underivable `artifactPaths`/`confirmedBy`), `self-development/actor-forbidden`, `self-development/host-only-field` from a non-host caller, or `self-development/task-unknown` when the task has no journal yet.', 'whatever the task-control service rejects with, converted at the facade boundary into `self-development/core` (`details.code` keeps the original code).'],
       },
       {
         signature: '@Remote(\'authorizePlanning\') async authorizePlanning(taskId: string, expectedRevision: number, authorizedBy: string): Promise<RemoteOperationResult>',
@@ -1794,10 +1801,10 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: '@Remote(\'runAttempt\') async runAttempt(request: RemoteRunAttemptRequest): Promise<RemoteRunAttemptOutcome>',
-        description: 'Launch one supervised attempt. The facade assembles the `PresenceConfirmation` from the request and the frozen plan, and refuses unless the caller explicitly passed `presenceAcknowledged: true` — a UI must never default that acknowledgement. Requires the runner plugin.',
+        description: 'Launch one supervised attempt. The facade assembles the `PresenceConfirmation` from the request and the frozen plan, and refuses unless the caller explicitly passed `presenceAcknowledged: true` — a UI must never default that acknowledgement. Requires the runner plugin.\n\nThe five launch fields (`worktree`, `artifactPaths`, `acceptancePath`, `loopbackAllowlist`, `confirmedBy`) are optional: an absent field is derived from the task\'s stored launch profile, and an explicit value overrides the profile. A field that is neither explicit nor derivable refuses with `self-development/config-invalid`, naming the field.',
         parameters: [{ name: 'request', description: 'the supervised attempt request in wire form.' }],
         returns: 'the runner\'s outcome plus the operation id the facade generated.',
-        throws: ['SelfDevelopmentRemoteError with `self-development/disabled`, `self-development/config-invalid`, `self-development/actor-forbidden`, `self-development/presence-unconfirmed` when `presenceAcknowledged` is not exactly `true`, `self-development/host-only-field` from a non-host caller (the launch assigns the worktree, acceptance, and artifact isolation settings, and a non-host request may not set the host-only `dataHome`), or `self-development/runner-unavailable` when the runner plugin is not loaded.', 'whatever the core or the runner rejects with, converted at the facade boundary into `self-development/core` (`details.code` keeps the original code).'],
+        throws: ['SelfDevelopmentRemoteError with `self-development/disabled`, `self-development/config-invalid` (a malformed field, an unreadable stored profile, or an underivable launch field), `self-development/presence-unconfirmed` when `presenceAcknowledged` is not exactly `true`, `self-development/host-only-field` from a non-host caller (the launch assigns the worktree, acceptance, and artifact isolation settings, and a non-host request may not set the host-only `dataHome`), or `self-development/runner-unavailable` when the runner plugin is not loaded.', 'whatever the core or the runner rejects with, converted at the facade boundary into `self-development/core` (`details.code` keeps the original code).'],
       },
       {
         signature: '@Remote(\'activeTasks\') async activeTasks(): Promise<readonly string[]>',
@@ -4642,7 +4649,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ConfirmationCard',
-    declaration: 'export interface ConfirmationCard {\n    readonly taskId: string;\n    readonly taskAndGoal: string;\n    readonly acceptanceCases: readonly RequiredCase[];\n    readonly manualCases: readonly string[];\n    readonly planningAuthorized: boolean;\n    readonly suggestedBudgetBasis: string;\n    readonly stableBaselineDigest?: string;\n    readonly allowedModificationScope: readonly string[];\n    readonly budget: CardBudget;\n    readonly consumedBudget: {\n        readonly rounds: number;\n        readonly timeMs: number;\n    };\n    readonly costLimits: string;\n}',
+    declaration: 'export interface ConfirmationCard {\n    readonly taskId: string;\n    readonly taskAndGoal: string;\n    readonly acceptanceCases: readonly RequiredCase[];\n    readonly manualCases: readonly string[];\n    readonly planningAuthorized: boolean;\n    readonly suggestedBudgetBasis: string;\n    readonly stableBaselineDigest?: string;\n    readonly allowedModificationScope: readonly string[];\n    readonly budget: CardBudget;\n    readonly consumedBudget: {\n        readonly rounds: number;\n        readonly timeMs: number;\n    };\n    readonly costLimits: string;\n    readonly launchProfile?: LaunchProfile;\n}',
   },
   {
     name: 'ConnectionCaller',
@@ -5333,6 +5340,18 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface KvUnitDescriptor {\n    readonly name: string;\n    readonly version: number;\n    readonly tables: readonly string[];\n    readonly hasGlobal: boolean;\n    readonly layout?: \'single\' | \'per-record\';\n    readonly compatibleVersions?: readonly number[];\n}',
   },
   {
+    name: 'LaunchProfile',
+    declaration: 'export interface LaunchProfile {\n    readonly worktree: string;\n    readonly acceptancePath: string;\n    readonly artifactPaths: readonly string[];\n    readonly dataHome?: string | undefined;\n    readonly loopbackAllowlist: readonly number[];\n    readonly confirmedBy: string;\n    readonly updatedAt: number;\n}',
+  },
+  {
+    name: 'LaunchProfileInput',
+    declaration: 'export interface LaunchProfileInput {\n    readonly worktree: string;\n    readonly acceptancePath: string;\n    readonly artifactPaths?: readonly string[] | undefined;\n    readonly dataHome?: string | undefined;\n    readonly loopbackAllowlist?: readonly number[] | undefined;\n    readonly confirmedBy?: string | undefined;\n}',
+  },
+  {
+    name: 'LaunchProfileResult',
+    declaration: 'export interface LaunchProfileResult {\n    readonly taskId: string;\n    readonly launchProfile: LaunchProfile;\n}',
+  },
+  {
     name: 'LlmAdapter',
     declaration: 'export abstract class LlmAdapter {\n    providerInfo(provider: string): LlmProviderInfo;\n    providerRetryPolicy(_provider: string): ResolvedRetryPolicy | undefined;\n    imageRequestPricing(_provider: string, _model: string): LlmImageRequestPricing | undefined;\n    listModels(_provider: string): Promise<readonly LlmModelInfo[]>;\n    resolveModel(provider: string, model: string, _signal?: AbortSignal): Promise<LlmResolvedModelInfo>;\n    async prepareCall(provider: string, model: string, signal?: AbortSignal): Promise<PreparedAdapterCall>;\n    abstract stream(options: GenerateOptions): AsyncIterable<StreamChunk>;\n}',
   },
@@ -5902,7 +5921,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'RemoteRunAttemptRequest',
-    declaration: 'export interface RemoteRunAttemptRequest {\n    readonly taskId: string;\n    readonly expectedRevision: number;\n    readonly worktree: string;\n    readonly artifactPaths: readonly string[];\n    readonly acceptancePath: string;\n    readonly dataHome?: string | undefined;\n    readonly confirmedBy: string;\n    readonly loopbackAllowlist: readonly number[];\n    readonly presenceAcknowledged: boolean;\n}',
+    declaration: 'export interface RemoteRunAttemptRequest {\n    readonly taskId: string;\n    readonly expectedRevision: number;\n    readonly worktree?: string | undefined;\n    readonly artifactPaths?: readonly string[] | undefined;\n    readonly acceptancePath?: string | undefined;\n    readonly dataHome?: string | undefined;\n    readonly confirmedBy?: string | undefined;\n    readonly loopbackAllowlist?: readonly number[] | undefined;\n    readonly presenceAcknowledged: boolean;\n}',
   },
   {
     name: 'RemoteTaskProjection',

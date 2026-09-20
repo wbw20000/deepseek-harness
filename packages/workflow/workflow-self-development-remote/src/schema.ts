@@ -9,10 +9,16 @@
 import { z as zod } from 'zod'
 import { validateTaskId } from '@deepseek-ai/dsh-workflow-self-development'
 import { SelfDevelopmentRemoteError } from './errors.ts'
-import type { BudgetApprovalInput, RemoteRunAttemptRequest, TaskSpecInput } from './types.ts'
+import type { LaunchProfile, LaunchProfileInput, BudgetApprovalInput, RemoteRunAttemptRequest, TaskSpecInput } from './types.ts'
 
 /** Non-empty string with no length beyond what the field needs. */
 const nonEmpty = zod.string().min(1)
+
+/** Absolute path string, as every stored facade path field must be. */
+const absolutePath = zod.string().refine(isAbsolute, 'must be an absolute path')
+
+/** Loopback port number a supervised session may bind. */
+const loopbackPort = zod.number().int().min(0).max(65535)
 
 /** Matches the digests the task-control package brands. */
 const digestSchema = zod.string().regex(/^[0-9a-f]{64}$/u, 'digest must be 64 lowercase hex characters')
@@ -62,22 +68,46 @@ const budgetApprovalSchema = zod.strictObject({
   approvedBy: nonEmpty,
 })
 
-/** Wire form of a `runAttempt` request. */
+/** Wire form of a `runAttempt` request. The five launch fields are optional: an absent field is derived from the task's launch profile. */
 const runAttemptSchema = zod.strictObject({
   taskId: nonEmpty,
   expectedRevision: zod.number().int().min(0),
-  worktree: zod.string().refine(isAbsolute, 'worktree must be an absolute path'),
-  artifactPaths: zod.array(zod.string().min(1)).min(1),
-  acceptancePath: zod.string().refine(isAbsolute, 'acceptancePath must be an absolute path'),
+  worktree: absolutePath.optional(),
+  artifactPaths: zod.array(zod.string().min(1)).min(1).optional(),
+  acceptancePath: absolutePath.optional(),
   // host-only: the per-attempt data directory is assigned by the stable-side
   // workspace service, so a phone caller must omit it; the stable host passes
   // the workspaces `allocate` result's `dataHome` through as the runner's `dshHome`.
-  dataHome: zod.string().refine(isAbsolute, 'dataHome must be an absolute path')
+  dataHome: absolutePath
     .meta({ hostOnly: true })
     .optional(),
-  confirmedBy: nonEmpty,
-  loopbackAllowlist: zod.array(zod.number().int().min(0).max(65535)),
+  confirmedBy: nonEmpty.optional(),
+  loopbackAllowlist: zod.array(loopbackPort).optional(),
   presenceAcknowledged: zod.boolean(),
+})
+
+/**
+ * Wire form of a launch profile handed to `setLaunchProfile` or as
+ * `createTask`'s third argument. Every field is marked `hostOnly`: the whole
+ * argument is an isolation-and-confirmation setting, so a non-host caller
+ * that sends any profile at all is refused with
+ * `self-development/host-only-field`.
+ */
+const launchProfileInputSchema = zod.strictObject({
+  worktree: absolutePath.meta({ hostOnly: true }),
+  acceptancePath: absolutePath.meta({ hostOnly: true }),
+  artifactPaths: zod.array(zod.string().min(1)).min(1).meta({ hostOnly: true }).optional(),
+  dataHome: absolutePath.meta({ hostOnly: true }).optional(),
+  loopbackAllowlist: zod.array(loopbackPort).meta({ hostOnly: true }).optional(),
+  confirmedBy: nonEmpty.meta({ hostOnly: true }).optional(),
+})
+
+/** Stored form of one launch profile file: the input with every derived field filled. */
+const launchProfileSchema = launchProfileInputSchema.extend({
+  artifactPaths: zod.array(zod.string().min(1)).min(1),
+  loopbackAllowlist: zod.array(loopbackPort),
+  confirmedBy: nonEmpty,
+  updatedAt: zod.number(),
 })
 
 /**
@@ -137,6 +167,7 @@ export function registerHostOnlyFields(schemaName: string, schema: zod.ZodType):
 }
 
 registerHostOnlyFields('runAttempt', runAttemptSchema)
+registerHostOnlyFields('launchProfile', launchProfileInputSchema)
 
 /**
  * Read a parsed wire value at one dotted field path.
@@ -229,22 +260,58 @@ export function parseTaskId(taskId: string): string {
 }
 
 /**
- * Validate a `createTask` spec and its revision header.
+ * Validate a `createTask` spec, its revision header, and the optional launch
+ * profile.
  * @param spec - TaskSpec in wire form.
  * @param expectedRevision - revision the caller observed.
- * @returns the parsed spec and revision.
- * @throws SelfDevelopmentRemoteError with `self-development/config-invalid` when either field is malformed.
+ * @param launchProfile - optional launch profile in wire form.
+ * @returns the parsed spec, revision, and profile.
+ * @throws SelfDevelopmentRemoteError with `self-development/config-invalid` when any field is malformed.
  */
-export function parseCreateTaskInput(spec: unknown, expectedRevision: unknown): {
+export function parseCreateTaskInput(spec: unknown, expectedRevision: unknown, launchProfile: unknown): {
   readonly spec: TaskSpecInput
   readonly expectedRevision: number
+  readonly launchProfile: LaunchProfileInput | undefined
 } {
   const parsed = parse(taskSpecSchema, 'spec', spec)
   parseTaskId(parsed.taskId)
   return {
     spec: parsed,
     expectedRevision: parse(zod.number().int().min(0), 'expectedRevision', expectedRevision),
+    launchProfile: launchProfile === undefined
+      ? undefined
+      : parse(launchProfileInputSchema, 'launchProfile', launchProfile),
   }
+}
+
+/**
+ * Validate a launch profile handed to `setLaunchProfile`.
+ * @param profile - launch profile in wire form.
+ * @returns the parsed profile with the derived fields still absent.
+ * @throws SelfDevelopmentRemoteError with `self-development/config-invalid` when a field is malformed.
+ */
+export function parseLaunchProfileInput(profile: unknown): LaunchProfileInput {
+  return parse(launchProfileInputSchema, 'launchProfile', profile)
+}
+
+/**
+ * Validate the stored launch profile read back from one file. The failure
+ * message names the file path and the violated field, never the file content.
+ * @param path - absolute path of the profile file the value was read from.
+ * @param value - the parsed JSON value of the file.
+ * @returns the validated profile.
+ * @throws SelfDevelopmentRemoteError with `self-development/config-invalid` when the value does not
+ *   satisfy the stored profile schema.
+ */
+export function parseStoredLaunchProfile(path: string, value: unknown): LaunchProfile {
+  const result = launchProfileSchema.safeParse(value)
+  if (!result.success) {
+    const detail = result.error.issues
+      .map(issue => `${issue.path.length === 0 ? 'profile' : issue.path.join('.')}: ${issue.message}`)
+      .join('; ')
+    throw new SelfDevelopmentRemoteError('self-development/config-invalid', `launch profile ${path} is invalid: ${detail}`)
+  }
+  return result.data
 }
 
 /**

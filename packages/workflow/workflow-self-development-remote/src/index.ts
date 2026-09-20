@@ -40,6 +40,7 @@ import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typer
 import type { SelfDevelopmentErrorCode } from '@deepseek-ai/dsh-workflow-self-development'
 import type { SelfDevelopmentRunnerErrorCode } from '@deepseek-ai/dsh-workflow-self-development-runner'
 import { buildConfirmationCard, taskTitle } from './card.ts'
+import { readLaunchProfile, resolveLaunchProfile, writeLaunchProfile } from './launch-profile.ts'
 import { toWireEvent, toWireOutcome, toWireProjection } from './wire.ts'
 import { SelfDevelopmentRemoteError } from './errors.ts'
 import {
@@ -48,6 +49,7 @@ import {
   parseAuthorizePlanningInput,
   parseConfirmPlanInput,
   parseCreateTaskInput,
+  parseLaunchProfileInput,
   parseRecordTrialApprovalInput,
   parseRunAttemptRequest,
   parseStopInput,
@@ -57,6 +59,9 @@ import {
 import type {
   BudgetApprovalInput,
   ConfirmedPlanInput,
+  LaunchProfile,
+  LaunchProfileInput,
+  LaunchProfileResult,
   PlanDraftInput,
   RecentEvent,
   RemoteConfig,
@@ -76,6 +81,9 @@ export type {
   CardBudget,
   ConfirmedPlanInput,
   ConfirmationCard,
+  LaunchProfile,
+  LaunchProfileInput,
+  LaunchProfileResult,
   PlanDraftInput,
   RecentEvent,
   RemoteConfig,
@@ -89,6 +97,12 @@ export type {
   TaskSpecInput,
   TaskSummary,
 } from './types.ts'
+export {
+  launchProfilePath,
+  readLaunchProfile,
+  resolveLaunchProfile,
+  writeLaunchProfile,
+} from './launch-profile.ts'
 export { toWireEvent, toWireOutcome, toWireProjection } from './wire.ts'
 
 /**
@@ -171,11 +185,15 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
   }
 
   /**
-   * Read one task's full projection and its confirmation-card view.
+   * Read one task's full projection and its confirmation-card view. The card
+   * carries the task's stored launch profile, when the host has set one; a
+   * stored but unreadable profile refuses the read with
+   * `self-development/config-invalid` rather than rendering without it.
    * @param taskId - task identity.
    * @returns the projection and the read-only card.
    * @throws SelfDevelopmentRemoteError with `self-development/disabled` while the facade is disabled,
-   *   `self-development/config-invalid` when the task id is malformed, or
+   *   `self-development/config-invalid` when the task id is malformed or the stored launch profile
+   *   fails its shape validation, or
    *   `self-development/task-unknown` when the task has no journal yet; the facade never creates a
    *   journal from a read path.
    * @throws whatever the task-control service rejects with, converted at the facade boundary into
@@ -188,7 +206,11 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
       const id = parseTaskId(taskId)
       await this.assertTaskExists(id)
       const projection = await this.ctx.selfDevelopmentTasks.state(id, this.clock())
-      return { projection: toWireProjection(projection), card: buildConfirmationCard(id, projection) }
+      const launchProfile = await readLaunchProfile(this.resolved.controlDirectory, id)
+      return {
+        projection: toWireProjection(projection),
+        card: buildConfirmationCard(id, projection, launchProfile),
+      }
     })
   }
 
@@ -208,25 +230,46 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
   }
 
   /**
-   * Create one task from a TaskSpec. The actor is the spec's `createdBy`
-   * field; it is checked against `allowedActors` when that list is non-empty.
+   * Create one task from a TaskSpec, optionally storing a launch profile in
+   * the same call. The actor is the spec's `createdBy` field; it is checked
+   * against `allowedActors` when that list is non-empty. The profile's
+   * derived `confirmedBy` and the spec's `createdBy` are both actor-checked.
+   * The profile is written only after the core commits the creation: a
+   * failed create leaves no profile file behind.
    * @param spec - TaskSpec in wire form.
    * @param expectedRevision - revision the caller observed; a new task is at revision 0.
+   * @param launchProfile - optional launch profile; host-only, and every field of it derives or
+   *   stores an isolation or confirmation setting.
    * @returns the operation id the facade generated plus the core's result.
    * @throws SelfDevelopmentRemoteError with `self-development/disabled`, `self-development/config-invalid`,
    *   `self-development/actor-forbidden`, or `self-development/host-only-field` from a non-host caller:
-   *   the spec fixes `stableBaselineDigest` and `allowedModificationScope`, which are isolation
-   *   settings the phone whitelist may not set.
+   *   the spec fixes `stableBaselineDigest` and `allowedModificationScope`, and a present
+   *   `launchProfile` fixes the launch isolation and confirmation settings, which the phone
+   *   whitelist may not set.
    * @throws whatever the task-control service rejects with, converted at the facade boundary into
    *   `self-development/core` (`details.code` keeps the original code).
    */
   @Remote('createTask')
-  async createTask(spec: TaskSpecInput, expectedRevision: number): Promise<RemoteOperationResult> {
+  async createTask(
+    spec: TaskSpecInput,
+    expectedRevision: number,
+    launchProfile?: LaunchProfileInput,
+  ): Promise<RemoteOperationResult> {
     return this.forward(async () => {
       this.assertEnabled()
-      const parsed = parseCreateTaskInput(spec, expectedRevision)
+      const parsed = parseCreateTaskInput(spec, expectedRevision, launchProfile)
+      if (parsed.launchProfile !== undefined) {
+        // The whole profile argument is host-only; this check fires before the
+        // method-level refusal so a phone caller sees the offending field.
+        assertHostOnlyFields('launchProfile', parsed.launchProfile, this.callerIsHost())
+      }
       this.assertCallerIsHost('createTask', 'stableBaselineDigest and allowedModificationScope')
       this.assertActorAllowed(parsed.spec.createdBy)
+      // The profile resolves against the spec being created, so the derived
+      // artifactPaths exist before the task's journal does.
+      const resolvedProfile = parsed.launchProfile === undefined
+        ? undefined
+        : this.resolveCheckedProfile(parsed.launchProfile, parsed.spec)
       const operationId = this.operationId()
       const controller = await this.open(parsed.spec.taskId)
       const result = await controller.createTask({
@@ -235,8 +278,60 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
         operationId,
         spec: parsed.spec,
       })
+      if (resolvedProfile !== undefined) {
+        await writeLaunchProfile(this.resolved.controlDirectory, parsed.spec.taskId, resolvedProfile)
+      }
       return { taskId: parsed.spec.taskId, operationId, ...result }
     })
+  }
+
+  /**
+   * Store one task's launch profile, replacing any previous one. The profile
+   * resolves its derived fields against the task's current spec and the
+   * facade's `allowedActors` before anything is written.
+   * @param taskId - task identity.
+   * @param profile - launch profile in wire form; every field is host-only.
+   * @returns the task id and the stored profile with every derived field filled.
+   * @throws SelfDevelopmentRemoteError with `self-development/disabled`, `self-development/config-invalid`
+   *   (malformed id, malformed profile, or an underivable `artifactPaths`/`confirmedBy`),
+   *   `self-development/actor-forbidden`, `self-development/host-only-field` from a non-host caller,
+   *   or `self-development/task-unknown` when the task has no journal yet.
+   * @throws whatever the task-control service rejects with, converted at the facade boundary into
+   *   `self-development/core` (`details.code` keeps the original code).
+   */
+  @Remote('setLaunchProfile')
+  async setLaunchProfile(taskId: string, profile: LaunchProfileInput): Promise<LaunchProfileResult> {
+    return this.forward(async () => {
+      this.assertEnabled()
+      const id = parseTaskId(taskId)
+      const parsed = parseLaunchProfileInput(profile)
+      this.assertCallerIsHost('setLaunchProfile', 'worktree, acceptancePath, artifactPaths, dataHome')
+      await this.assertTaskExists(id)
+      const controller = await this.open(id)
+      const resolved = this.resolveCheckedProfile(parsed, controller.projection.spec)
+      await writeLaunchProfile(this.resolved.controlDirectory, id, resolved)
+      return { taskId: id, launchProfile: resolved }
+    })
+  }
+
+  /**
+   * Resolve one launch profile input against a spec and actor-check the
+   * derived confirmer, so every profile the facade stores carries an
+   * allowlisted `confirmedBy`.
+   * @param input - the host's profile in wire form.
+   * @param spec - the spec supplying the `allowedModificationScope` default.
+   * @returns the resolved profile ready to store.
+   * @throws SelfDevelopmentRemoteError with `self-development/config-invalid` when a derived field
+   *   has no source, or `self-development/actor-forbidden` when the resolved confirmer is not
+   *   in the allowlist.
+   */
+  private resolveCheckedProfile(
+    input: LaunchProfileInput,
+    spec: { readonly allowedModificationScope: readonly string[] } | undefined,
+  ): LaunchProfile {
+    const resolved = resolveLaunchProfile(input, spec, this.resolved.allowedActors, Date.now())
+    this.assertActorAllowed(resolved.confirmedBy)
+    return resolved
   }
 
   /**
@@ -440,10 +535,17 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
    * `PresenceConfirmation` from the request and the frozen plan, and refuses
    * unless the caller explicitly passed `presenceAcknowledged: true` — a UI
    * must never default that acknowledgement. Requires the runner plugin.
+   *
+   * The five launch fields (`worktree`, `artifactPaths`, `acceptancePath`,
+   * `loopbackAllowlist`, `confirmedBy`) are optional: an absent field is
+   * derived from the task's stored launch profile, and an explicit value
+   * overrides the profile. A field that is neither explicit nor derivable
+   * refuses with `self-development/config-invalid`, naming the field.
    * @param request - the supervised attempt request in wire form.
    * @returns the runner's outcome plus the operation id the facade generated.
-   * @throws SelfDevelopmentRemoteError with `self-development/disabled`, `self-development/config-invalid`,
-   *   `self-development/actor-forbidden`, `self-development/presence-unconfirmed` when
+   * @throws SelfDevelopmentRemoteError with `self-development/disabled`, `self-development/config-invalid`
+   *   (a malformed field, an unreadable stored profile, or an underivable launch field),
+   *   `self-development/presence-unconfirmed` when
    *   `presenceAcknowledged` is not exactly `true`, `self-development/host-only-field` from a
    *   non-host caller (the launch assigns the worktree, acceptance, and artifact isolation
    *   settings, and a non-host request may not set the host-only `dataHome`), or
@@ -464,25 +566,38 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
           'presenceAcknowledged must be explicitly true; a UI must never default or pre-select the human-presence acknowledgement',
         )
       }
-      this.assertActorAllowed(parsed.confirmedBy)
+      // The task id names a file under launch-profiles/, so it is validated
+      // like every other id-addressed read before anything touches the disk.
+      const taskId = parseTaskId(parsed.taskId)
+      const profile = await readLaunchProfile(this.resolved.controlDirectory, taskId)
+      // Explicit values win; an absent value derives from the stored profile.
+      const effective: ResolvedRunAttemptRequest = {
+        ...parsed,
+        worktree: parsed.worktree ?? fromProfile(profile, 'worktree'),
+        artifactPaths: sortedUnique(parsed.artifactPaths ?? fromProfile(profile, 'artifactPaths')),
+        acceptancePath: parsed.acceptancePath ?? fromProfile(profile, 'acceptancePath'),
+        loopbackAllowlist: parsed.loopbackAllowlist ?? fromProfile(profile, 'loopbackAllowlist'),
+        confirmedBy: parsed.confirmedBy ?? fromProfile(profile, 'confirmedBy'),
+      }
+      this.assertActorAllowed(effective.confirmedBy)
       const runner = this.requireRunner()
-      const controller = await this.open(parsed.taskId)
-      const presence = await this.buildPresence(controller.projection, parsed)
+      const controller = await this.open(taskId)
+      const presence = await this.buildPresence(controller.projection, effective)
       const operationId = this.operationId()
       const outcome = await runner.runAttempt({
-        taskId: parsed.taskId,
+        taskId,
         expectedRevision: parsed.expectedRevision,
         operationId,
-        worktree: parsed.worktree,
-        artifactPaths: sortedUnique(parsed.artifactPaths),
-        acceptancePath: parsed.acceptancePath,
+        worktree: effective.worktree,
+        artifactPaths: effective.artifactPaths,
+        acceptancePath: effective.acceptancePath,
         // Host-only: only the stable host supplies a data directory, forwarded
         // verbatim; a phone channel omits the field and the runner keeps its
         // configured `dshHome`.
         ...(parsed.dataHome === undefined ? {} : { dshHome: parsed.dataHome }),
         presence,
       })
-      return toWireOutcome(outcome, operationId, parsed.worktree)
+      return toWireOutcome(outcome, operationId, effective.worktree)
     })
   }
 
@@ -689,7 +804,7 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
    */
   private async buildPresence(
     projection: TaskProjection,
-    request: RemoteRunAttemptRequest,
+    request: ResolvedRunAttemptRequest,
   ): Promise<PresenceConfirmation> {
     const plan = projection.plan
     if (plan === undefined) {
@@ -722,6 +837,23 @@ declare module '@deepseek-ai/cordis' {
 export default SelfDevelopmentRemote
 
 /**
+ * A run-attempt request whose five launch fields are all present: the caller
+ * supplied them, or the facade derived them from the task's launch profile.
+ */
+type ResolvedRunAttemptRequest = RemoteRunAttemptRequest & {
+  /** Experiment worktree, explicit or derived. */
+  readonly worktree: string
+  /** Artifact paths the acceptance covers, explicit or derived. */
+  readonly artifactPaths: readonly string[]
+  /** Acceptance definition path, explicit or derived. */
+  readonly acceptancePath: string
+  /** Loopback ports the session may bind, explicit or derived. */
+  readonly loopbackAllowlist: readonly number[]
+  /** Launch confirmer, explicit or derived. */
+  readonly confirmedBy: string
+}
+
+/**
  * Digest the raw bytes of the acceptance definition for the presence binding.
  * @param path - absolute path of the acceptance definition.
  * @returns the lowercase sha-256 hex digest of the file bytes.
@@ -750,6 +882,28 @@ async function acceptanceDefinitionDigest(path: string): Promise<string> {
  */
 function sortedUnique(paths: readonly string[]): string[] {
   return [...new Set(paths)].sort()
+}
+
+/**
+ * Read one launch field of a task's stored profile.
+ * @param profile - the stored profile, or `undefined` when the task has none.
+ * @param field - the launch field the request omitted.
+ * @returns the profile's value for the field.
+ * @throws SelfDevelopmentRemoteError with `self-development/config-invalid` naming the field when
+ *   no profile exists to derive it from.
+ */
+function fromProfile<K extends 'worktree' | 'artifactPaths' | 'acceptancePath' | 'loopbackAllowlist' | 'confirmedBy'>(
+  profile: LaunchProfile | undefined,
+  field: K,
+): LaunchProfile[K] {
+  const value = profile?.[field]
+  if (value === undefined) {
+    throw new SelfDevelopmentRemoteError(
+      'self-development/config-invalid',
+      `runAttempt.${field} is missing and the task has no launch profile`,
+    )
+  }
+  return value
 }
 
 /**

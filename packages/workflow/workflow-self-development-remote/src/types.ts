@@ -74,9 +74,71 @@ export interface RemoteConfig {
   readonly allowedActors: readonly string[]
   /**
    * The task-control service's private control directory. The facade reads it
-   * only to list task journal directories; it never writes under it.
+   * to list task journal directories and writes only its own
+   * `launch-profiles/<taskId>.json` files under it (see {@link LaunchProfile});
+   * it never touches the `tasks/` subtree.
    */
   readonly controlDirectory: string
+}
+
+/**
+ * Host-only launch settings handed to `setLaunchProfile` or `createTask`.
+ * Every field is an isolation or confirmation setting the stable host fixes;
+ * a non-host caller is refused with `self-development/host-only-field` for
+ * any `launchProfile` argument. Derived fields stay omitted: the facade
+ * derives `artifactPaths` from the task's `allowedModificationScope`,
+ * `confirmedBy` from a sole `allowedActors` entry, and `loopbackAllowlist`
+ * from `[]` when the field is absent.
+ */
+export interface LaunchProfileInput {
+  /** Experiment worktree the attempts run in; absolute path. */
+  readonly worktree: string
+  /** Absolute path of the stable-side acceptance definition. */
+  readonly acceptancePath: string
+  /** Worktree-relative artifact paths the acceptance covers; derived from the spec when absent. */
+  readonly artifactPaths?: readonly string[] | undefined
+  /**
+   * Per-attempt data directory, forwarded as the runner's `dshHome`; assigned
+   * by the stable-side workspace service. Stored verbatim and never derived.
+   */
+  readonly dataHome?: string | undefined
+  /** Loopback ports the supervised session may bind; `[]` when absent. */
+  readonly loopbackAllowlist?: readonly number[] | undefined
+  /** Human actor recorded as the launch confirmer; derived from a sole `allowedActors` entry when absent. */
+  readonly confirmedBy?: string | undefined
+}
+
+/**
+ * The stored per-task launch profile: the host's {@link LaunchProfileInput}
+ * after the facade filled every derived field, plus the write timestamp. One
+ * file per task at `<controlDirectory>/launch-profiles/<taskId>.json`, mode
+ * 0600 inside a 0700 directory. This is per-task deployment configuration,
+ * not task state: the core journal never records it and no facade method
+ * derives a decision from it beyond launching attempts.
+ */
+export interface LaunchProfile {
+  /** Experiment worktree the attempts run in; absolute path. */
+  readonly worktree: string
+  /** Absolute path of the stable-side acceptance definition. */
+  readonly acceptancePath: string
+  /** Worktree-relative artifact paths the acceptance covers. */
+  readonly artifactPaths: readonly string[]
+  /** Per-attempt data directory forwarded as the runner's `dshHome`; absent when the host omitted it. */
+  readonly dataHome?: string | undefined
+  /** Loopback ports the supervised session may bind. */
+  readonly loopbackAllowlist: readonly number[]
+  /** Human actor recorded as the launch confirmer; checked against `allowedActors` like an explicit one. */
+  readonly confirmedBy: string
+  /** Trusted-clock observation the profile was written at. */
+  readonly updatedAt: number
+}
+
+/** Result of one `setLaunchProfile` call. */
+export interface LaunchProfileResult {
+  /** Task the profile belongs to. */
+  readonly taskId: string
+  /** The stored profile with every derived field filled. */
+  readonly launchProfile: LaunchProfile
 }
 
 /** Wire form of a TaskSpec handed to `createTask`. */
@@ -216,6 +278,12 @@ export interface ConfirmationCard {
   readonly consumedBudget: { readonly rounds: number; readonly timeMs: number }
   /** 费用及调用限制: literal `未知，不放行` — the facade knows no balance, so nothing auto-proceeds. */
   readonly costLimits: string
+  /**
+   * The task's stored launch profile with every derived field filled, when
+   * the host has set one; absent otherwise. Read-only display for the launch
+   * view: the values `runAttempt` would derive its omitted fields from.
+   */
+  readonly launchProfile?: LaunchProfile
 }
 
 /**
@@ -284,22 +352,42 @@ export interface RemoteRunAttemptRequest {
   readonly taskId: string
   /** Task revision the caller observed; the launch applies only at this revision. */
   readonly expectedRevision: number
-  /** Experiment worktree as handed in; it must resolve inside the runner's experiments root. */
-  readonly worktree: string
-  /** Worktree-relative artifact paths the acceptance covers. */
-  readonly artifactPaths: readonly string[]
-  /** Absolute path of the stable-side acceptance definition. */
-  readonly acceptancePath: string
+  /**
+   * Experiment worktree as handed in; it must resolve inside the runner's
+   * experiments root. Optional: the task's launch profile supplies it when
+   * absent, and an explicit value overrides the profile.
+   */
+  readonly worktree?: string | undefined
+  /**
+   * Worktree-relative artifact paths the acceptance covers. Optional: the
+   * launch profile supplies them when absent, and an explicit value
+   * overrides the profile.
+   */
+  readonly artifactPaths?: readonly string[] | undefined
+  /**
+   * Absolute path of the stable-side acceptance definition. Optional: the
+   * launch profile supplies it when absent, and an explicit value overrides
+   * the profile.
+   */
+  readonly acceptancePath?: string | undefined
   /**
    * Host-only per-attempt data directory, forwarded as the runner's `dshHome`.
    * Assigned by the stable-side workspace service; a phone caller must omit
    * this field, and the wire schema marks it `hostOnly` for that reason.
    */
   readonly dataHome?: string | undefined
-  /** Non-empty name of the person who gave the confirmation; checked against `allowedActors`. */
-  readonly confirmedBy: string
-  /** Loopback ports the supervised session may bind. */
-  readonly loopbackAllowlist: readonly number[]
+  /**
+   * Non-empty name of the person who gave the confirmation; checked against
+   * `allowedActors`. Optional: the launch profile supplies it when absent,
+   * and an explicit value overrides the profile.
+   */
+  readonly confirmedBy?: string | undefined
+  /**
+   * Loopback ports the supervised session may bind. Optional: the launch
+   * profile supplies them when absent, and an explicit value overrides the
+   * profile.
+   */
+  readonly loopbackAllowlist?: readonly number[] | undefined
   /**
    * Explicit human-presence acknowledgement. The request is refused without
    * `true`; a UI must never default, pre-select, or imply this field.

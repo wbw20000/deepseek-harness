@@ -886,6 +886,9 @@ export const TYPE_LINK_EXEMPTIONS: Readonly<Record<string, string>> = {
   ConfirmedPlanInput: 'facade confirmed plan wire form is owned by packages/workflow/workflow-self-development-remote/README.md',
   BudgetApprovalInput: 'facade budget approval wire form is owned by packages/workflow/workflow-self-development-remote/README.md',
   RemoteRunAttemptRequest: 'facade attempt request is owned by packages/workflow/workflow-self-development-remote/README.md',
+  LaunchProfileInput: 'facade launch profile wire form is owned by packages/workflow/workflow-self-development-remote/README.md',
+  LaunchProfile: 'stored per-task launch profile is owned by packages/workflow/workflow-self-development-remote/README.md',
+  LaunchProfileResult: 'facade launch profile result is owned by packages/workflow/workflow-self-development-remote/README.md',
   RemoteConfig: 'facade deployment config is owned by packages/workflow/workflow-self-development-remote/README.md',
 }
 

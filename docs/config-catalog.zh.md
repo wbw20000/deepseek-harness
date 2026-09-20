@@ -3888,7 +3888,9 @@ export interface RemoteConfig {
   readonly allowedActors: readonly string[]
   /**
    * The task-control service's private control directory. The facade reads it
-   * only to list task journal directories; it never writes under it.
+   * to list task journal directories and writes only its own
+   * `launch-profiles/<taskId>.json` files under it (see {@link LaunchProfile});
+   * it never touches the `tasks/` subtree.
    */
   readonly controlDirectory: string
 }

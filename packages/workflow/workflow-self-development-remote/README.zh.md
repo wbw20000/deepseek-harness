@@ -10,12 +10,13 @@ kind: "package-reference"
 <a id="summary"></a>
 ## 概述
 
-把自开发任务控制服务与受监督 runner 暴露成一个稳定的类型化 Remote 面，供 M4 UI 与手机白名单使用。门面不持有状态、不做决定：读路径返回任务投影与只读确认卡，写路径携带门面生成的 operationId 转发给核心控制器，试验启动只经 runner 并要求显式的人工在场确认。部署设置 `enabled: true` 之前，所有方法以 `self-development/disabled` 拒绝；服务不进入任何默认 bundle，profile 必须显式登记插件，此后 Typert 网关以 `selfDevelopmentRemote` 命名空间挂载它。
+把自开发任务控制服务与受监督 runner 暴露成一个稳定的类型化 Remote 面，供 M4 UI 与手机白名单使用。门面不做决定：读路径返回任务投影与只读确认卡，写路径携带门面生成的 operationId 转发给核心控制器，试验启动只经 runner 并要求显式的人工在场确认。每任务启动档案是宿主写入的部署配置而非任务状态，`runAttempt` 从中推导省略的启动字段。`enabled: true` 之前所有方法拒绝；服务不进入任何默认 bundle，挂载为 `selfDevelopmentRemote` 命名空间。
 
 ## 目录
 
 - [Service](#service)
 - [Methods](#methods)
+- [Launch profiles](#launch-profiles)
 - [Permission model](#permission-model)
 - [Phone whitelist mapping](#phone-whitelist-mapping)
 - [Error codes](#error-codes)
@@ -35,7 +36,7 @@ kind: "package-reference"
 |---|---|
 | `enabled` | 总开关。默认 `false`；为 `false` 时所有方法返回 `self-development/disabled`。 |
 | `allowedActors` | 操作者白名单。为空（默认）表示不限制；非空时操作的 actor 字段必须出现在列表中。 |
-| `controlDirectory` | 任务控制服务的控制目录。门面只读取它以列出任务日志，从不写入。 |
+| `controlDirectory` | 任务控制服务的控制目录。门面读取它以列出任务日志，并只在其中写自己的 `launch-profiles/<taskId>.json` 文件；从不触碰 `tasks/` 子树。 |
 
 `controlDirectory` 重复了任务控制服务的值，因为该服务不公开其已解析配置，且本包不得修改它。门面在构造时校验该路径，相对路径在加载即失败。
 
@@ -50,17 +51,30 @@ kind: "package-reference"
 | 方法 | 转发 | 约定 |
 |---|---|---|
 | `listTasks()` | 只读 | 扫描 `<controlDirectory>/tasks/*`，每个任务一行：`taskId`、`status`、`revision`、`title`（requirement 前 80 字）。尚无任务时返回 `[]`；该读路径从不创建任务日志目录。 |
-| `getTask(taskId)` | 只读 | 返回任务的 `TaskProjection` 与 `card`（只读确认卡视图）。任务尚无日志时以 `self-development/task-unknown` 拒绝。 |
+| `getTask(taskId)` | 只读 | 返回任务的 `TaskProjection` 与 `card`（只读确认卡视图）。宿主已设置启动档案时，卡的 `launchProfile` 携带填满全部推导字段的已存档案。任务尚无日志时以 `self-development/task-unknown` 拒绝。 |
 | `recentEvents()` | 只读 | 返回事件消费方的标题级通知缓冲（从旧到新）；事件消费方插件未加载时返回 `[]`。 |
-| `createTask(spec, expectedRevision)` | `createTask` | 按 TaskSpec 线上形式创建任务。actor 为 `spec.createdBy`。返回门面生成的 `operationId`。仅限宿主：非宿主调用方以 `self-development/host-only-field` 拒绝，因为 spec 固化了 `stableBaselineDigest` 与 `allowedModificationScope`。 |
+| `createTask(spec, expectedRevision, launchProfile?)` | `createTask` | 按 TaskSpec 线上形式创建任务。actor 为 `spec.createdBy`。携带 `launchProfile` 时，已解析档案只在核心提交创建之后写入，创建失败不会留下档案文件。返回门面生成的 `operationId`。仅限宿主：非宿主调用方以 `self-development/host-only-field` 拒绝，因为 spec 固化了 `stableBaselineDigest` 与 `allowedModificationScope`，且档案固化试验的隔离与确认设置。 |
 | `authorizePlanning(taskId, expectedRevision, authorizedBy)` | `authorizePlanning` | 授予独立的规划授权；它不批准开发，也不消耗轮数。 |
 | `submitPlanDraft(taskId, expectedRevision, draft)` | `submitPlanDraft` | 提交草拟计划，等待人工确认。 |
 | `confirmPlan(taskId, expectedRevision, plan, actor)` | `confirmPlan` | 冻结人工确认的计划。actor 为显式的 `actor` 参数。 |
 | `approveBudget(taskId, expectedRevision, approval)` | `approveBudget` | 记录或替换人工预算批准。actor 为 `approval.approvedBy`；已用轮数与时间从不清零。 |
 | `stop(taskId, expectedRevision, reason?)` | runner `stop`，否则核心 `stop` | 停止任务。runner 已加载时，其拥有的进程组与证据写入完成后才返回结果；未加载时只执行核心停止。 |
 | `recordTrialApproval(taskId, expectedRevision, approvedBy)` | `recordTrialApproval` | 记录绑定当前已验证结果的人工试用批准。actor 为 `approvedBy`。 |
-| `runAttempt(request)` | runner `runAttempt` | 启动一个受监督试验。门面组装 `PresenceConfirmation`：`confirmedAt` 取当下的一次可信时钟观测，`taskId`、`testPlanDigest` 取冻结计划，`acceptanceDefinitionDigest` 取定义字节摘要，`artifactPaths` 去重升序，acknowledgement 固定为 `supervised-not-unattended`。要求显式传入 `presenceAcknowledged: true`。仅限宿主：非宿主调用方以 `self-development/host-only-field` 拒绝——试验启动会指定 worktree、验收与产物等隔离设置——且非宿主请求不得设置仅限宿主的 `dataHome`，该字段由稳定宿主转发为 runner 的每次尝试 `dshHome`。返回 runner 结果与 `operationId`。 |
+| `setLaunchProfile(taskId, profile)` | 档案文件写入 | 存储该任务的启动档案（见下文），替换已有档案，并返回解析后的档案。任务尚无日志时以 `self-development/task-unknown` 拒绝。仅限宿主：非宿主调用方以 `self-development/host-only-field` 拒绝。 |
+| `runAttempt(request)` | runner `runAttempt` | 启动一个受监督试验。五个启动字段（`worktree`、`artifactPaths`、`acceptancePath`、`loopbackAllowlist`、`confirmedBy`）均可选：缺省字段从任务已存启动档案推导，显式传入的值优先于档案。门面组装 `PresenceConfirmation`：`confirmedAt` 取当下的一次可信时钟观测，`taskId`、`testPlanDigest` 取冻结计划，`acceptanceDefinitionDigest` 取定义字节摘要，`artifactPaths` 去重升序，acknowledgement 固定为 `supervised-not-unattended`。要求显式传入 `presenceAcknowledged: true`。仅限宿主：非宿主调用方以 `self-development/host-only-field` 拒绝——试验启动会指定 worktree、验收与产物等隔离设置——且非宿主请求不得设置仅限宿主的 `dataHome`，该字段由稳定宿主转发为 runner 的每次尝试 `dshHome`。返回 runner 结果与 `operationId`。 |
 | `activeTasks()` | runner `activeTasks` | 返回 runner 当前拥有的试验的任务 id；无 runner 时为 `[]`。 |
+
+<a id="launch-profiles"></a>
+
+### 启动档案
+
+启动档案记录宿主的每任务启动设置，让一键启动不再要求人工填写可推导字段。`setLaunchProfile` 与 `createTask` 第三参采用同一线上形式：必填 `worktree` 与 `acceptancePath`（绝对路径），可选 `artifactPaths`、`dataHome`、`loopbackAllowlist`、`confirmedBy`。门面解析可选字段并把解析后的形式存到 `<controlDirectory>/launch-profiles/<taskId>.json`，原子写入（临时文件 + rename），文件 0600、目录 0700：
+
+- `artifactPaths` 缺省取任务的 `allowedModificationScope`；任务尚无 spec 时没有来源，调用以 `self-development/config-invalid` 拒绝。
+- `confirmedBy` 缺省取唯一的 `allowedActors` 条目；没有或不止一个时调用拒绝。推导出的确认人与显式值一样经过 actor 校验。
+- `loopbackAllowlist` 缺省取 `[]`；`dataHome` 永不推导。
+
+读路径校验已存形状：文件不是合法 JSON 或缺字段时，以 `self-development/config-invalid` 拒绝，message 只点名文件路径、不含文件内容。`getTask` 把已存档案渲染为 `card.launchProfile`；`runAttempt` 从档案推导其五个缺省启动字段，显式请求值优先于档案；既非显式又不可推导的字段以 `self-development/config-invalid` 拒绝并点名该字段，如 `runAttempt.worktree is missing and the task has no launch profile`。`presenceAcknowledged` 永不推导。
 
 每个变更方法用 `randomUUID()` 生成 `operationId` 并返回给调用方；需要核心重放语义的重试必须带回该 id。所有参数先在门面校验，核心与 runner 的拒绝在门面边界转为 `self-development/core`，属主包的机器可路由 code 保留在 `details.code`。
 
@@ -71,7 +85,7 @@ kind: "package-reference"
 
 - **`enabled`** — `false` 时所有方法以 `self-development/disabled` 拒绝，因此仅挂载插件不会启用任何能力。
 - **`allowedActors`** — 为空表示不限制；非空时约束携带 actor 的操作：`createTask`（`spec.createdBy`）、`confirmPlan`（`actor` 参数）、`approveBudget`（`approval.approvedBy`）、`recordTrialApproval`（`approvedBy`）、`runAttempt`（`confirmedBy`）。进度读取、规划授权、草拟与停止对任何 actor 开放，因为看进度、插话与停止正是手机白名单面向的低风险操作。
-- **调用方来源** — 门面读取可选连接服务的调用方上下文（`ctx.connection.caller.current()`，即冻结的 `ConnectionCaller` 契约），仅当请求携带回环 Host 头、或完全没有调用方上下文时视为稳定宿主；非回环 Host 头即手机调用方。`runAttempt` 与 `createTask` 会指定隔离设置——试验启动的 worktree、验收路径、产物路径与 `dataHome`；任务的 `stableBaselineDigest` 与 `allowedModificationScope`——因此手机调用方调用二者时，门面在触碰核心或 runner 之前即以 `self-development/host-only-field` 拒绝。读方法、`authorizePlanning`、`submitPlanDraft`、`confirmPlan`、`approveBudget`、`stop` 与 `recordTrialApproval` 对手机保持可用。
+- **调用方来源** — 门面读取可选连接服务的调用方上下文（`ctx.connection.caller.current()`，即冻结的 `ConnectionCaller` 契约），仅当请求携带回环 Host 头、或完全没有调用方上下文时视为稳定宿主；非回环 Host 头即手机调用方。`runAttempt`、`createTask` 与 `setLaunchProfile` 会指定隔离设置——试验启动的 worktree、验收路径、产物路径与 `dataHome`；任务的 `stableBaselineDigest` 与 `allowedModificationScope`——因此手机调用方调用三者时，门面在触碰核心或 runner 之前即以 `self-development/host-only-field` 拒绝，且手机调用方不得设置或替换任务的启动档案。读方法、`authorizePlanning`、`submitPlanDraft`、`confirmPlan`、`approveBudget`、`stop` 与 `recordTrialApproval` 对手机保持可用。
 
 未挂载连接服务、或调用发生在任何 `@Remote` 请求之外时，没有调用方上下文，该调用按宿主处理：这是本机直连与测试语义。这也意味着门面自身不会硬化手机通道——必须挂载连接服务，调用方来源闸门才会生效。
 
@@ -92,6 +106,7 @@ kind: "package-reference"
 | 停止 | `stop` |
 | 审批继续/驳回 | `recordTrialApproval` |
 | 创建任务 | 仅限宿主。`createTask` 固化 `stableBaselineDigest` 与 `allowedModificationScope`；手机调用方以 `self-development/host-only-field` 拒绝。 |
+| 设置启动档案 | 仅限宿主。`setLaunchProfile` 与 `createTask` 第三参固化试验的隔离与确认设置；手机调用方以 `self-development/host-only-field` 拒绝。 |
 | 发起试验 | 仅限宿主。`runAttempt` 指定 worktree、验收与产物等隔离设置；手机调用方以 `self-development/host-only-field` 拒绝。 |
 | 升级批准 | **本门面不存在。** 没有任何方法记录升级、发布或安装批准；发布审核表在本包之外。 |
 | 访问试验版 | 不暴露。门面只在 `runAttempt` 结果中返回证据路径；没有方法读取试验产物。 |
@@ -105,10 +120,10 @@ kind: "package-reference"
 
 | Code | 含义 |
 |---|---|
-| `self-development/config-invalid` | 服务配置或 Remote 参数在门面边界未通过形状校验。 |
+| `self-development/config-invalid` | 服务配置或 Remote 参数在门面边界未通过形状校验；同一 code 也用于拒绝损坏或缺字段的已存启动档案，以及既非显式又不可推导的 `runAttempt` 启动字段。 |
 | `self-development/disabled` | 门面未开启；所有方法拒绝。 |
 | `self-development/actor-forbidden` | 操作的 actor 不在配置的白名单内。 |
-| `self-development/host-only-field` | 非宿主调用方调用了 `runAttempt` 或 `createTask`，或设置了标记 `hostOnly` 的线上字段（当前为 `runAttempt.dataHome`）。 |
+| `self-development/host-only-field` | 非宿主调用方调用了 `runAttempt`、`createTask` 或 `setLaunchProfile`，或设置了标记 `hostOnly` 的线上字段（当前为 `runAttempt.dataHome` 与全部 `launchProfile` 字段）。 |
 | `self-development/presence-unconfirmed` | `runAttempt` 未收到 `presenceAcknowledged: true`。 |
 | `self-development/runner-unavailable` | 试验相关方法需要受监督 runner 插件，但插件未加载。 |
 | `self-development/task-unknown` | 读路径寻址的任务没有日志目录。 |

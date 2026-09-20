@@ -8,7 +8,7 @@
  */
 
 import type { TaskProjection } from '@deepseek-ai/dsh-workflow-self-development'
-import type { BudgetApproval, CardBudget, ConfirmationCard } from './types.ts'
+import type { BudgetApproval, CardBudget, ConfirmationCard, LaunchProfile } from './types.ts'
 
 /** 建议预算及依据 fallback: this increment has no similar-task history source. */
 const BUDGET_BASIS_UNAVAILABLE = '无依据'
@@ -23,9 +23,14 @@ export const TITLE_MAX_CHARS = 80
  * Build the confirmation-card view of one projection.
  * @param taskId - task the projection belongs to.
  * @param projection - control state projected from the journal.
+ * @param launchProfile - the task's stored launch profile, or `undefined` when the host has set none.
  * @returns the read-only card view.
  */
-export function buildConfirmationCard(taskId: string, projection: TaskProjection): ConfirmationCard {
+export function buildConfirmationCard(
+  taskId: string,
+  projection: TaskProjection,
+  launchProfile?: LaunchProfile,
+): ConfirmationCard {
   const { spec, plan, approval } = projection
   return {
     taskId,
@@ -39,6 +44,7 @@ export function buildConfirmationCard(taskId: string, projection: TaskProjection
     budget: buildCardBudget(approval),
     consumedBudget: { rounds: projection.consumedRounds, timeMs: projection.consumedTimeMs },
     costLimits: COST_LIMITS_UNKNOWN,
+    ...(launchProfile === undefined ? {} : { launchProfile }),
   }
 }
 
