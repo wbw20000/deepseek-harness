@@ -88,7 +88,7 @@ Parameters: `{ taskId }`. Returns the task's control-state summary (status, revi
 
 ### `self_development_stop`
 
-Parameters: `{ taskId, reason }`. Forwards to the facade's `stopCampaign(taskId, reason)` and returns the resulting campaign state, or `{ ok: false, reason, error }` on refusal.
+Parameters: `{ taskId, reason }`. Forwards to the facade's `stopCampaign(taskId, reason)` and returns the resulting campaign state, or `{ ok: false, reason, error }` on refusal. A campaign that had already settled comes back unchanged and leaves the task where it was — passed and `awaiting-trial` — so when the task is still not `stopped` afterwards the tool stops the task itself (the facade's `stop(taskId, revision)`, core `task/stopped`) and reports `task: { status: 'stopped', revision }`: the user is discarding a task they do not want merged, and a stopped task is what the next proposal's reclamation releases (its worktree stays until then).
 
 ### `self_development_merge`
 

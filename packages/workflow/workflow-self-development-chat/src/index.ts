@@ -358,7 +358,7 @@ export class SelfDevelopmentChat extends Service {
 
     this.disposers.push(ctx.tools.register(defineTool({
       name: 'self_development_stop',
-      description: 'Stop one running self-development campaign: the current attempt is cancelled and the campaign loop ends. Pass the reason the user gave.',
+      description: 'Stop one self-development task: a running campaign has its current attempt cancelled and its loop ended; a task whose campaign already settled (passed, awaiting trial) is discarded by stopping the task, so its worktree is reclaimed at the next proposal instead of being merged. Pass the reason the user gave.',
       parameters: {
         taskId: { type: 'string', required: true, description: 'The task id returned by self_development_propose.' },
         reason: { type: 'string', required: true, description: 'The human-readable stop reason.' },
@@ -552,9 +552,9 @@ function statusResultLine(value: JsonValue): string {
 /** One-line model/UI summary of a stop outcome. */
 function stopResultLine(value: JsonValue): string {
   const outcome = value as unknown as StopOutcome
-  return outcome.ok
-    ? `Campaign stopped: ${outcome.campaign?.status}`
-    : `Stop failed — ${outcome.error?.message ?? outcome.reason}`
+  if (!outcome.ok) return `Stop failed — ${outcome.error?.message ?? outcome.reason}`
+  const taskText = outcome.task === undefined ? '' : '; task stopped, its worktree is reclaimed at the next proposal'
+  return `Campaign stopped: ${outcome.campaign?.status}${taskText}`
 }
 
 /** One-line model/UI summary of a merge outcome. */

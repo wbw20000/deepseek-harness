@@ -133,6 +133,12 @@ class FakeFacade implements SelfDevelopmentRemoteFacade {
     return { ...CAMPAIGN, taskId, status: 'stopped', reason }
   }
 
+  /** Task-level stop (core `task/stopped`); the stop tool calls it once a campaign is not running. */
+  async stop(taskId: string, expectedRevision: number): Promise<FacadeOperationResult> {
+    this.calls.push({ name: 'stop', args: [taskId, expectedRevision] })
+    return { taskId, operationId: 'op-stop', revision: expectedRevision + 1, replayed: false }
+  }
+
   async getTask(taskId: string): Promise<TaskDetailView> {
     this.calls.push({ name: 'getTask', args: [taskId] })
     return this.getTaskDetail
@@ -923,8 +929,17 @@ describe('self_development_stop tool', () => {
     const def = tools.find('self_development_stop')
     const value = await def.execute({ taskId: 'task-1', reason: 'user asked' }, fakeExec())
     const rendered = def.output.render({ taskId: 'task-1', reason: 'user asked' }, value as never)
-    expect((rendered[0] as { text: string }).text).toContain('Campaign stopped: stopped')
+    // The default fake task is `ready` with a stopped campaign, so the task itself is stopped too.
+    expect((rendered[0] as { text: string }).text).toBe('Campaign stopped: stopped; task stopped, its worktree is reclaimed at the next proposal')
     expect(facade.calls.some(call => call.name === 'stopCampaign')).toBe(true)
+    expect(facade.calls.some(call => call.name === 'stop')).toBe(true)
+  })
+
+  it('renders only the campaign status when the task itself was not stopped', () => {
+    const { tools } = makeService({ facade: new FakeFacade() })
+    const def = tools.find('self_development_stop')
+    const rendered = def.output.render({ taskId: 'task-1', reason: 'x' }, { ok: true, campaign: { ...CAMPAIGN, status: 'running' } })
+    expect((rendered[0] as { text: string }).text).toBe('Campaign stopped: running')
   })
 
   it('renders the failure line when the stop is refused', async () => {

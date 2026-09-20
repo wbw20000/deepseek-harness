@@ -136,6 +136,12 @@ class FakeFacade implements SelfDevelopmentRemoteFacade {
     return { taskId, status: 'stopped', startedAt: 1, updatedAt: 2, rounds: 1, reason, acknowledgement: 'unattended-accepted' }
   }
 
+  /** Task-level stop (core `task/stopped`); the stop tool calls it once a campaign is not running. */
+  async stop(taskId: string, expectedRevision: number): Promise<FacadeOperationResult> {
+    this.calls.push({ name: 'stop', args: [taskId, expectedRevision] })
+    return { taskId, operationId: 'op-stop', revision: expectedRevision + 1, replayed: false }
+  }
+
   async getTask(taskId: string): Promise<TaskDetailView> {
     this.calls.push({ name: 'getTask', args: [taskId] })
     if (this.getTaskFailFor.has(taskId)) throw new Error(`getTask(${taskId}) failed`)

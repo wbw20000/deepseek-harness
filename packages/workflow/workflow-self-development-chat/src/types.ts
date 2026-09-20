@@ -203,6 +203,8 @@ export interface SelfDevelopmentRemoteFacade {
   startCampaign(taskId: string, expectedRevision: number, options: CampaignOptions): Promise<{ taskId: string; campaign: CampaignState }>
   campaign(taskId: string): Promise<CampaignState | undefined>
   stopCampaign(taskId: string, reason: string): Promise<CampaignState>
+  /** Stop the task itself (core `task/stopped`); used to discard a passed, awaiting-trial task the user does not want merged. */
+  stop(taskId: string, expectedRevision: number): Promise<FacadeOperationResult>
   getTask(taskId: string): Promise<TaskDetailView>
   /** Record that the user's "merge to stable" request counts as trial approval for the task (DI-b wave). */
   recordTrialApproval(taskId: string, expectedRevision: number, approvedBy: string): Promise<FacadeOperationResult>
@@ -448,6 +450,12 @@ export interface StopOutcome {
   readonly ok: boolean
   readonly reason?: string
   readonly campaign?: CampaignState
+  /**
+   * Present when the task itself was stopped too: a task whose campaign had
+   * already settled (passed and awaiting trial) is discarded by stopping it,
+   * so the next proposal reclaims its worktree.
+   */
+  readonly task?: { readonly status: string; readonly revision: number }
   readonly error?: ProposeError
 }
 

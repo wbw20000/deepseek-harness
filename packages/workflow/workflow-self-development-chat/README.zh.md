@@ -88,7 +88,7 @@ kind: "package-reference"
 
 ### `self_development_stop`
 
-参数：`{ taskId, reason }`。转发给门面的 `stopCampaign(taskId, reason)`，返回结果战役状态；被拒绝时返回 `{ ok: false, reason, error }`。
+参数：`{ taskId, reason }`。转发给门面的 `stopCampaign(taskId, reason)`，返回结果战役状态；被拒绝时返回 `{ ok: false, reason, error }`。已经收尾的战役会原样返回、任务停在原处——已通过、`awaiting-trial`——所以之后任务仍不是 `stopped` 时，本工具会把任务本身停掉（门面的 `stop(taskId, revision)`，核心 `task/stopped`），并报告 `task: { status: 'stopped', revision }`：用户是在丢弃一个不想合并的任务，而停掉的任务正是下一次提案回收扫描会释放的（工作区留到那时）。
 
 ### `self_development_merge`
 

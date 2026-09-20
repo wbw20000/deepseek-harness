@@ -61,18 +61,33 @@ class FakeFacade implements SelfDevelopmentRemoteFacade {
     return taskId === 'task-1' ? CAMPAIGN : undefined
   }
 
+  /** What `stopCampaign` answers; a settled campaign comes back unchanged, as the real facade does. */
+  stopCampaignStatus: CampaignState['status'] = 'stopped'
+  taskStopCalls: { taskId: string; expectedRevision: number }[] = []
+  /** Status `getTask` reports for task-1; the stop path stops the task itself only when this is not terminal. */
+  taskStatus = 'attempting'
+
   async stopCampaign(taskId: string, reason: string): Promise<CampaignState> {
     this.stopCalls.push({ taskId, reason })
-    return { ...CAMPAIGN, taskId, status: 'stopped', reason }
+    return this.stopCampaignStatus === 'stopped'
+      ? { ...CAMPAIGN, taskId, status: 'stopped', reason }
+      : { ...CAMPAIGN, taskId, status: this.stopCampaignStatus }
   }
 
+  async stop(
+    taskId: string,
+    expectedRevision: number,
+  ): Promise<{ taskId: string; operationId: string; revision: number; replayed: boolean }> {
+    this.taskStopCalls.push({ taskId, expectedRevision })
+    return { taskId, operationId: 'op-stop', revision: expectedRevision + 1, replayed: false }
+  }
 
   async getTask(taskId: string): Promise<TaskDetailView> {
     if (this.getTaskError !== undefined) throw this.getTaskError
     return taskId === 'task-1'
       ? {
         projection: {
-          status: 'attempting',
+          status: this.taskStatus,
           revision: 7,
           spec: { requirement: 'add search' },
           consumedRounds: 3,
@@ -247,14 +262,39 @@ describe('buildStatusReport', () => {
 })
 
 describe('stopTask', () => {
-  it('forwards the reason and projects the stopped campaign', async () => {
+  it('forwards the reason and projects the stopped campaign, stopping the task too once the campaign is not running', async () => {
     const { facade, deps } = makeDeps()
     const outcome = await stopTask(deps, 'task-1', 'user asked to stop')
     expect(outcome).toEqual({
       ok: true,
       campaign: { ...CAMPAIGN, status: 'stopped', reason: 'user asked to stop' },
+      task: { status: 'stopped', revision: 8 },
     })
     expect(facade.stopCalls).toEqual([{ taskId: 'task-1', reason: 'user asked to stop' }])
+    expect(facade.taskStopCalls).toEqual([{ taskId: 'task-1', expectedRevision: 7 }])
+  })
+
+  it('discards a passed, awaiting-trial task: the settled campaign is left as is and the task is stopped', async () => {
+    const { facade, deps } = makeDeps()
+    facade.stopCampaignStatus = 'passed'
+    facade.taskStatus = 'awaiting-trial'
+    const outcome = await stopTask(deps, 'task-1', 'not wanted after all')
+    expect(outcome.ok).toBe(true)
+    expect(outcome.campaign?.status).toBe('passed')
+    expect(outcome.task).toEqual({ status: 'stopped', revision: 8 })
+    expect(facade.taskStopCalls).toEqual([{ taskId: 'task-1', expectedRevision: 7 }])
+  })
+
+  it('leaves the task alone while its campaign is still running, or when it is already stopped', async () => {
+    const { facade, deps } = makeDeps()
+    facade.stopCampaignStatus = 'running'
+    const running = await stopTask(deps, 'task-1', 'x')
+    expect(running).toEqual({ ok: true, campaign: { ...CAMPAIGN, status: 'running' } })
+    facade.stopCampaignStatus = 'stopped'
+    facade.taskStatus = 'stopped'
+    const already = await stopTask(deps, 'task-1', 'x')
+    expect(already.task).toBeUndefined()
+    expect(facade.taskStopCalls).toEqual([])
   })
 
   it('fails with the facade error when the stop is refused', async () => {

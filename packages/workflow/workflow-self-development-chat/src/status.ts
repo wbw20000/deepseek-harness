@@ -115,19 +115,31 @@ async function trialUrlFor(trial: TrialPort | undefined, taskId: string): Promis
   }
 }
 
+/** Task statuses `stopTask` leaves alone after the campaign stop: already terminal, or never started. */
+const TASK_STATUSES_NOT_TO_STOP: ReadonlySet<string> = new Set(['stopped', 'handed-off'])
+
 /**
  * Run `self_development_stop`: forward `stopCampaign` with the given reason
- * and project the resulting campaign state. A facade failure yields
- * `ok: false` with the error code and message.
+ * and project the resulting campaign state. A campaign that had already
+ * settled leaves the task where it was — passed and `awaiting-trial` — so
+ * when the task is still not stopped afterwards it is stopped too (core
+ * `task/stopped` at its current revision): the user is discarding it, and a
+ * stopped task is what the next proposal's reclamation releases. A facade
+ * failure yields `ok: false` with the error code and message.
  * @param deps - the ports for this call; only the facade is used.
- * @param taskId - the task whose campaign stops.
+ * @param taskId - the task whose campaign (and, when settled, the task itself) stops.
  * @param reason - the human-readable stop reason.
  * @returns the stop outcome.
  */
 export async function stopTask(deps: StatusDeps, taskId: string, reason: string): Promise<StopOutcome> {
   try {
     const campaign: CampaignState = await deps.facade.stopCampaign(taskId, reason)
-    return { ok: true, campaign }
+    const detail = await deps.facade.getTask(taskId)
+    if (campaign.status === 'running' || TASK_STATUSES_NOT_TO_STOP.has(detail.projection.status)) {
+      return { ok: true, campaign }
+    }
+    const stopped = await deps.facade.stop(taskId, detail.projection.revision)
+    return { ok: true, campaign, task: { status: 'stopped', revision: stopped.revision } }
   } catch (error: unknown) {
     return {
       ok: false,
