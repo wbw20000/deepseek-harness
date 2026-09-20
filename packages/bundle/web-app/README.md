@@ -50,8 +50,13 @@ Most users never set these; the command-line flags feed the four settings below 
 | `printUrl` | `true` | Print the `dsh web:` URL line at startup |
 | `surfaceContext` | `true` | Give the agent GUI-orientation context and expose `DSH_WEB_URL` to its shell commands |
 | `trustedHosts` | `[]` | Extra hosts allowed to reach the GUI from the network |
+| `endpointFile` | `true` | Claim `$DSH_HOME/web-endpoint.json`: refuse to start while another live `dsh web` serves the same home; record this GUI's loopback host, port, and pid there; remove it on shutdown |
 
 The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-web-app) is the exhaustive source for every accepted field and its JSDoc.
+
+### One live GUI per Harness home
+
+At startup the bundle claims `$DSH_HOME/web-endpoint.json` with an exclusive create. A record left by another process that is still alive fails the boot loudly (`another dsh web (pid N) already serves this Harness home on host:port`) instead of silently serving a second port over the same session and credential stores; a record whose owner is dead, or that is malformed, is stale and taken over. The file holds `{ host, port, pid, startedAt }` — never a token — so a relay such as frpc can read the loopback port it must tunnel from one place, and it is removed on shutdown. A crash leaves the record behind, which the next start recognises as stale by its dead pid; if the pid was reused by an unrelated process, delete the file by hand as the message says. `endpointFile: false` skips the claim.
 
 ### LAN access and trusted hosts
 

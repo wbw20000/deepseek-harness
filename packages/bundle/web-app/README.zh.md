@@ -50,8 +50,13 @@ dsh --profile web --no-open --port 8080
 | `printUrl` | `true` | 启动时打印 `dsh web:` URL 行 |
 | `surfaceContext` | `true` | 给 agent 提供 GUI 定位上下文，并把 `DSH_WEB_URL` 暴露给其 shell 命令 |
 | `trustedHosts` | `[]` | 允许从网络访问 GUI 的额外主机 |
+| `endpointFile` | `true` | 认领 `$DSH_HOME/web-endpoint.json`：另一个存活的 `dsh web` 正服务同一个 home 时拒绝启动；把本 GUI 的回环 host、端口和 pid 记进去；退出时删除 |
 
 生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-web-app)是每个受支持字段及其 JSDoc 的穷尽式真源。
+
+### 一个 Harness home 只服务一个 GUI
+
+启动时本 bundle 用独占创建认领 `$DSH_HOME/web-endpoint.json`。另一个仍然存活的进程留下的记录会让启动大声失败（`another dsh web (pid N) already serves this Harness home on host:port`），而不是悄悄在同一套会话与凭据存储上再开一个端口；所有者已死或内容损坏的记录视为过期，直接接管。文件只存 `{ host, port, pid, startedAt }`——从不存 token——所以 frpc 这类中继只需从这一处读要隧道的回环端口；退出时删除。崩溃会留下记录，下次启动按其死掉的 pid 认出它是过期的；若 pid 被无关进程复用，按提示手动删掉该文件。`endpointFile: false` 跳过认领。
 
 ### LAN 访问与可信主机
 

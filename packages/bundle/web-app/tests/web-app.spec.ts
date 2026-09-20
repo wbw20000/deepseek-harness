@@ -7,7 +7,7 @@
 
 import { EventEmitter } from 'node:events'
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
@@ -18,7 +18,7 @@ import * as AppBoot from '@deepseek-ai/dsh-app-boot'
 import { createLaunchEnvironmentSnapshot, DSH_LAUNCH_ENVIRONMENT_KEY } from '@deepseek-ai/dsh-launch-environment'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import type { WebServer } from '@deepseek-ai/dsh-host-webserver'
-import { apply, Config, internals } from '../src/index.ts'
+import { apply, claimWebEndpoint, Config, internals, readWebEndpoint, releaseWebEndpoint, WEB_ENDPOINT_FILE } from '../src/index.ts'
 
 vi.mock('node:child_process', async importOriginal => ({
   ...await importOriginal<typeof import('node:child_process')>(),
@@ -34,10 +34,14 @@ vi.mock('node:os', async importOriginal => ({
 }))
 
 let dist: string | undefined
+/** A throwaway Harness home per test: the endpoint-file claim must never touch the real one. */
+let home: string | undefined
 
 beforeEach(() => {
   vi.stubEnv('SSH_CONNECTION', '')
   vi.stubEnv('SSH_TTY', '')
+  home = mkdtempSync(join(tmpdir(), 'dsh-web-app-home-'))
+  vi.stubEnv('DSH_HOME', home)
 })
 
 afterEach(() => {
@@ -47,6 +51,8 @@ afterEach(() => {
   internals.resolveDistIndex = originalResolve
   internals.openBrowser = originalOpenBrowser
   if (dist !== undefined) rmSync(dist, { recursive: true, force: true })
+  if (home !== undefined) rmSync(home, { recursive: true, force: true })
+  home = undefined
   dist = undefined
 })
 
@@ -135,7 +141,7 @@ describe('web-app runtime glue', () => {
     const log = vi.spyOn(console, 'log').mockImplementation((message) => { lifecycle.push(String(message)) })
     const openBrowser = vi.fn(async (url: string) => { lifecycle.push(`open:${url}`) })
     internals.openBrowser = openBrowser
-    apply(ctx, new Config({ openBrowser: true, printUrl: true, surfaceContext: true, trustedHosts: ['lab.internal'] }))
+    apply(ctx, new Config({ openBrowser: true, printUrl: true, surfaceContext: true, trustedHosts: ['lab.internal'], endpointFile: true }))
     await ctx.plugin(SystemPrompt, { personaPrefix: '' })
     // Settle the injected registrations.
     await new Promise(resolve => setTimeout(resolve, 0))
@@ -173,7 +179,7 @@ describe('web-app runtime glue', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const openBrowser = vi.fn(async () => {})
     internals.openBrowser = openBrowser
-    apply(ctx, new Config({ openBrowser: false, printUrl: false, surfaceContext: true, trustedHosts: [] }))
+    apply(ctx, new Config({ openBrowser: false, printUrl: false, surfaceContext: true, trustedHosts: [], endpointFile: true }))
     await ctx.plugin(SystemPrompt, { personaPrefix: '' })
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(log).not.toHaveBeenCalled()
@@ -196,7 +202,7 @@ describe('web-app runtime glue', () => {
         return () => {}
       },
     } as never)
-    apply(ctx, new Config({ openBrowser: false, printUrl: false, surfaceContext: false, trustedHosts: [] }))
+    apply(ctx, new Config({ openBrowser: false, printUrl: false, surfaceContext: false, trustedHosts: [], endpointFile: true }))
     await ctx.plugin(SystemPrompt, { personaPrefix: '' })
     await new Promise(resolve => setTimeout(resolve, 0))
     const assembly = await ctx.systemPrompt.assemble()
@@ -212,7 +218,7 @@ describe('web-app runtime glue', () => {
     ctx.provide('webServer', fakeHttpServer().server)
     provideConnection(ctx)
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    apply(ctx, new Config({ openBrowser: false, printUrl: true, surfaceContext: true, trustedHosts: [] }))
+    apply(ctx, new Config({ openBrowser: false, printUrl: true, surfaceContext: true, trustedHosts: [], endpointFile: true }))
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(log).toHaveBeenCalledWith('dsh web: http://127.0.0.1:4567/?token=test-token')
     await ctx.fiber.dispose()
@@ -225,7 +231,7 @@ describe('web-app runtime glue', () => {
     const first = ctx.plugin((connectionCtx: Context) => { provideConnection(connectionCtx) })
     await first
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    apply(ctx, new Config({ openBrowser: false, printUrl: true, surfaceContext: true, trustedHosts: [] }))
+    apply(ctx, new Config({ openBrowser: false, printUrl: true, surfaceContext: true, trustedHosts: [], endpointFile: true }))
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(log).toHaveBeenCalledTimes(1)
 
@@ -248,7 +254,7 @@ describe('web-app runtime glue', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const openBrowser = vi.fn(async () => {})
     internals.openBrowser = openBrowser
-    apply(ctx, new Config({ openBrowser: true, printUrl: true, surfaceContext: false, trustedHosts: [] }))
+    apply(ctx, new Config({ openBrowser: true, printUrl: true, surfaceContext: false, trustedHosts: [], endpointFile: true }))
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(log).toHaveBeenCalledWith('dsh web: http://127.0.0.1:4567/?token=test-token')
     expect(openBrowser).not.toHaveBeenCalled()
@@ -268,7 +274,7 @@ describe('web-app runtime glue', () => {
     const settlement = new Promise<void>((resolve) => { release = resolve })
     provideLoader(settled, () => settlement)
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    apply(settled, new Config({ openBrowser: true, printUrl: true, surfaceContext: true, trustedHosts: [] }))
+    apply(settled, new Config({ openBrowser: true, printUrl: true, surfaceContext: true, trustedHosts: [], endpointFile: true }))
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(log).not.toHaveBeenCalled()
     expect(openBrowser).not.toHaveBeenCalled()
@@ -286,7 +292,7 @@ describe('web-app runtime glue', () => {
     failed.provide('webServer', fakeHttpServer().server)
     provideConnection(failed)
     provideLoader(failed, async () => { throw new Error('boot failed') })
-    apply(failed, new Config({ openBrowser: true, printUrl: true, surfaceContext: true, trustedHosts: [] }))
+    apply(failed, new Config({ openBrowser: true, printUrl: true, surfaceContext: true, trustedHosts: [], endpointFile: true }))
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(log).not.toHaveBeenCalled()
     expect(openBrowser).not.toHaveBeenCalled()
@@ -305,7 +311,7 @@ describe('web-app runtime glue', () => {
     let releaseTorn: () => void
     const tornSettlement = new Promise<void>((resolve) => { releaseTorn = resolve })
     provideLoader(torn, () => tornSettlement)
-    apply(torn, new Config({ openBrowser: true, printUrl: true, surfaceContext: true, trustedHosts: [] }))
+    apply(torn, new Config({ openBrowser: true, printUrl: true, surfaceContext: true, trustedHosts: [], endpointFile: true }))
     await new Promise(resolve => setTimeout(resolve, 0))
     await child.dispose() // the webServer service goes away
     releaseTorn!()
@@ -336,7 +342,7 @@ describe('web-app runtime glue', () => {
     const openBrowser = vi.fn(async () => {})
     internals.openBrowser = openBrowser
     const audit = vi.spyOn(AppBoot, 'auditStartupEntries')
-    apply(ctx, new Config({ openBrowser: true, printUrl: true, surfaceContext: false, trustedHosts: [] }))
+    apply(ctx, new Config({ openBrowser: true, printUrl: true, surfaceContext: false, trustedHosts: [], endpointFile: true }))
     await vi.waitFor(() => { expect(audit).toHaveBeenCalledOnce() })
     await Promise.allSettled(audit.mock.results.map(result => result.value as Promise<void>))
     if (announces) {
@@ -357,7 +363,7 @@ describe('web-app runtime glue', () => {
     Object.defineProperty(server, 'port', { get: () => undefined })
     ctx.provide('webServer', server)
     provideConnection(ctx)
-    apply(ctx, new Config({ openBrowser: false, printUrl: false, surfaceContext: true, trustedHosts: [] }))
+    apply(ctx, new Config({ openBrowser: false, printUrl: false, surfaceContext: true, trustedHosts: [], endpointFile: true }))
     await ctx.plugin(SystemPrompt, { personaPrefix: '' })
     await new Promise(resolve => setTimeout(resolve, 0))
     await expect(ctx.systemPrompt.assemble()).rejects.toThrow('webServer service missing')
@@ -383,7 +389,7 @@ describe('web-app runtime glue', () => {
     internals.openBrowser = vi.fn(async () => { throw failure })
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const diagnostic = vi.spyOn(console, 'error').mockImplementation(() => {})
-    apply(ctx, new Config({ openBrowser: true, printUrl: false, surfaceContext: false, trustedHosts: [] }))
+    apply(ctx, new Config({ openBrowser: true, printUrl: false, surfaceContext: false, trustedHosts: [], endpointFile: true }))
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(log).toHaveBeenCalledWith('dsh web: opening the default browser; pass --no-open to disable')
     expect(diagnostic).toHaveBeenCalledWith(
@@ -449,5 +455,92 @@ describe('web-app runtime glue', () => {
     errored.emit('error', new Error('spawn failed'))
     await errorAssertion
     expect(errored.listenerCount('close')).toBe(0)
+  })
+})
+
+describe('web-endpoint.json (single live GUI per Harness home)', () => {
+  it('claims the file on mount with the bind host, port and pid, and removes it on disposal', async () => {
+    stageDist()
+    const ctx = new Context()
+    const { server } = fakeHttpServer('127.0.0.1')
+    ctx.provide('webServer', server)
+    provideConnection(ctx)
+    provideLoader(ctx)
+    apply(ctx, new Config({ openBrowser: false, printUrl: false, surfaceContext: false, trustedHosts: [], endpointFile: true }))
+    const path = join(home!, WEB_ENDPOINT_FILE)
+    const record = readWebEndpoint(path)
+    expect(record).toMatchObject({ host: '127.0.0.1', port: 4567, pid: process.pid })
+    expect(typeof record?.startedAt).toBe('number')
+    await ctx.fiber.dispose()
+    expect(existsSync(path)).toBe(false)
+  })
+
+  it('refuses to mount while another live process holds the home, and skips the claim when endpointFile is false', async () => {
+    stageDist()
+    const path = join(home!, WEB_ENDPOINT_FILE)
+    // process.pid is alive by definition and is "another process" as far as
+    // a record with a different pid is concerned only if it differs; the
+    // parent process (ppid) is alive too and is not us.
+    claimWebEndpoint(path, { host: '127.0.0.1', port: 3080, pid: process.ppid, startedAt: 1 })
+    const ctx = new Context()
+    const { server } = fakeHttpServer('127.0.0.1')
+    ctx.provide('webServer', server)
+    provideConnection(ctx)
+    provideLoader(ctx)
+    expect(() => {
+      apply(ctx, new Config({ openBrowser: false, printUrl: false, surfaceContext: false, trustedHosts: [], endpointFile: true }))
+    }).toThrow(/another dsh web \(pid \d+\) already serves this Harness home on 127\.0\.0\.1:3080/u)
+    expect(readWebEndpoint(path)?.pid).toBe(process.ppid)
+
+    const skipping = new Context()
+    skipping.provide('webServer', server)
+    provideConnection(skipping)
+    provideLoader(skipping)
+    apply(skipping, new Config({ openBrowser: false, printUrl: false, surfaceContext: false, trustedHosts: [], endpointFile: false }))
+    expect(readWebEndpoint(path)?.pid).toBe(process.ppid)
+    await skipping.fiber.dispose()
+    expect(existsSync(path)).toBe(true)
+    await ctx.fiber.dispose()
+  })
+
+  it('takes over a stale record (dead owner, malformed, or its own) and never releases another owner\u2019s record', () => {
+    const path = join(home!, WEB_ENDPOINT_FILE)
+    // A pid no process can hold on this host.
+    const deadPid = 2 ** 22 - 1
+    writeFileSync(path, JSON.stringify({ host: '127.0.0.1', port: 1, pid: deadPid, startedAt: 1 }))
+    claimWebEndpoint(path, { host: '127.0.0.1', port: 4567, pid: process.pid, startedAt: 2 })
+    expect(readWebEndpoint(path)).toEqual({ host: '127.0.0.1', port: 4567, pid: process.pid, startedAt: 2 })
+    // Re-claiming its own record rewrites it.
+    claimWebEndpoint(path, { host: '127.0.0.1', port: 4568, pid: process.pid, startedAt: 3 })
+    expect(readWebEndpoint(path)?.port).toBe(4568)
+    // Malformed and non-record contents are stale too.
+    writeFileSync(path, 'not json')
+    expect(readWebEndpoint(path)).toBeUndefined()
+    claimWebEndpoint(path, { host: '127.0.0.1', port: 4569, pid: process.pid, startedAt: 4 })
+    expect(readWebEndpoint(path)?.port).toBe(4569)
+    writeFileSync(path, JSON.stringify(['not', 'an', 'object']))
+    expect(readWebEndpoint(path)).toBeUndefined()
+    writeFileSync(path, 'null')
+    expect(readWebEndpoint(path)).toBeUndefined()
+    writeFileSync(path, '42')
+    expect(readWebEndpoint(path)).toBeUndefined()
+    writeFileSync(path, JSON.stringify({ host: 1, port: 'x', pid: 'y', startedAt: 'z' }))
+    expect(readWebEndpoint(path)).toBeUndefined()
+    expect(readWebEndpoint(join(home!, 'missing.json'))).toBeUndefined()
+    // Another owner's record is left alone by release; a missing file is fine.
+    writeFileSync(path, JSON.stringify({ host: '127.0.0.1', port: 5, pid: process.ppid, startedAt: 5 }))
+    releaseWebEndpoint(path, process.pid)
+    expect(existsSync(path)).toBe(true)
+    releaseWebEndpoint(join(home!, 'missing.json'), process.pid)
+    // A path whose parent does not exist fails the exclusive create with
+    // something other than EEXIST, which surfaces instead of being read.
+    const blocked = join(home!, 'no-such-dir', 'web-endpoint.json')
+    expect(() => { claimWebEndpoint(blocked, { host: '127.0.0.1', port: 1, pid: process.pid, startedAt: 1 }) }).toThrow(/ENOENT/u)
+    // An existing directory at the path is EEXIST, reads as no record, and the
+    // overwrite then fails loudly on the directory.
+    const directory = join(home!, 'dir-endpoint')
+    mkdirSync(directory)
+    expect(() => { claimWebEndpoint(directory, { host: '127.0.0.1', port: 1, pid: process.pid, startedAt: 1 }) }).toThrow(/EISDIR/u)
+    void readFileSync
   })
 })

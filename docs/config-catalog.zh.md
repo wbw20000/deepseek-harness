@@ -3672,10 +3672,19 @@ export interface Config {
   surfaceContext: boolean
   /** Explicit `--trusted-host` authorities from this invocation. */
   trustedHosts: string[]
+  /**
+   * Claim `$DSH_HOME/web-endpoint.json` for this process: refuse to start
+   * while another live `dsh web` holds it, record this server's loopback
+   * host, port, and pid there once mounted, and remove the record on
+   * shutdown. A relay (frpc) reads the port from this file, and one Harness
+   * home never serves two GUIs at once. `false` skips the claim, for a
+   * process that deliberately shares a home read-only.
+   */
+  endpointFile: boolean
 }
 ```
 
-来源：[`packages/bundle/web-app/src/index.ts:44`](../packages/bundle/web-app/src/index.ts)
+来源：[`packages/bundle/web-app/src/index.ts:46`](../packages/bundle/web-app/src/index.ts)
 
 <a id="deepseek-aidsh-web-fetch-http"></a>
 

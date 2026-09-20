@@ -12,6 +12,7 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process'
+import { readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { networkInterfaces } from 'node:os'
@@ -19,6 +20,7 @@ import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { addHarnessSourceSection, auditStartupEntries } from '@deepseek-ai/dsh-app-boot'
+import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import type {} from '@deepseek-ai/dsh-client-connection'
 import * as FrontendStatic from '@deepseek-ai/dsh-host-frontend-static'
 import { launchedThroughSsh, launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
@@ -55,6 +57,15 @@ export interface Config {
   surfaceContext: boolean
   /** Explicit `--trusted-host` authorities from this invocation. */
   trustedHosts: string[]
+  /**
+   * Claim `$DSH_HOME/web-endpoint.json` for this process: refuse to start
+   * while another live `dsh web` holds it, record this server's loopback
+   * host, port, and pid there once mounted, and remove the record on
+   * shutdown. A relay (frpc) reads the port from this file, and one Harness
+   * home never serves two GUIs at once. `false` skips the claim, for a
+   * process that deliberately shares a home read-only.
+   */
+  endpointFile: boolean
 }
 
 export const Config: z<Config> = z.object({
@@ -62,7 +73,108 @@ export const Config: z<Config> = z.object({
   printUrl: z.boolean().default(true),
   surfaceContext: z.boolean().default(true),
   trustedHosts: z.array(String).default([]),
+  endpointFile: z.boolean().default(true),
 })
+
+/** File under the Harness home that names the one live `dsh web` serving it. */
+export const WEB_ENDPOINT_FILE = 'web-endpoint.json'
+
+/** The record `web-endpoint.json` holds: where the live GUI listens and which process owns it. */
+export interface WebEndpointRecord {
+  /** Loopback bind host of the GUI. */
+  readonly host: string
+  /** Listen port of the GUI; a relay tunnels exactly this port. */
+  readonly port: number
+  /** Process id of the owning `dsh web`; a dead pid makes the record stale. */
+  readonly pid: number
+  /** Host-clock milliseconds when the record was written. */
+  readonly startedAt: number
+}
+
+/**
+ * Whether a process id is alive on this host. `EPERM` means the process
+ * exists but belongs to another user, which still counts as alive.
+ * @param pid - the process id to probe.
+ * @returns `true` when signal 0 could be delivered or was refused for permissions.
+ */
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+/**
+ * Read the endpoint record at `path`, or `undefined` when it is missing,
+ * unreadable, or not a well-formed record — every one of which a claim
+ * treats as stale and overwrites.
+ * @param path - absolute path of the endpoint file.
+ * @returns the parsed record, or `undefined`.
+ */
+export function readWebEndpoint(path: string): WebEndpointRecord | undefined {
+  let text: string
+  try {
+    text = readFileSync(path, 'utf8')
+  } catch {
+    return undefined
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return undefined
+  }
+  if (typeof parsed !== 'object' || parsed === null) return undefined
+  const record = parsed as Record<string, unknown>
+  if (typeof record.host !== 'string' || typeof record.port !== 'number' || typeof record.pid !== 'number'
+    || typeof record.startedAt !== 'number') return undefined
+  return { host: record.host, port: record.port, pid: record.pid, startedAt: record.startedAt }
+}
+
+/**
+ * Claim the endpoint file for this process. An existing record whose owner
+ * is another live process refuses the claim loudly; a stale record (dead
+ * owner, malformed, or this process's own) is overwritten. The first write
+ * is exclusive, so two processes starting at once cannot both succeed.
+ * @param path - absolute path of the endpoint file.
+ * @param record - this process's record.
+ * @throws Error naming the live owner's pid, host, and port when another `dsh web` holds the home.
+ */
+export function claimWebEndpoint(path: string, record: WebEndpointRecord): void {
+  const text = `${JSON.stringify(record)}\n`
+  try {
+    writeFileSync(path, text, { flag: 'wx', mode: 0o600 })
+    return
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+  }
+  const existing = readWebEndpoint(path)
+  if (existing !== undefined && existing.pid !== record.pid && processAlive(existing.pid)) {
+    throw new Error(
+      `dsh web: another dsh web (pid ${String(existing.pid)}) already serves this Harness home on `
+      + `${existing.host}:${String(existing.port)}; stop it first, or point DSH_HOME at another home. `
+      + `If that process is gone and the pid was reused, delete ${path} and start again.`,
+    )
+  }
+  writeFileSync(path, text, { mode: 0o600 })
+}
+
+/**
+ * Remove the endpoint file when this process still owns it; a record
+ * rewritten by a later owner is left alone.
+ * @param path - absolute path of the endpoint file.
+ * @param pid - this process's id.
+ */
+export function releaseWebEndpoint(path: string, pid: number): void {
+  if (readWebEndpoint(path)?.pid !== pid) return
+  try {
+    unlinkSync(path)
+  } catch {
+    // Already gone: nothing to release.
+  }
+}
 
 /** Bind-dependent Web values shared by the trust fence and URL display. */
 export interface WebRuntimeValues {
@@ -224,6 +336,19 @@ export const internals: {
  */
 export function apply(ctx: Context, config: Config): void {
   const runtime = resolveLanTrust(ctx.webServer.host, config.trustedHosts)
+  if (config.endpointFile) {
+    // Claimed before anything else mounts: a second GUI on the same home
+    // must fail its boot loudly here instead of silently serving a second
+    // port over the same session and credential stores.
+    const endpointPath = dshHomePath(WEB_ENDPOINT_FILE)
+    claimWebEndpoint(endpointPath, {
+      host: ctx.webServer.host,
+      port: ctx.webServer.port,
+      pid: process.pid,
+      startedAt: Date.now(),
+    })
+    ctx.effect(() => () => { releaseWebEndpoint(endpointPath, process.pid) }, 'web-app: release web-endpoint.json')
+  }
   // The loopback URL belongs to this host. Under SSH, the operator reaches it
   // through a local forwarding address that this process cannot derive.
   const handoffBrowser = config.openBrowser && !launchedThroughSsh(launchEnvironmentOf(ctx))
