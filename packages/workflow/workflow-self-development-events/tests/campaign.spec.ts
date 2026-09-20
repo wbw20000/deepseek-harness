@@ -27,6 +27,7 @@ describe('mapCampaignPassedToEvent', () => {
     expect(mapCampaignPassedToEvent(payload, now)).toEqual({
       taskId: 'task-1',
       kind: 'awaiting-trial',
+      origin: 'campaign',
       sessionId: undefined,
       title: 'Task passed, trial ready',
       occurredAt: now(),
@@ -45,6 +46,7 @@ describe('mapCampaignEndedToEvent', () => {
     expect(mapCampaignEndedToEvent(payload, now)).toEqual({
       taskId: 'task-2',
       kind,
+      origin: 'campaign',
       sessionId: undefined,
       title: `Campaign ended: ${status}`,
       occurredAt: now(),
@@ -92,7 +94,7 @@ describe('service wiring for the raw campaign events', () => {
     events.subscribe((event) => { seen.push(event) })
     context!.emit('self-development/campaign-passed', { taskId: 'task-a', revision: 3 })
     expect(events.recent()).toEqual([
-      { taskId: 'task-a', kind: 'awaiting-trial', sessionId: undefined, title: 'Task passed, trial ready', occurredAt: now(), revision: 3 },
+      { taskId: 'task-a', kind: 'awaiting-trial', origin: 'campaign', sessionId: undefined, title: 'Task passed, trial ready', occurredAt: now(), revision: 3 },
     ])
     expect(seen).toHaveLength(1)
   })
@@ -101,7 +103,7 @@ describe('service wiring for the raw campaign events', () => {
     const events = await makeHarness()
     context!.emit('self-development/campaign-ended', { taskId: 'task-b', status: 'exhausted', revision: 6 })
     expect(events.recent()).toEqual([
-      { taskId: 'task-b', kind: 'failed', sessionId: undefined, title: 'Campaign ended: exhausted', occurredAt: now(), revision: 6 },
+      { taskId: 'task-b', kind: 'failed', origin: 'campaign', sessionId: undefined, title: 'Campaign ended: exhausted', occurredAt: now(), revision: 6 },
     ])
   })
 

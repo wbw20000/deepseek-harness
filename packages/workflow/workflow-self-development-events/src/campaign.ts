@@ -67,6 +67,7 @@ export function mapCampaignPassedToEvent(payload: CampaignPassedPayload, now: ()
   return {
     taskId: payload.taskId,
     kind: 'awaiting-trial',
+    origin: 'campaign',
     sessionId: undefined,
     title: 'Task passed, trial ready',
     occurredAt: now(),
@@ -92,6 +93,7 @@ export function mapCampaignEndedToEvent(payload: CampaignEndedPayload, now: () =
   return {
     taskId: payload.taskId,
     kind: ENDED_KIND[payload.status],
+    origin: 'campaign',
     sessionId: undefined,
     title: `Campaign ended: ${payload.status}`,
     occurredAt: now(),

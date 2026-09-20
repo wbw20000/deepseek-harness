@@ -27,6 +27,7 @@ describe('mapMergeIntegratedToEvent', () => {
     expect(mapMergeIntegratedToEvent(payload, now)).toEqual({
       taskId: 'task-1',
       kind: 'awaiting-trial',
+      origin: 'merge',
       sessionId: undefined,
       title: 'Task integrated into stable',
       occurredAt: now(),
@@ -46,6 +47,7 @@ describe('mapMergeBlockedToEvent', () => {
     expect(mapMergeBlockedToEvent(payload, now)).toEqual({
       taskId: 'task-2',
       kind: 'failed',
+      origin: 'merge',
       sessionId: undefined,
       title: `Merge blocked: ${status}`,
       occurredAt: now(),
@@ -96,6 +98,7 @@ describe('service wiring for the raw merge events', () => {
       {
         taskId: 'task-a',
         kind: 'awaiting-trial',
+        origin: 'merge',
         sessionId: undefined,
         title: 'Task integrated into stable',
         occurredAt: now(),
@@ -109,7 +112,7 @@ describe('service wiring for the raw merge events', () => {
     const events = await makeHarness()
     context!.emit('self-development/merge-blocked', { taskId: 'task-b', status: 'conflict', revision: 6 })
     expect(events.recent()).toEqual([
-      { taskId: 'task-b', kind: 'failed', sessionId: undefined, title: 'Merge blocked: conflict', occurredAt: now(), revision: 6 },
+      { taskId: 'task-b', kind: 'failed', origin: 'merge', sessionId: undefined, title: 'Merge blocked: conflict', occurredAt: now(), revision: 6 },
     ])
   })
 

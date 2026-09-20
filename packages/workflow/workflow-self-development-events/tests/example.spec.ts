@@ -43,6 +43,7 @@ describe('examples/macos-notify.sh', () => {
     const event: SelfDevelopmentEvent = {
       taskId: 'task-9',
       kind: 'failed',
+      origin: 'commit',
       sessionId: undefined,
       title: 'Round 1 failed: boom `rm -rf /` $(cat /etc/passwd) "quoted"',
       occurredAt: 1_700_000_000_000,

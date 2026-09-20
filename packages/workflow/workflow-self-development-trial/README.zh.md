@@ -77,7 +77,7 @@ kind: "package-reference"
 <a id="automatic-open-on-a-passed-campaign"></a>
 ## 战役通过后的自动打开
 
-当 `autoOpen` 为 `true`（默认值）且能结构式读到一个事件消费方时——通过 `ctx.get('selfDevelopmentEvents')` 读取，这样本包也不必直接依赖 events 包——本服务会订阅其通知，并在 `campaign-passed` 事件点名某任务时自行调用 `openTrial`。晚于本服务才挂载的事件消费方同样会被接上：订阅挂在 `selfDevelopmentEvents` 的 `internal/service` 通知上（服务被重新提供时会重新订阅），因为插件激活顺序不等于 overlay 行顺序——一次真机测试里，订阅只在构造时试过一次，结果一个试验版都没自动打开过。
+当 `autoOpen` 为 `true`（默认值）且能结构式读到一个事件消费方时——通过 `ctx.get('selfDevelopmentEvents')` 读取，这样本包也不必直接依赖 events 包——本服务会订阅其通知，并在战役收尾的通过事件点名某任务时自行调用 `openTrial`——事件服务把它发布为 `origin: 'campaign'` 下的 kind `awaiting-trial`；单独一轮通过（`origin: 'commit'`，同一 kind）与合并完成（`origin: 'merge'`）都不会打开试验版。晚于本服务才挂载的事件消费方同样会被接上：订阅挂在 `selfDevelopmentEvents` 的 `internal/service` 通知上（服务被重新提供时会重新订阅），因为插件激活顺序不等于 overlay 行顺序——一次真机测试里，订阅只在构造时试过一次，结果一个试验版都没自动打开过。
 
 自动打开失败时——构建失败、端口区间耗尽、或任何 `openTrial` 可能拒绝的原因——既会记一条服务日志的警告，也会追加进该任务自己的 `trials/<taskId>.log`，这样即使没人盯着宿主的通用日志也能看到失败；无论哪种记法，失败都绝不会向外传播，因为一次通知不应导致拒绝。该任务仍然可以通过显式调用 `openTrial` 来关闭或重新打开。
 

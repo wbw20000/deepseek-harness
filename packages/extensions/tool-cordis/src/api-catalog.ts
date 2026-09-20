@@ -6037,7 +6037,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'RecentEvent',
-    declaration: 'export interface RecentEvent {\n    readonly taskId: string;\n    readonly kind: \'turn-finished\' | \'failed\' | \'awaiting-decision\' | \'awaiting-trial\' | \'stopped\';\n    readonly sessionId?: string;\n    readonly title: string;\n    readonly occurredAt: number;\n    readonly revision: number;\n}',
+    declaration: 'export interface RecentEvent {\n    readonly taskId: string;\n    readonly kind: \'turn-finished\' | \'failed\' | \'awaiting-decision\' | \'awaiting-trial\' | \'stopped\';\n    readonly origin: \'commit\' | \'campaign\' | \'merge\';\n    readonly sessionId?: string;\n    readonly title: string;\n    readonly occurredAt: number;\n    readonly revision: number;\n}',
   },
   {
     name: 'RedactedSecret',
@@ -6233,11 +6233,15 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SelfDevelopmentEvent',
-    declaration: 'export interface SelfDevelopmentEvent {\n    readonly taskId: string;\n    readonly kind: SelfDevelopmentEventKind;\n    readonly sessionId: string | undefined;\n    readonly title: string;\n    readonly occurredAt: number;\n    readonly revision: number;\n}',
+    declaration: 'export interface SelfDevelopmentEvent {\n    readonly taskId: string;\n    readonly kind: SelfDevelopmentEventKind;\n    readonly origin: SelfDevelopmentEventOrigin;\n    readonly sessionId: string | undefined;\n    readonly title: string;\n    readonly occurredAt: number;\n    readonly revision: number;\n}',
   },
   {
     name: 'SelfDevelopmentEventKind',
     declaration: 'export type SelfDevelopmentEventKind = \'turn-finished\' | \'failed\' | \'awaiting-decision\' | \'awaiting-trial\' | \'stopped\';',
+  },
+  {
+    name: 'SelfDevelopmentEventOrigin',
+    declaration: 'export type SelfDevelopmentEventOrigin = \'commit\' | \'campaign\' | \'merge\';',
   },
   {
     name: 'SelfDevelopmentTaskController',

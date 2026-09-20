@@ -56,8 +56,10 @@ export interface TrialTaskDetail {
 export interface CampaignPassedEvent {
   /** Task the campaign passed for. */
   readonly taskId: string
-  /** Fixed kind literal DH-a adds to the events vocabulary. */
-  readonly kind: 'campaign-passed'
+  /** The events service's kind: a passed campaign is `awaiting-trial` (the same kind a single passed round carries). */
+  readonly kind: string
+  /** Which raw source the events service folded the event from; only `campaign` marks a settled campaign. */
+  readonly origin: string
   /** Fixed-template summary; carried through untouched. */
   readonly title: string
   /** Host-clock milliseconds when the event was observed. */

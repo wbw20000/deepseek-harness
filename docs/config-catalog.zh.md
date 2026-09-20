@@ -3977,7 +3977,7 @@ export interface SelfDevelopmentEventsConfig {
 }
 ```
 
-来源： [`packages/workflow/workflow-self-development-events/src/types.ts:34`](../packages/workflow/workflow-self-development-events/src/types.ts)
+来源： [`packages/workflow/workflow-self-development-events/src/types.ts:47`](../packages/workflow/workflow-self-development-events/src/types.ts)
 
 <a id="deepseek-aidsh-workflow-self-development-remote"></a>
 

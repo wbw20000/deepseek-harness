@@ -108,6 +108,7 @@ describe('mapCommittedToEvent', () => {
     expect(event).toEqual({
       taskId: 'task-1',
       kind: 'failed',
+      origin: 'commit',
       sessionId: undefined,
       title: 'Round 3 failed',
       occurredAt: 1_700_000_000_000,

@@ -447,7 +447,7 @@ describe('construction', () => {
     const agent = fakeAgent('idle')
     const proposeDef = tools.find('self_development_propose')
     const proposed = await proposeDef.execute(proposeArgs(), fakeExec({ agent })) as { taskId: string }
-    early.emit({ taskId: proposed.taskId, kind: 'campaign-passed', title: 'Round 1 passed', occurredAt: 1 })
+    early.emit({ taskId: proposed.taskId, kind: 'awaiting-trial', origin: 'campaign', title: 'Round 1 passed', occurredAt: 1 })
     expect(agent.delivered).toHaveLength(1)
     // Re-provided: the old subscription is dropped and the new service is subscribed.
     const late = new FakeEvents()
@@ -944,7 +944,7 @@ describe('campaign-event delivery', () => {
     const proposeDef = tools.find('self_development_propose')
     const proposed = await proposeDef.execute(proposeArgs(), fakeExec({ agent })) as { taskId: string }
 
-    events.emit({ taskId: proposed.taskId, kind: 'campaign-passed', title: 'Round 1 passed', occurredAt: 1 })
+    events.emit({ taskId: proposed.taskId, kind: 'awaiting-trial', origin: 'campaign', title: 'Round 1 passed', occurredAt: 1 })
     expect(agent.delivered).toHaveLength(1)
     expect(agent.delivered[0]).toMatchObject({ via: 'followup' })
 
@@ -952,10 +952,10 @@ describe('campaign-event delivery', () => {
     const statusValue = await statusDef.execute({ taskId: proposed.taskId }, fakeExec()) as {
       latestEvent?: { kind: string }
     }
-    expect(statusValue.latestEvent?.kind).toBe('campaign-passed')
+    expect(statusValue.latestEvent?.kind).toBe('awaiting-trial')
 
     // The registry entry is consumed: a second event for the same task finds no agent.
-    events.emit({ taskId: proposed.taskId, kind: 'campaign-ended', title: 'again', occurredAt: 2 })
+    events.emit({ taskId: proposed.taskId, kind: 'stopped', origin: 'campaign', title: 'again', occurredAt: 2 })
     expect(agent.delivered).toHaveLength(1)
     void service
   })
@@ -967,7 +967,7 @@ describe('campaign-event delivery', () => {
     const agent = fakeAgent('running')
     const proposeDef = tools.find('self_development_propose')
     const proposed = await proposeDef.execute(proposeArgs(), fakeExec({ agent })) as { taskId: string }
-    events.emit({ taskId: proposed.taskId, kind: 'campaign-ended', title: 'ended', occurredAt: 1 })
+    events.emit({ taskId: proposed.taskId, kind: 'stopped', origin: 'campaign', title: 'ended', occurredAt: 1 })
     expect(agent.delivered).toEqual([{ via: 'inject', text: expect.stringContaining('ended') as unknown as string }])
   })
 
@@ -978,14 +978,18 @@ describe('campaign-event delivery', () => {
     const agent = fakeAgent()
     const proposeDef = tools.find('self_development_propose')
     const proposed = await proposeDef.execute(proposeArgs(), fakeExec({ agent })) as { taskId: string }
-    events.emit({ taskId: proposed.taskId, kind: 'turn-finished', title: 'noop', occurredAt: 1 })
+    // A failed round and a passed round are commit-origin events while the
+    // campaign keeps running: neither is a campaign result.
+    events.emit({ taskId: proposed.taskId, kind: 'failed', origin: 'commit', title: 'Round 1 failed', occurredAt: 1 })
+    events.emit({ taskId: proposed.taskId, kind: 'awaiting-trial', origin: 'commit', title: 'Round 2 passed, awaiting trial', occurredAt: 2 })
+    events.emit({ taskId: proposed.taskId, kind: 'awaiting-trial', origin: 'merge', title: 'Task integrated into stable', occurredAt: 3 })
     expect(agent.delivered).toEqual([])
 
     const statusDef = tools.find('self_development_status')
     const beforeUnknown = await statusDef.execute({ taskId: 'never-proposed' }, fakeExec()) as {
       latestEvent?: unknown
     }
-    events.emit({ taskId: 'never-proposed', kind: 'campaign-passed', title: 'x', occurredAt: 1 })
+    events.emit({ taskId: 'never-proposed', kind: 'awaiting-trial', origin: 'campaign', title: 'x', occurredAt: 1 })
     expect(beforeUnknown.latestEvent).toBeUndefined()
   })
 

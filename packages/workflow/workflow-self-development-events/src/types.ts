@@ -9,6 +9,17 @@
 export type SelfDevelopmentEventKind = 'turn-finished' | 'failed' | 'awaiting-decision' | 'awaiting-trial' | 'stopped'
 
 /**
+ * Which raw source an event was folded from: a durable task-journal commit,
+ * the Remote facade's campaign loop settling a whole campaign, or the chat
+ * merge flow. The `kind` vocabulary is shared across all three on purpose (a
+ * passed round and a passed campaign both leave the task awaiting trial), so
+ * a consumer that must tell a settled campaign apart from one round of it —
+ * a campaign-result chat notice, an automatic trial open — keys on this
+ * field, never on the fixed title text.
+ */
+export type SelfDevelopmentEventOrigin = 'commit' | 'campaign' | 'merge'
+
+/**
  * One unified self-development notification event. The content is title-level
  * only: it never carries a filesystem path, a credential, or the task
  * requirement text. `sessionId` stays optional because a self-development task
@@ -20,6 +31,8 @@ export interface SelfDevelopmentEvent {
   readonly taskId: string
   /** What the human should notice. */
   readonly kind: SelfDevelopmentEventKind
+  /** Which raw source the event was folded from; see {@link SelfDevelopmentEventOrigin}. */
+  readonly origin: SelfDevelopmentEventOrigin
   /** Owning chat session; always `undefined` for self-development tasks. */
   readonly sessionId: string | undefined
   /** Fixed-template summary chosen by the mapping: round number and closed-vocabulary reasons only, never journal free text. */

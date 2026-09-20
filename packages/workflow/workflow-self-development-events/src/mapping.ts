@@ -84,6 +84,7 @@ function build(
   return {
     taskId,
     kind,
+    origin: 'commit',
     sessionId: undefined,
     title,
     occurredAt: now(),

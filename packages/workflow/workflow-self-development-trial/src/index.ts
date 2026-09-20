@@ -413,11 +413,11 @@ export class SelfDevelopmentTrial extends TypertRemoteService {
    */
   private subscribeTo(source: TrialEventSource): () => void {
     return source.subscribe((event: CampaignPassedEvent) => {
-      // This package's own type names only the one kind it cares about, but
-      // the real events consumer's subscribe callback is structural and will
-      // hand this listener its full event union once DH-a's mapping lands.
-      // oxlint-disable-next-line typescript/no-unnecessary-condition
-      if (event.kind !== 'campaign-passed') return
+      // The events service folds a passed campaign into kind `awaiting-trial`
+      // under origin `campaign`; a single passed round is the same kind under
+      // origin `commit`, and a merge result is origin `merge`, so both fields
+      // are checked — a round passing mid-campaign must not open a trial.
+      if (event.origin !== 'campaign' || event.kind !== 'awaiting-trial') return
       void this.openTrial(event.taskId).catch((error: unknown) => {
         const message = errorText(error)
         this.ctx.logger.warn(

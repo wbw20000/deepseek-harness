@@ -122,7 +122,7 @@ class FakeTrial implements TrialPort {
 /** The event the events service delivered for the task. */
 const EVENT: CampaignEvent = {
   taskId: 'task-1',
-  kind: 'campaign-passed',
+  kind: 'awaiting-trial', origin: 'campaign',
   title: 'Campaign passed after round 3',
   occurredAt: 1234,
 }
@@ -164,7 +164,7 @@ describe('buildStatusReport', () => {
         campaignRecord: '/control/campaigns/task-1.json',
       },
       trialUrl: 'http://127.0.0.1:4173/?token=t',
-      latestEvent: { kind: 'campaign-passed', title: 'Campaign passed after round 3', occurredAt: 1234 },
+      latestEvent: { kind: 'awaiting-trial', title: 'Campaign passed after round 3', occurredAt: 1234 },
     })
   })
 

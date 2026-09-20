@@ -404,14 +404,16 @@ describe('service disposal', () => {
 describe('campaign-passed auto open', () => {
   it('opens the trial automatically when a campaign-passed event arrives', async () => {
     const { service, emit } = await makeService()
-    emit({ taskId: 'task-auto', kind: 'campaign-passed', title: 'campaign passed', occurredAt: 1 })
+    emit({ taskId: 'task-auto', kind: 'awaiting-trial', origin: 'campaign', title: 'campaign passed', occurredAt: 1 })
     await until(async () => (await service.trials()).length === 1)
     expect(await service.trials()).toMatchObject([{ taskId: 'task-auto' }])
   })
 
   it('ignores other event kinds', async () => {
     const { service, emit, subscriberCount } = await makeService()
-    emit({ taskId: 'task-other', kind: 'campaign-failed', title: 'nope', occurredAt: 1 } as unknown as CampaignPassedEvent)
+    emit({ taskId: 'task-other', kind: 'failed', origin: 'campaign', title: 'Campaign ended: failed', occurredAt: 1 })
+    emit({ taskId: 'task-other', kind: 'awaiting-trial', origin: 'commit', title: 'Round 1 passed, awaiting trial', occurredAt: 2 })
+    emit({ taskId: 'task-other', kind: 'awaiting-trial', origin: 'merge', title: 'Task integrated into stable', occurredAt: 3 })
     expect(await service.trials()).toEqual([])
     expect(subscriberCount()).toBe(1)
   })
@@ -420,7 +422,7 @@ describe('campaign-passed auto open', () => {
     const { emit, warn } = await makeService({
       facadeGetTask: () => Promise.reject(Object.assign(new Error('no such task'), { code: 'self-development/task-unknown' })),
     })
-    emit({ taskId: 'task-broken', kind: 'campaign-passed', title: 'passed', occurredAt: 1 })
+    emit({ taskId: 'task-broken', kind: 'awaiting-trial', origin: 'campaign', title: 'passed', occurredAt: 1 })
     await until(() => warn.mock.calls.some(call => String(call[0]).includes('automatic open')))
     expect(warn).toHaveBeenCalled()
     // The host's general log is not always watched; the failure also has to
@@ -440,7 +442,7 @@ describe('campaign-passed auto open', () => {
 
   it('keeps no subscription when autoOpen is false', async () => {
     const { emit, subscriberCount } = await makeService({ autoOpen: false })
-    emit({ taskId: 'task-closed-auto', kind: 'campaign-passed', title: 'passed', occurredAt: 1 })
+    emit({ taskId: 'task-closed-auto', kind: 'awaiting-trial', origin: 'campaign', title: 'passed', occurredAt: 1 })
     expect(subscriberCount()).toBe(0)
   })
 
@@ -481,7 +483,7 @@ describe('campaign-passed auto open', () => {
     const early = sourceOf()
     context.provide('selfDevelopmentEvents', early.source as never)
     expect(early.listeners).toHaveLength(1)
-    for (const listener of early.listeners) listener({ taskId: 'task-late', kind: 'campaign-passed', title: 'passed', occurredAt: 1 })
+    for (const listener of early.listeners) listener({ taskId: 'task-late', kind: 'awaiting-trial', origin: 'campaign', title: 'passed', occurredAt: 1 })
     await until(async () => (await service.trials()).length === 1)
     expect(await service.trials()).toMatchObject([{ taskId: 'task-late' }])
     // Re-provided: the old subscription is dropped and the new source is subscribed.

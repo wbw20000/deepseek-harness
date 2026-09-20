@@ -155,6 +155,7 @@ describe('toWireEvent', () => {
     const event: SelfDevelopmentEvent = {
       taskId: 'task-1',
       kind: 'awaiting-decision',
+      origin: 'commit',
       sessionId: undefined,
       title: 'Plan drafted, awaiting confirmation',
       occurredAt: 1_700_000_000_000,
@@ -163,6 +164,7 @@ describe('toWireEvent', () => {
     expect(toWireEvent(event)).toEqual({
       taskId: 'task-1',
       kind: 'awaiting-decision',
+      origin: 'commit',
       title: 'Plan drafted, awaiting confirmation',
       occurredAt: 1_700_000_000_000,
       revision: 3,
@@ -173,6 +175,7 @@ describe('toWireEvent', () => {
     const event: SelfDevelopmentEvent = {
       taskId: 'task-1',
       kind: 'failed',
+      origin: 'campaign',
       sessionId: 'chat-7',
       title: 'Round 2 failed',
       occurredAt: 1_700_000_060_000,
@@ -181,6 +184,7 @@ describe('toWireEvent', () => {
     expect(toWireEvent(event)).toEqual({
       taskId: 'task-1',
       kind: 'failed',
+      origin: 'campaign',
       sessionId: 'chat-7',
       title: 'Round 2 failed',
       occurredAt: 1_700_000_060_000,

@@ -15,6 +15,7 @@ import type { SelfDevelopmentEvent } from '../src/types.ts'
 const EVENT: SelfDevelopmentEvent = {
   taskId: 'task-1',
   kind: 'failed',
+  origin: 'commit',
   sessionId: undefined,
   title: 'Round 1 failed: runner exited 1',
   occurredAt: 1_700_000_000_000,

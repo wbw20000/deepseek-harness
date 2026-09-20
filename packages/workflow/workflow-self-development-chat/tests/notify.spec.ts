@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { campaignNoticeMessage, deliverCampaignNotice, isTerminalCampaignKind } from '../src/notify.ts'
+import { campaignNoticeMessage, deliverCampaignNotice, isSettledCampaignEvent } from '../src/notify.ts'
 import type { NotifiableAgent } from '../src/notify.ts'
 import type { CampaignEvent } from '../src/types.ts'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
@@ -32,15 +32,17 @@ function textOf(message: UserMessage): string {
   return block?.type === 'text' ? block.text : ''
 }
 
-const PASSED_EVENT: CampaignEvent = { taskId: 'task-1', kind: 'campaign-passed', title: 'Round 2 passed', occurredAt: 1 }
-const ENDED_EVENT: CampaignEvent = { taskId: 'task-1', kind: 'campaign-ended', title: 'Task stopped (cancelled)', occurredAt: 2 }
+const PASSED_EVENT: CampaignEvent = { taskId: 'task-1', kind: 'awaiting-trial', origin: 'campaign', title: 'Round 2 passed', occurredAt: 1 }
+const ENDED_EVENT: CampaignEvent = { taskId: 'task-1', kind: 'stopped', origin: 'campaign', title: 'Task stopped (cancelled)', occurredAt: 2 }
 
-describe('isTerminalCampaignKind', () => {
-  it('accepts only campaign-passed and campaign-ended', () => {
-    expect(isTerminalCampaignKind('campaign-passed')).toBe(true)
-    expect(isTerminalCampaignKind('campaign-ended')).toBe(true)
-    expect(isTerminalCampaignKind('turn-finished')).toBe(false)
-    expect(isTerminalCampaignKind('awaiting-trial')).toBe(false)
+describe('isSettledCampaignEvent', () => {
+  it('accepts only campaign-origin events, whatever their kind', () => {
+    expect(isSettledCampaignEvent(PASSED_EVENT)).toBe(true)
+    expect(isSettledCampaignEvent(ENDED_EVENT)).toBe(true)
+    expect(isSettledCampaignEvent({ origin: 'campaign' })).toBe(true)
+    // The same kinds under a commit origin are single rounds of a running campaign.
+    expect(isSettledCampaignEvent({ origin: 'commit' })).toBe(false)
+    expect(isSettledCampaignEvent({ origin: 'merge' })).toBe(false)
   })
 })
 
@@ -86,7 +88,7 @@ describe('deliverCampaignNotice', () => {
   it('ignores a non-terminal event without touching the registry', () => {
     const agent = fakeAgent('idle')
     const agentsByTask = new Map<string, NotifiableAgent>([['task-1', agent]])
-    deliverCampaignNotice(agentsByTask, { taskId: 'task-1', kind: 'awaiting-trial', title: 'x', occurredAt: 1 }, 'en')
+    deliverCampaignNotice(agentsByTask, { taskId: 'task-1', kind: 'awaiting-trial', origin: 'commit', title: 'Round 1 passed, awaiting trial', occurredAt: 1 }, 'en')
     expect(agent.delivered).toEqual([])
     expect(agentsByTask.has('task-1')).toBe(true)
   })

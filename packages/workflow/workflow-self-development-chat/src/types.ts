@@ -352,7 +352,16 @@ export interface RunnerVerifyPort {
 /** One unified campaign notification event (events service projection; DH-a adds the campaign kinds). */
 export interface CampaignEvent {
   readonly taskId: string
+  /** The events service's closed kind vocabulary (`awaiting-trial`, `failed`, `stopped`, ...). */
   readonly kind: string
+  /**
+   * Which raw source the events service folded the event from: `commit`
+   * (one durable task-journal commit, such as a single failed round),
+   * `campaign` (the Remote facade settling a whole campaign), or `merge`.
+   * Only `campaign` events are campaign results; a failed round is a
+   * `commit` event of kind `failed` while the campaign keeps running.
+   */
+  readonly origin: string
   readonly title: string
   readonly occurredAt: number
 }

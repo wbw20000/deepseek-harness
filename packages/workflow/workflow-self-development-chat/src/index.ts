@@ -25,7 +25,7 @@ import { budgetViolation } from './budget.ts'
 import { GUIDANCE_SECTION_NAME, GUIDANCE_SECTION_ORDER_NAME, GUIDANCE_TEXT } from './guidance.ts'
 import { runMerge } from './merge.ts'
 import type { MergeDeps } from './merge.ts'
-import { deliverCampaignNotice } from './notify.ts'
+import { deliverCampaignNotice, isSettledCampaignEvent } from './notify.ts'
 import type { NotifiableAgent } from './notify.ts'
 import { runPropose } from './propose.ts'
 import type { ProposeDeps } from './propose.ts'
@@ -386,7 +386,7 @@ export class SelfDevelopmentChat extends Service {
     })))
 
     const subscribeCampaignEvents = (events: CampaignEventSource): (() => void) => events.subscribe((event) => {
-      if (event.kind !== 'campaign-passed' && event.kind !== 'campaign-ended') return
+      if (!isSettledCampaignEvent(event)) return
       this.latestEvents.set(event.taskId, event)
       deliverCampaignNotice(this.agentsByTask, event, this.resolved.cardLocale)
     })

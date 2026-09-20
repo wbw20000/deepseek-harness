@@ -212,12 +212,12 @@ describe('unified event sequence over the real service', () => {
     await controller.recordTrialApproval({ ...header(9, 'trial'), approvedBy: 'user' })
     await controller.stop({ ...header(10, 'stop') })
     expect(seen).toEqual([
-      { taskId: 'task-1', kind: 'awaiting-decision', sessionId: undefined, title: 'Plan drafted, awaiting confirmation', occurredAt: now, revision: 3 },
-      { taskId: 'task-1', kind: 'awaiting-decision', sessionId: undefined, title: 'Plan confirmed, awaiting development approval', occurredAt: now, revision: 4 },
-      { taskId: 'task-1', kind: 'awaiting-decision', sessionId: undefined, title: 'Budget approved, task ready', occurredAt: now, revision: 5 },
-      { taskId: 'task-1', kind: 'failed', sessionId: undefined, title: 'Round 1 failed', occurredAt: now, revision: 7 },
-      { taskId: 'task-1', kind: 'awaiting-trial', sessionId: undefined, title: 'Round 2 passed, awaiting trial', occurredAt: now, revision: 9 },
-      { taskId: 'task-1', kind: 'stopped', sessionId: undefined, title: 'Task stopped (cancelled)', occurredAt: now, revision: 11 },
+      { taskId: 'task-1', kind: 'awaiting-decision', origin: 'commit', sessionId: undefined, title: 'Plan drafted, awaiting confirmation', occurredAt: now, revision: 3 },
+      { taskId: 'task-1', kind: 'awaiting-decision', origin: 'commit', sessionId: undefined, title: 'Plan confirmed, awaiting development approval', occurredAt: now, revision: 4 },
+      { taskId: 'task-1', kind: 'awaiting-decision', origin: 'commit', sessionId: undefined, title: 'Budget approved, task ready', occurredAt: now, revision: 5 },
+      { taskId: 'task-1', kind: 'failed', origin: 'commit', sessionId: undefined, title: 'Round 1 failed', occurredAt: now, revision: 7 },
+      { taskId: 'task-1', kind: 'awaiting-trial', origin: 'commit', sessionId: undefined, title: 'Round 2 passed, awaiting trial', occurredAt: now, revision: 9 },
+      { taskId: 'task-1', kind: 'stopped', origin: 'commit', sessionId: undefined, title: 'Task stopped (cancelled)', occurredAt: now, revision: 11 },
     ])
   })
 })
@@ -278,7 +278,7 @@ describe('local notification command', () => {
     for (const line of lines) {
       // JSON serialization drops the `undefined` sessionId: self-development
       // events are not bound to a chat session, so the key is simply absent.
-      expect(Object.keys(line).sort()).toEqual(['kind', 'occurredAt', 'revision', 'taskId', 'title'])
+      expect(Object.keys(line).sort()).toEqual(['kind', 'occurredAt', 'origin', 'revision', 'taskId', 'title'])
       expect(JSON.stringify(line)).not.toContain('chat transcript search')
     }
   })

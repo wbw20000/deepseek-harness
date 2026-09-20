@@ -70,6 +70,7 @@ export function mapMergeIntegratedToEvent(payload: MergeIntegratedPayload, now: 
   return {
     taskId: payload.taskId,
     kind: 'awaiting-trial',
+    origin: 'merge',
     sessionId: undefined,
     title: 'Task integrated into stable',
     occurredAt: now(),
@@ -88,6 +89,7 @@ export function mapMergeBlockedToEvent(payload: MergeBlockedPayload, now: () => 
   return {
     taskId: payload.taskId,
     kind: 'failed',
+    origin: 'merge',
     sessionId: undefined,
     title: `Merge blocked: ${payload.status}`,
     occurredAt: now(),

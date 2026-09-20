@@ -19,16 +19,19 @@ export interface NotifiableAgent {
   inject(message: UserMessage): void
 }
 
-/** Campaign event kinds this package treats as a settled, notice-worthy campaign. */
-const TERMINAL_KINDS: ReadonlySet<string> = new Set(['campaign-passed', 'campaign-ended'])
-
 /**
- * Whether an event kind should produce a chat notice.
- * @param kind - the campaign event's `kind` field.
- * @returns `true` for `campaign-passed` and `campaign-ended`.
+ * Whether an event is a settled, notice-worthy campaign result. The events
+ * service folds a settled campaign into its shared kind vocabulary
+ * (`awaiting-trial` for a pass, `failed`/`stopped` for an end) under
+ * `origin: 'campaign'`; a single failed or passed round is the same kind
+ * under `origin: 'commit'` while the campaign keeps running, and a merge
+ * result is `origin: 'merge'`, so the origin — never the kind or the fixed
+ * title text — is what marks a campaign result.
+ * @param event - the event as the events service published it.
+ * @returns `true` only for a campaign-origin event.
  */
-export function isTerminalCampaignKind(kind: string): boolean {
-  return TERMINAL_KINDS.has(kind)
+export function isSettledCampaignEvent(event: Pick<CampaignEvent, 'origin'>): boolean {
+  return event.origin === 'campaign'
 }
 
 /**
@@ -38,7 +41,7 @@ export function isTerminalCampaignKind(kind: string): boolean {
  * @returns the message to deliver to the proposing agent.
  */
 export function campaignNoticeMessage(event: CampaignEvent, locale: CardLocale): UserMessage {
-  const passed = event.kind === 'campaign-passed'
+  const passed = event.kind === 'awaiting-trial'
   const text = locale === 'zh'
     ? `任务 ${event.taskId} 的自开发战役${passed ? '已通过' : '已结束'}：${event.title}。用 self_development_status 查看详情${passed ? '和试验版地址' : ''}。`
     : `Task ${event.taskId}'s self-development campaign ${passed ? 'passed' : 'ended'}: ${event.title}. `
@@ -71,7 +74,7 @@ export function deliverCampaignNotice(
   event: CampaignEvent,
   locale: CardLocale,
 ): void {
-  if (!isTerminalCampaignKind(event.kind)) return
+  if (!isSettledCampaignEvent(event)) return
   const agent = agentsByTask.get(event.taskId)
   if (agent === undefined) return
   agentsByTask.delete(event.taskId)

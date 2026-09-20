@@ -247,6 +247,8 @@ export interface RecentEvent {
   readonly taskId: string
   /** What the human should notice. */
   readonly kind: 'turn-finished' | 'failed' | 'awaiting-decision' | 'awaiting-trial' | 'stopped'
+  /** Which raw source the events mapping folded the event from: a task-journal commit, a settled campaign, or a merge. */
+  readonly origin: 'commit' | 'campaign' | 'merge'
   /** Owning chat session; absent for self-development tasks. */
   readonly sessionId?: string
   /** Fixed-template summary chosen by the events mapping. */

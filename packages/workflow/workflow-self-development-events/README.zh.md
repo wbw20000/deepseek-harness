@@ -45,7 +45,7 @@ kind: "package-reference"
 <a id="event-model-and-mapping"></a>
 ## 事件模型与映射
 
-一个 `SelfDevelopmentEvent` 携带 `taskId`、`kind`、`sessionId`、`title`、`occurredAt` 以及提交后的投影 `revision`。`sessionId` 可选且在这里恒为 `undefined`：自开发任务不绑定聊天会话，可选字段让同一事件形状仍可被会话绑定的通知消费方复用。每个标题都是固定英文模板：只包含轮数与封闭词表中的原因，绝不包含自由文本的失败原因或交接细节。
+一个 `SelfDevelopmentEvent` 携带 `taskId`、`kind`、`origin`、`sessionId`、`title`、`occurredAt` 以及提交后的投影 `revision`。`origin` 说明事件是从哪种原始来源折叠而来——`commit` 是一条持久的任务日志提交（下表），`campaign` 是 Remote 门面把整个战役收尾，`merge` 是聊天合并流程——因为 `kind` 词表是三者刻意共用的（一轮通过与整个战役通过都让任务进入 `awaiting-trial`）：需要把"战役已收尾"与"其中一轮"区分开的消费方——chat 包的战役结果通知、试验服务的自动打开——认的是 `origin`，从不认固定标题文本。`sessionId` 可选且在这里恒为 `undefined`：自开发任务不绑定聊天会话，可选字段让同一事件形状仍可被会话绑定的通知消费方复用。每个标题都是固定英文模板：只包含轮数与封闭词表中的原因，绝不包含自由文本的失败原因或交接细节。
 
 | 持久事件 | Kind | 标题 |
 |---|---|---|

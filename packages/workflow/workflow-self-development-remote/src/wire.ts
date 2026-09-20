@@ -93,6 +93,7 @@ export function toWireEvent(event: SelfDevelopmentEvent): RecentEvent {
   return {
     taskId: event.taskId,
     kind: event.kind,
+    origin: event.origin,
     ...(event.sessionId === undefined ? {} : { sessionId: event.sessionId }),
     title: event.title,
     occurredAt: event.occurredAt,
