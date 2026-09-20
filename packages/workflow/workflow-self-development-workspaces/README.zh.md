@@ -36,7 +36,7 @@ kind: "package-reference"
 | `allocate(req)` | 为 `req.taskId` 创建工作区：执行 `git worktree add -b selfdev/<taskId> <experimentsRoot>/<taskId>/worktree <baseCommit>`（`baseCommit` 缺省取项目 `HEAD`），并从 `dataHomeTemplate` 复制出 `<experimentsRoot>/<taskId>/dsh-home` 数据目录。配置了 `setup` 时，其命令随后会在新建的 worktree 内运行一次，在登记写入之前；非零退出或超时会把 worktree 与数据目录一并拆除、不登记，并抛出 `SELF_DEV_WORKSPACE_SETUP_FAILED`；干净退出则给登记记录盖上 `setupCompletedAt`。同一 taskId 的重复分配会原样返回已登记的记录，无论新请求给出的 projectRoot 是什么，且绝不重跑 setup。已分配数量达到配置上限后，新的分配会以 `SELF_DEV_WORKSPACE_LIMIT` 被拒绝——绝不排队，因为排在活跃 worktree 之后的任务并不会并行运行。对同一 experiments 根目录的分配与释放会在内存中串行，因此上限检查与登记写入在单进程内是精确的。所有目标路径都会在创建任何东西之前被证明解析于 experiments 根目录之内，且登记项最后写入，因此分配失败不会留下半成品工作区。 |
 | `release(taskId)` | 用 `git worktree remove --force` 移除已登记的 worktree，删除数据目录，并删除登记项。只触碰登记过的路径，且每条路径在删除前都会经 `realpath` 重新解析：解析结果落在 experiments 根目录之外的登记路径会被拒绝；已消失的 worktree 目录改为从 git 登记中 prune；不存在的数据目录本来就已经不在了。登记路径之外的文件不受影响。 |
 | `list()` | 从持久登记文件返回当前已登记的工作区；返回的快照不反映之后的变更。 |
-| `integrate(req)` | 在下文的串行集成约定下，把 `req.taskId` 的 worktree 集成进 `req.targetBranch`。集成过程中的 git 失败以携带原因的 `failed` 结果返回，不会抛出；未分配的 taskId 抛出 `SELF_DEV_WORKSPACE_TASK_UNKNOWN`。同一服务实例上的调用在内存中串行；跨进程的调用在 experiments 根目录的集成锁上串行。可选的 `req.verify(worktree)` 校验门会在 rebase（如果发生过）之后、fast-forward 之前运行一次，无论基线是否移动；被拒绝或抛出异常都会返回 `{ status: 'verification-failed', reason, baseMoved }`，并让目标分支保持不变。 |
+| `integrate(req)` | 在下文的串行集成约定下，把 `req.taskId` 的 worktree 集成进 `req.targetBranch`。集成过程中的 git 失败以携带原因的 `failed` 结果返回，不会抛出；未分配的 taskId 抛出 `SELF_DEV_WORKSPACE_TASK_UNKNOWN`。同一服务实例上的调用在内存中串行；跨进程的调用在 experiments 根目录的集成锁上串行。取到锁后、任何 rebase 之前，脏 worktree 会在提供了 `req.snapshot` 时被快照提交，未提供时整个集成会原样失败（见下文）。可选的 `req.verify(worktree)` 校验门会在 rebase（如果发生过）之后、fast-forward 之前运行一次，无论基线是否移动；被拒绝或抛出异常都会返回 `{ status: 'verification-failed', reason, baseMoved }`，并让目标分支保持不变。 |
 
 | 配置字段 | 含义 |
 |---|---|
@@ -62,11 +62,12 @@ kind: "package-reference"
 每个 experiments 根目录同一时间只运行一个集成，由 `<experimentsRoot>/integration.lock` 守护；锁文件记录持有进程的 pid，pid 已不复存在的锁视为陈旧锁，由下一个获取者清除——但仅当文件内容仍与判定陈旧时读到的一致，被并发获取者改写过的锁会被等待而不是被删除——存活持有者最多被等待一分钟，之后本次尝试以 `SELF_DEV_WORKSPACE_INTEGRATION_BUSY` 被拒绝。持锁期间，集成依次：
 
 1. 解析目标 tip：若目标分支配置了上游则先 fetch，并在远程跟踪引用存在时使用它；否则以本地分支为基线权威。
-2. 当目标 tip 与分配时的 `baseCommit` 不同（即 `baseMoved`），在 worktree 中把任务分支 rebase 到目标 tip 上。发生冲突时中止 rebase 并返回 `{ status: 'conflict', files, baseMoved: true }`——该任务需要针对移动后的基线重新开发并复验。其余 rebase 失败同样会被中止，并以 `failed` 结果返回。
-3. 当请求携带 `verify(worktree)` 校验门时，针对该 worktree 运行一次——第 2 步执行过 rebase 时就是 rebase 后的 worktree，否则原样——无论 `baseMoved` 与否都会运行。被拒绝（`{ ok: false, reason }`）或抛出异常（异常的字符串形式成为 `reason`）都会返回 `{ status: 'verification-failed', reason, baseMoved }` 且不执行 fast-forward：目标分支保持不变，已完成的 rebase 结果留在 worktree 中供后续修复使用。
-4. 把目标分支 fast-forward 到 worktree HEAD（此时它已包含目标 tip）：项目根目录检出着该分支时用 `merge --ff-only`；分支未被任何 worktree 检出时用比较并交换的 `update-ref`；分支被其他 worktree 检出时拒绝。这里从不创建 merge 提交，从不强制移动引用；非祖先关系的移动会让集成失败。成功的 `integrated` 结果总是携带 `baseMoved`，调用方可以据此区分"基线未变的直接 fast-forward"与"先 rebase 过的 fast-forward"。
+2. 当 worktree 有未提交的改动时——不论是否已被跟踪，但排除 `.gitignore` 排除的部分——要么把它们快照提交，要么直接拒绝。提供了 `req.snapshot` 时，执行 `git add -A` 加一次提交，作者与信息取自 `snapshot.message` 与 `snapshot.author`，不带 GPG 签名并 `--no-verify`（任务仓库自己的钩子不是本包应当信任或等待的东西）；新提交的 id 会随后进入每一种结果的 `snapshotCommit` 字段。未提供时，在触碰任何东西之前直接返回 `{ status: 'failed', reason: 'worktree has uncommitted changes and no snapshot identity was supplied' }`。干净的 worktree 完全跳过这一步。
+3. 当目标 tip 与分配时的 `baseCommit` 不同（即 `baseMoved`），在 worktree 中把任务分支 rebase 到目标 tip 上。发生冲突时中止 rebase 并返回 `{ status: 'conflict', files, baseMoved: true }`——该任务需要针对移动后的基线重新开发并复验。其余 rebase 失败同样会被中止，并以 `failed` 结果返回。
+4. 当请求携带 `verify(worktree)` 校验门时，针对该 worktree 运行一次——第 3 步执行过 rebase 时就是 rebase 后的 worktree，否则原样——无论 `baseMoved` 与否都会运行。被拒绝（`{ ok: false, reason }`）或抛出异常（异常的字符串形式成为 `reason`）都会返回 `{ status: 'verification-failed', reason, baseMoved }` 且不执行 fast-forward：目标分支保持不变，已完成的 rebase 结果留在 worktree 中供后续修复使用。
+5. 把目标分支 fast-forward 到 worktree HEAD（此时它已包含目标 tip）：项目根目录检出着该分支时用 `merge --ff-only`；分支未被任何 worktree 检出时用比较并交换的 `update-ref`；分支被其他 worktree 检出时拒绝。这里从不创建 merge 提交，从不强制移动引用；非祖先关系的移动会让集成失败。成功的 `integrated` 结果总是携带 `baseMoved`，调用方可以据此区分"基线未变的直接 fast-forward"与"先 rebase 过的 fast-forward"。
 
-每一步都不留半状态：已开始的 rebase 会在返回结果前被中止；集成收尾时无论成败（包括 `verification-failed`）都会释放锁。rebase 会改写任务的提交，因此 rebase 后的任务分支以新的提交 id 承载原有变更。
+每一步都不留半状态：已开始的 rebase 会在返回结果前被中止；集成收尾时无论成败（包括 `verification-failed`）都会释放锁。rebase 会改写任务的提交，因此 rebase 后的任务分支以新的提交 id 承载原有变更。快照提交是"不留半状态"唯一的例外：第 2 步一旦提交，它就是一个真实、永久的提交，留在 worktree 的历史里，不论之后哪一步如何结束集成；结果上的 `snapshotCommit` 就是调用方重新找到它的办法。
 
 <a id="on-disk-layout"></a>
 ## 磁盘布局
@@ -126,6 +127,7 @@ kind: "package-reference"
 - **幂等分配返回首条记录**——对存活任务的重复 `allocate` 原样返回已登记的工作区，即使新请求给出不同的 projectRoot；纠正分配错的项目根目录必须先 release。
 - **校验门由调用方提供，不受沙箱约束**——`req.verify` 在本进程中以本进程的权限针对真实 worktree 运行；本包既不为它设超时，也不隔离它。挂起的校验门会一直占着集成锁，直到调用方自己的等待上限放行为止（进程内串行链没有上限；跨进程锁默认一分钟）。被拒绝与抛出异常会以同样的方式终止集成，因此需要区分诊断信息的校验门必须自己把它折进 `reason`。
 - **setup 命令以操作用户自己的权限运行，不受沙箱约束**——`setup.command` 在新建 worktree 内以 detached 方式 spawn，身份就是那个同用户，环境变量只有 `PATH`/`HOME`；它仍能读写该用户能触及的一切，包括其他任务的 worktree 与数据目录。非零退出或未在 `timeoutMs` 内结束会杀掉该命令整个 POSIX 进程组（不只是直接子进程）并拆除本次分配；干净退出则不去动命令自己留下的组内成员。Windows 没有 POSIX 进程组，因此配置了 `setup` 时会在任何 spawn 之前抛出 `SELF_DEV_WORKSPACE_SETUP_FAILED`。
+- **快照提交是真实、不带签名、且永不回滚的**——`req.snapshot` 里的身份原样被信任为提交作者；本包不会核实调用方声称的身份与实际改动者是否一致。提交不带 GPG 签名，并跳过任务仓库定义的所有钩子（`--no-verify`），因为那些钩子属于一个本包不掌控、也不该信任或等待的仓库。一旦提交就是永久的：冲突、校验失败，或之后任何一步的失败都不会把它撤销，因此 `IntegrationResult.snapshotCommit`——出现在返回的任意一种结果上——是重新找到它的唯一办法。
 
 <a id="dev-note"></a>
 ### 开发备注
