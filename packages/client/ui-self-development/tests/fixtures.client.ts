@@ -77,7 +77,7 @@ export function projectionWithout(
 
 /** One unified event in the facade's wire view. */
 export function event(overrides: Partial<RecentEvent> = {}): RecentEvent {
-  return { taskId: 'task-1', kind: 'turn-finished', title: '第 1 轮结束', occurredAt: 1_700_000_000_000, revision: 2, ...overrides }
+  return { taskId: 'task-1', kind: 'turn-finished', origin: 'commit', title: '第 1 轮结束', occurredAt: 1_700_000_000_000, revision: 2, ...overrides }
 }
 
 /** One stored launch profile, as `card.launchProfile` carries it. */
