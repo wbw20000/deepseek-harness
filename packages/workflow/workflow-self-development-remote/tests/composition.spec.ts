@@ -16,7 +16,7 @@ import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import { TestPlanVersion, TaskSpecVersion } from '@deepseek-ai/dsh-workflow-self-development'
 import SelfDevelopmentRemote from '../src/index.ts'
-import { baseUrlOf, makeEnvironment } from './helpers.ts'
+import { acceptanceDefinition, baseUrlOf, makeEnvironment } from './helpers.ts'
 import type { Environment } from './helpers.ts'
 
 const TASK_ID = 'task-remote-composition'
@@ -64,7 +64,10 @@ afterEach(async () => {
 })
 
 /** Boot all three services from a real `cordis.yml` through the Loader. */
-async function bootComposition(env: Environment): Promise<SelfDevelopmentRemote> {
+async function bootComposition(
+  env: Environment,
+  overrides: { readonly roundDelayMs?: number } = {},
+): Promise<SelfDevelopmentRemote> {
   const configPath = join(env.base, 'cordis.yml')
   await writeFile(configPath, [
     "- name: '@deepseek-ai/dsh-workflow-self-development'",
@@ -84,6 +87,9 @@ async function bootComposition(env: Environment): Promise<SelfDevelopmentRemote>
     '  config:',
     '    enabled: true',
     `    controlDirectory: '${env.controlDirectory}'`,
+    // Omitted when not overridden: the deployment schema's own default (1000)
+    // then applies, exactly like maxConcurrentCampaigns above it.
+    ...(overrides.roundDelayMs === undefined ? [] : [`    roundDelayMs: ${overrides.roundDelayMs}`]),
     '',
   ].join('\n'))
   const booted = new Context()
@@ -364,5 +370,88 @@ describe('real-Loader composition through the Remote facade', () => {
     const inFlight = await facade.getTask(TASK_ID)
     await facade.stop(TASK_ID, inFlight.projection.revision)
     await expect(manual).rejects.toBeDefined()
+  })
+
+  it('ends a campaign as failed after exactly one round when the launch profile\'s acceptance definition lives inside the experiments root, without the fake CLI ever running', { timeout: 60_000 }, async () => {
+    const env = await makeEnvironment()
+    root = env.base
+    const facade = await bootComposition(env)
+
+    let revision = (await facade.createTask(SPEC, 0)).revision
+    revision = (await facade.authorizePlanning(TASK_ID, revision, 'phone-user')).revision
+    revision = (await facade.submitPlanDraft(TASK_ID, revision, DRAFT)).revision
+    revision = (await facade.confirmPlan(TASK_ID, revision, PLAN, 'phone-user')).revision
+    revision = (await facade.approveBudget(TASK_ID, revision, APPROVAL)).revision
+
+    // Same definition bytes as env.acceptancePath, placed inside the
+    // experiments root instead of outside it: the runner's own
+    // loadAcceptance refuses this before controller.startAttempt commits
+    // anything, exactly the pre-flight rejection the revision guard exists
+    // to catch — and unlike env.acceptancePath, this is never about the file
+    // being unreadable or missing (the other loadAcceptance failure already
+    // covered above), so it isolates the placement rule specifically.
+    const insideAcceptancePath = join(env.runnerConfig.experimentsRoot, 'inside-acceptance.json')
+    await writeFile(insideAcceptancePath, acceptanceDefinition())
+    await facade.setLaunchProfile(TASK_ID, {
+      worktree: env.worktree, acceptancePath: insideAcceptancePath, artifactPaths: ['marker.txt', 'marker.txt'],
+      confirmedBy: 'phone-user', loopbackAllowlist: [0],
+    })
+
+    await facade.startCampaign(TASK_ID, revision, { unattended: true, acceptedBy: 'phone-user' })
+    await expect.poll(async () => (await facade.campaign(TASK_ID))?.status, { timeout: 30_000 }).toBe('failed')
+
+    const finalState = await facade.campaign(TASK_ID)
+    expect(finalState).toMatchObject({ status: 'failed', rounds: 0 })
+    expect(finalState?.reason).toContain('must live outside the experiments root')
+    // The core never saw attempt/started: status never left ready and no
+    // round was consumed, unlike an attempt that genuinely reaches the core
+    // and fails there (consumedRounds would be 1, as the very first test in
+    // this file shows for that different scenario).
+    const detail = await facade.getTask(TASK_ID)
+    expect(detail.projection.status).toBe('ready')
+    expect(detail.projection.consumedRounds).toBe(0)
+    // The fake CLI is only ever invoked from inside the executor, which
+    // loadAcceptance's rejection never lets this launch reach — so its
+    // DSH_HOME/launches ledger was never created at all.
+    await expect(readFile(join(env.runnerConfig.dshHome, 'launches'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await facade.activeTasks()).toEqual([])
+  })
+
+  it('waits at least roundDelayMs before launching the round after one that genuinely failed at the core', { timeout: 60_000 }, async () => {
+    const env = await makeEnvironment()
+    root = env.base
+    const roundDelayMs = 1200
+    const facade = await bootComposition(env, { roundDelayMs })
+
+    let revision = (await facade.createTask(SPEC, 0)).revision
+    revision = (await facade.authorizePlanning(TASK_ID, revision, 'phone-user')).revision
+    revision = (await facade.submitPlanDraft(TASK_ID, revision, DRAFT)).revision
+    revision = (await facade.confirmPlan(TASK_ID, revision, PLAN, 'phone-user')).revision
+    revision = (await facade.approveBudget(TASK_ID, revision, APPROVAL)).revision
+    await facade.setLaunchProfile(TASK_ID, {
+      worktree: env.worktree, acceptancePath: env.acceptancePath, artifactPaths: ['marker.txt', 'marker.txt'],
+      confirmedBy: 'phone-user', loopbackAllowlist: [0],
+    })
+
+    // SPEC's 'dev' requirement writes WIP2 on its first launch — acceptance
+    // wants DONE, so round one genuinely reaches and fails at the core —
+    // and DONE on its second, so round two passes: the same fixture
+    // behavior the very first test in this file drives through a direct
+    // runAttempt, here driven automatically by an unattended campaign.
+    await facade.startCampaign(TASK_ID, revision, { unattended: true, acceptedBy: 'phone-user' })
+    await expect.poll(async () => (await facade.campaign(TASK_ID))?.rounds, { timeout: 30_000 }).toBe(1)
+    const afterRoundOne = Date.now()
+    await expect.poll(async () => (await facade.campaign(TASK_ID))?.rounds, { timeout: 30_000 }).toBe(2)
+    const afterRoundTwo = Date.now()
+
+    // roundDelayMs is awaited in full before round two's own real work (a
+    // fake-CLI spawn plus acceptance) even starts, so the gap between the
+    // two rounds settling is always at least roundDelayMs on top of round
+    // two's own execution time — comfortably larger than the low hundreds
+    // of milliseconds a single fake-CLI launch plus acceptance takes
+    // elsewhere in this file, so a missing or skipped wait fails this bound.
+    expect(afterRoundTwo - afterRoundOne).toBeGreaterThanOrEqual(roundDelayMs)
+
+    await expect.poll(async () => (await facade.campaign(TASK_ID))?.status, { timeout: 30_000 }).toBe('passed')
   })
 })

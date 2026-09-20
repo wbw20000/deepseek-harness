@@ -39,6 +39,7 @@ kind: "package-reference"
 | `allowedActors` | 操作者白名单。为空（默认）表示不限制；非空时操作的 actor 字段必须出现在列表中。 |
 | `controlDirectory` | 任务控制服务的控制目录。门面读取它以列出任务日志，并只在其中写自己的 `launch-profiles/<taskId>.json` 与 `campaigns/<taskId>.json` 文件；从不触碰 `tasks/` 子树。 |
 | `maxConcurrentCampaigns` | 同时 `running` 战役数的默认上限，`startCampaign` 调用未指定自己的 `maxConcurrentCampaigns` 时生效。直接构造（每个测试，以及任何不经 `cordis.yml` 加载本插件的部署）必须显式设置；`cordis.yml` schema 默认取 2。 |
+| `roundDelayMs` | 一轮真正到达核心、失败之后，到下一轮启动之间的最短间隔。是纵深防御，防的是短时间内连续打出一串"已启动但失败"的轮次，不是约束轮次数量的机制——约束轮次数量的机制见下方"战役"一节的"轮次循环"。直接构造必须显式设置，与 `maxConcurrentCampaigns` 同理；`cordis.yml` schema 默认取 1000。 |
 
 `controlDirectory` 重复了任务控制服务的值，因为该服务不公开其已解析配置，且本包不得修改它。门面在构造时校验该路径，相对路径在加载即失败。
 
@@ -98,19 +99,28 @@ kind: "package-reference"
 
 每个启动字段（`worktree`、`artifactPaths`、`acceptancePath`、`loopbackAllowlist`）都像 `runAttempt` 省略字段一样从任务已存启动档案推导——战役不接受逐轮覆盖，因此 `startCampaign`要求已经设置好启动档案。`dataHome` 永不转发给战役轮次，这与 `runAttempt` 自身的行为一致：只有显式的线上请求才携带它。
 
-**轮次循环。** 每一轮都调用 `runAttempt` 所用的同一条 runner 路径，携带新派生的 `PresenceConfirmation`（新的受信时钟观察）与新生成的 `operationId`——绝不是缓存或复用的确认。一轮的结果决定循环的走向：
+**轮次循环。** 每一轮都调用 `runAttempt` 所用的同一条 runner 路径，携带新派生的 `PresenceConfirmation`（新的受信时钟观察）与新生成的 `operationId`——绝不是缓存或复用的确认。每一轮（含第一轮）启动前，循环先读一次核心的实时状态，再启动：
 
 ```
-running --[round passes]--------------------------------------> passed        (campaign-passed event)
-running --[round refused: budget exhausted]---------------------> exhausted    (campaign-ended event)
-running --[round cancelled, e.g. by stopCampaign]-----------------> stopped     (campaign-ended event)
-running --[round fails, unattended: true, budget allows more]---> running (next round)
-running --[round fails, unattended: false]-----------------------> stopped     (campaign-ended event)
-running --[unrecognized exception]--------------------------------> failed      (campaign-ended event)
-running --[stopCampaign call]--------------------------------------> stopped    (campaign-ended event)
+Live status read, ahead of every round:
+  status: ready                                       → launch the round, below
+  status: stopped, reason no-progress or budget-exhausted → exhausted  (campaign-ended event)
+  status: stopped, any other reason, or any other status  → stopped    (campaign-ended event)
+
+Launching the round:
+running --[round passes]--------------------------------------------------> passed    (campaign-passed event)
+running --[round refused: budget exhausted]---------------------------------> exhausted (campaign-ended event)
+running --[round rejected before the core committed attempt/started]--------> failed    (campaign-ended event)
+running --[round cancelled, e.g. by a concurrent stopCampaign]---------------> stopped   (campaign-ended event)
+running --[round fails at the core, unattended: true, budget allows more]---> running (next round, after roundDelayMs)
+running --[round fails at the core, unattended: false]------------------------> stopped   (campaign-ended event)
+running --[unrecognized exception]---------------------------------------------> failed    (campaign-ended event)
+running --[stopCampaign call]-----------------------------------------------------> stopped  (campaign-ended event)
 ```
 
-一次普通的轮次失败（验收失败或迟到，或任何其他可识别的 runner 错误）会被重试，就像人工重试一次失败的 `runAttempt` 一样——核心自己的 `noProgressAttemptLimit` 才是最终把持续失败的轮次转成预算耗尽拒绝的机制，这也是为什么 `preset: 'unlimited'` 总会设置该字段。只有本包完全无法识别为核心或 runner 错误的异常——是崩溃，不是轮次结果——才会让战役以 `failed` 结束且不重试；其消息绝不会被吞掉。
+实时状态检查存在的原因：核心可能在某一轮结算后反应式地把任务停下——无进展上限或预算下限在核心自己的失败后处理里触发——而这一轮自己的拒绝从不携带这个停止事实；只有下一轮启动前的这次读取才能可靠地捕捉到它，而不是盲目重试进去。
+
+一轮在核心提交 `attempt/started` 之前就被拒绝——验收定义不可读、格式不对、或放在了实验根目录之内，确认没有绑定真实的启动事实，重放操作的启动记录对不上，或任何本包未特别识别的其他拒绝——会让战役立即以 `failed` 结束：不重试，也不计入 `rounds`。以上三个可识别的 runner 错误码无需借助其他手段即可判定；其余每一种拒绝，能否与一次到达核心的普通失败区分开，靠的是核心自己的 revision（轮次前后各读一次），绝不单靠错误码——一轮如果从未到达核心，无论表面上是什么错误，核心的 revision 都不会前进。一次真正到达核心的普通轮次失败（验收失败或迟到，或任何其他在核心留下记录的可识别 runner 错误）会被重试，就像人工重试一次失败的 `runAttempt` 一样，重试前先等待 `roundDelayMs`——这是纵深防御，防的是背靠背打出一串这样的轮次，不是约束轮次数量的机制；真正约束一个持续失败任务的是下一轮启动前的实时状态检查，经由核心自己的 `noProgressAttemptLimit`，这也是为什么 `preset: 'unlimited'` 总会设置该字段。只有本包完全无法识别为核心或 runner 错误的异常——是崩溃，不是轮次结果——才会以同样的方式让战役以 `failed` 结束且不重试；其消息绝不会被吞掉。
 
 `stopCampaign(taskId, reason)` 先经 runner 取消当前在途的一轮，再以给定的 `reason` 把战役收尾为 `stopped`。幂等：对已处于终态的战役调用是空操作，原样返回已存状态。并发的收尾方（`stopCampaign` 与循环自身的收尾竞争）不会相互破坏：恰好一次写入胜出，其余每个调用方——包括在胜出者完成之前就已开始的 `stopCampaign`——都会返回那同一个真实结果，绝不是自己那份收尾前的过期视图。
 
@@ -197,6 +207,7 @@ running --[stopCampaign call]--------------------------------------> stopped    
 - **无人值守战役不是隔离保证** — `unattended-accepted` 记录的是一次性人工接受，绝不是持续在场、沙箱化或配额强制。runner 自己 README 所述的每一条限制（同用户执行、无进程组逃逸防护、没有 Windows 或 Linux 时钟源）对战役启动的每一轮都同样成立。24 小时、受 `noProgressAttemptLimit` 约束的预算是时间与轮数上限，不是安全边界。
 - **战役一轮不接受逐轮覆盖** — 每个启动字段都来自任务已存的启动档案；战役不能在轮次之间改变 worktree、产物路径、验收路径、回环端口允许清单或数据目录。战役进行中要改变它们，需要先停止、重新调用 `setLaunchProfile`，再启动一个新的。
 - **战役收尾的竞态被化解，而非被阻止** — `stopCampaign` 与循环自身的自然收尾（一轮通过、预算耗尽，或无法识别的崩溃）竞争时，绝不会破坏记录或重复上报事件，但两个并发 `stopCampaign` 的 reason 最终哪一个被持久化，调用方无法从自己这一侧确定。
+- **未到达核心护栏是对核心 revision 的一次观测，不是 runner 或验收器自证的属性** — 循环从"这一轮结束后 revision 未变"（轮次前后各读一次）推断"这一轮从未提交 attempt/started"；它从不检查 runner 或验收器自身的内部状态，也无法区分"确实从未启动"与一个假设性的核心 bug——提交了什么却没有把它反映到上报的 revision 里。`roundDelayMs` 只在护栏没有拦下的那种轮次（它已独立确认到达了核心）之后才等待，绝不会延迟护栏自身的立即终止。
 
 <a id="dev-note"></a>
 ### 开发备注

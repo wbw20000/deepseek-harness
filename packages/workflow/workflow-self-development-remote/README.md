@@ -39,6 +39,7 @@ Expose the self-development task-control service and the supervised runner as on
 | `allowedActors` | Actor allowlist. Empty (the default) means no restriction; non-empty requires the operation's actor field to appear in the list. |
 | `controlDirectory` | The task-control service's control directory. The facade reads it to list task journals and writes only its own `launch-profiles/<taskId>.json` and `campaigns/<taskId>.json` files under it; it never touches the `tasks/` subtree. |
 | `maxConcurrentCampaigns` | Default cap on simultaneously `running` campaigns across every task, applied when a `startCampaign` call omits its own `maxConcurrentCampaigns`. A direct construction (every test, and any deployment that does not load this plugin through `cordis.yml`) must set it explicitly; the `cordis.yml` schema defaults it to 2. |
+| `roundDelayMs` | Minimum time between a campaign round that genuinely reached the core and failed, and the next round's launch. Depth defense against a rapid string of started-but-failing rounds, not what bounds them — the Campaigns section's Round loop below documents the mechanism that does. A direct construction must set it explicitly, exactly like `maxConcurrentCampaigns`; the `cordis.yml` schema defaults it to 1000. |
 
 `controlDirectory` repeats the task-control service's value because that service keeps its resolved configuration private and this package may not modify it. The facade validates the path at construction and fails loudly on a relative value.
 
@@ -96,19 +97,28 @@ A campaign launches a task's stored launch profile through the runner automatica
 
 Every launch field (`worktree`, `artifactPaths`, `acceptancePath`, `loopbackAllowlist`) derives from the task's stored launch profile exactly as an omitted `runAttempt` field would — a campaign takes no per-round overrides, so `startCampaign` requires a launch profile to already be set. `dataHome` is never forwarded to a campaign round, matching `runAttempt`'s own behavior: only an explicit wire request carries it.
 
-**Round loop.** Each round calls the same runner path `runAttempt` uses, with a freshly derived `PresenceConfirmation` (a new trusted-clock observation) and a freshly generated `operationId` — never a cached or reused confirmation. A round's outcome resolves the loop:
+**Round loop.** Each round calls the same runner path `runAttempt` uses, with a freshly derived `PresenceConfirmation` (a new trusted-clock observation) and a freshly generated `operationId` — never a cached or reused confirmation. Before every round, including the first, the loop reads the core's live status, then launches:
 
 ```
-running --[round passes]--------------------------------------> passed        (campaign-passed event)
-running --[round refused: budget exhausted]---------------------> exhausted    (campaign-ended event)
-running --[round cancelled, e.g. by stopCampaign]-----------------> stopped     (campaign-ended event)
-running --[round fails, unattended: true, budget allows more]---> running (next round)
-running --[round fails, unattended: false]-----------------------> stopped     (campaign-ended event)
-running --[unrecognized exception]--------------------------------> failed      (campaign-ended event)
-running --[stopCampaign call]--------------------------------------> stopped    (campaign-ended event)
+Live status read, ahead of every round:
+  status: ready                                       → launch the round, below
+  status: stopped, reason no-progress or budget-exhausted → exhausted  (campaign-ended event)
+  status: stopped, any other reason, or any other status  → stopped    (campaign-ended event)
+
+Launching the round:
+running --[round passes]--------------------------------------------------> passed    (campaign-passed event)
+running --[round refused: budget exhausted]---------------------------------> exhausted (campaign-ended event)
+running --[round rejected before the core committed attempt/started]--------> failed    (campaign-ended event)
+running --[round cancelled, e.g. by a concurrent stopCampaign]---------------> stopped   (campaign-ended event)
+running --[round fails at the core, unattended: true, budget allows more]---> running (next round, after roundDelayMs)
+running --[round fails at the core, unattended: false]------------------------> stopped   (campaign-ended event)
+running --[unrecognized exception]---------------------------------------------> failed    (campaign-ended event)
+running --[stopCampaign call]-----------------------------------------------------> stopped  (campaign-ended event)
 ```
 
-An ordinary round failure (a failed or late acceptance, or any other recognized runner error) is retried exactly like a human retrying a failed `runAttempt` — the core's own `noProgressAttemptLimit` is what eventually turns a persistently broken round into a budget-exhausted refusal, which is why `preset: 'unlimited'` always sets one. Only an exception this package does not recognize as a core or runner error at all — a crash, not a round outcome — ends the campaign as `failed` without retrying; its message is never swallowed.
+The live status read exists because the core can reactively stop a task after a round settles — the no-progress limit or the budget floor tripping inside the core's own post-failure bookkeeping — without that round's own rejection ever naming the stop; only the read ahead of the *next* round reliably catches it instead of retrying blind into it.
+
+A round rejected before the core commits `attempt/started` — an acceptance definition that is unreadable, malformed, or placed inside the experiments root, a confirmation that does not bind the real launch facts, a launch record that does not match a replayed operation, or any other rejection this package does not specifically recognize — ends the campaign as `failed` immediately: not retried, and not counted in `rounds`. The three recognized runner codes above are resolved without help; every other rejection is told apart from an ordinary failure by the core's own revision, read before and after the round, never by its code alone — a round that never reached the core never advances it, regardless of what error surfaces. An ordinary round failure that did reach the core (a failed or late acceptance, or any other recognized runner error committed there) is retried exactly like a human retrying a failed `runAttempt`, after waiting `roundDelayMs` first — depth defense against firing a rapid string of such rounds back to back, not what bounds their count; the live status read ahead of the next round is what actually bounds a persistently broken task, through the core's own `noProgressAttemptLimit`, which is why `preset: 'unlimited'` always sets one. Only an exception this package does not recognize as a core or runner error at all — a crash, not a round outcome — ends the campaign as `failed` the same way, without retrying; its message is never swallowed.
 
 `stopCampaign(taskId, reason)` cancels whatever round is currently in flight through the runner, then finalizes the campaign as `stopped` with the given `reason`. Idempotent: called on an already-terminal campaign, it is a no-op that returns the stored state unchanged. Concurrent finalizers (a `stopCampaign` racing the loop's own termination) never corrupt each other: exactly one write wins, and every other caller — including a `stopCampaign` that started before the winner finished — returns that same actual outcome, never a stale pre-finalization view.
 
@@ -195,6 +205,7 @@ The service adds no prompt prefix and no model-visible surface.
 - **Unattended campaigns are not an isolation guarantee** — `unattended-accepted` records a one-time human acceptance, never continued presence, sandboxing, or quota enforcement; every limitation the runner's own README states (same-user execution, no process-group escape protection, no Windows or Linux clock source) applies identically to every round a campaign launches. A 24-hour, `noProgressAttemptLimit`-bounded budget is a time and round cap, not a safety boundary.
 - **A campaign round takes no per-round overrides** — every launch field comes from the task's stored launch profile; a campaign cannot vary the worktree, artifact paths, acceptance path, loopback allowlist, or data directory between rounds. Changing them mid-campaign requires stopping it, calling `setLaunchProfile` again, and starting a new one.
 - **Campaign finalization races are resolved, not prevented** — a `stopCampaign` racing the loop's own natural termination (a round passing, budget exhausting, or an unrecognized crash) never corrupts the record or double-reports an event, but which of two concurrent `stopCampaign` reasons is the one persisted is not deterministic from the caller's side.
+- **The never-reached-the-core guard is an observation of the core's revision, not a property the runner or the acceptor prove** — the loop infers "this round never committed `attempt/started`" from the projection's revision being unchanged immediately after the round, read before and after; it never inspects the runner or the acceptor's own internal state, and it cannot distinguish "genuinely never started" from a hypothetical core bug that committed something without advancing the revision it reports. `roundDelayMs` waits only after a round the guard did *not* catch — one it independently confirmed reached the core — so it never delays the guard's own immediate termination.
 
 <a id="dev-note"></a>
 ### Dev Note

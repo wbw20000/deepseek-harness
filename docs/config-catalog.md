@@ -3953,6 +3953,18 @@ export interface RemoteConfig {
    * `allowedActors` above.
    */
   readonly maxConcurrentCampaigns: number
+  /**
+   * Minimum time between the end of a failed campaign round that genuinely
+   * reached the core and the start of the next one, milliseconds. Depth
+   * defense against a rapid string of started-but-failing rounds, not the
+   * mechanism that bounds them — a round the core never started at all ends
+   * the campaign outright (see the `Campaigns` README section) and never
+   * reaches this wait. The deployment schema defaults this to 1000 for
+   * `cordis.yml` loading; a direct construction (as every test uses) must
+   * set it explicitly, exactly like `maxConcurrentCampaigns` above — tests
+   * that drive more than one round set it to `0`.
+   */
+  readonly roundDelayMs: number
 }
 ```
 
