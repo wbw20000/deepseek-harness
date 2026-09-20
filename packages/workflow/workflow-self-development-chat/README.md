@@ -34,7 +34,7 @@ Lets a user launch a self-development campaign from an ordinary chat message. `s
 | Config field | Meaning |
 |---|---|
 | `stableRepo` | Absolute path of the repository whose stable-branch `HEAD` seeds `stableBaselineDigest`. |
-| `controlDirectory` | Absolute directory this package writes acceptance definitions into (`<controlDirectory>/acceptance/<taskId>.json`, mode 0600 inside a 0700 directory); also the base of the derived `<controlDirectory>/campaigns/<taskId>.json` path reported by `self_development_status`. |
+| `controlDirectory` | Absolute directory this package writes acceptance definitions into (`<controlDirectory>/acceptance/<taskId>.json`, mode 0600 inside a 0700 directory); also the base of the derived `<controlDirectory>/campaigns/<taskId>.json` path reported by `self_development_status`. Must resolve outside `experimentsRoot` — the runner refuses to judge an acceptance definition placed inside the experiments root, so a nested `controlDirectory` fails every campaign round closed; checked (via `realpath`) at plugin construction and again before every proposal. |
 | `experimentsRoot` | Absolute experiments root used to resolve a task's workspace when no workspaces service is mounted: the fallback requires `<experimentsRoot>/<taskId>` to already exist. |
 | `actor` | Human actor recorded as the task creator, plan confirmer, budget approver, and unattended-campaign acceptor. |
 | `cardLocale` | `'zh'` (default) or `'en'`: the language of the approval-card copy and the campaign-result chat notice. |

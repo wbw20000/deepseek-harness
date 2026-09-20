@@ -34,7 +34,7 @@ kind: "package-reference"
 | Config 字段 | 含义 |
 |---|---|
 | `stableRepo` | 稳定分支所在仓库的绝对路径，其 `HEAD` 用于生成 `stableBaselineDigest`。 |
-| `controlDirectory` | 本包写入验收定义的绝对目录（`<controlDirectory>/acceptance/<taskId>.json`，0600 权限、目录 0700）；也是 `self_development_status` 汇报的派生路径 `<controlDirectory>/campaigns/<taskId>.json` 的基准目录。 |
+| `controlDirectory` | 本包写入验收定义的绝对目录（`<controlDirectory>/acceptance/<taskId>.json`，0600 权限、目录 0700）；也是 `self_development_status` 汇报的派生路径 `<controlDirectory>/campaigns/<taskId>.json` 的基准目录。必须解析到 `experimentsRoot` 之外——runner 拒绝评判放在实验根目录内的验收定义，`controlDirectory` 嵌套在里面会让每一轮战役都被拒；插件构造时与每次提案前都会（经 `realpath`）校验一次。 |
 | `experimentsRoot` | 未挂载工作区服务时用于解析任务工作区的绝对实验根目录：回退路径要求 `<experimentsRoot>/<taskId>` 已存在。 |
 | `actor` | 记录为任务创建者、计划确认人、预算批准人与无人值守战役接受人的人类操作者。 |
 | `cardLocale` | `'zh'`（默认）或 `'en'`：审批卡文案与战役结果聊天通知使用的语言。 |

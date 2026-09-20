@@ -237,6 +237,38 @@ describe('proposeInputViolation', () => {
 })
 
 describe('runPropose', () => {
+  it('fails closed before any approval request when controlDirectory resolves inside experimentsRoot', async () => {
+    // The exact field-test bug this guards: the runner refuses to judge an
+    // acceptance definition placed inside the experiments root, so a nested
+    // controlDirectory failed every campaign round closed for 20,000 rounds.
+    // Re-checked here (not only once at construction) in case the directories
+    // were swapped after the service was constructed; before the approval
+    // request, since there is no reason to ask the user first.
+    const root = await mkdtemp(join(tmpdir(), 'self-dev-chat-propose-placement-'))
+    roots.push(root)
+    const experimentsRoot = join(root, 'exp')
+    const controlDirectory = join(experimentsRoot, 'control')
+    await mkdir(controlDirectory, { recursive: true })
+    const facade = new FakeFacade()
+    const approval = new FakeApproval()
+    const deps: ProposeDeps = {
+      facade,
+      approval,
+      workspaces: new FakeWorkspaces(),
+      config: resolveChatConfig({ stableRepo: '/repo', controlDirectory, experimentsRoot, actor: 'user' }),
+      agent: { id: 'agent-1' },
+      callId: 'call-1',
+      knownTaskIds: [],
+    }
+    const outcome = await runPropose(deps, proposeInput())
+    expect(outcome.ok).toBe(false)
+    if (outcome.ok) return
+    expect(outcome.steps).toEqual([])
+    expect(outcome.reason).toContain('must live outside experimentsRoot')
+    expect(approval.requests).toHaveLength(0)
+    expect(facade.calls).toHaveLength(0)
+  })
+
   it('asks once and performs no facade call when the approval is not allowed-once', async () => {
     const { facade, approval, deps } = await makeDeps()
     approval.outcome = 'rejected'

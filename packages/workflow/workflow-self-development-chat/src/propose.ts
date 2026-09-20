@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import {
   assertPlanCoveredByDefinition,
   acceptancePath,
+  controlDirectoryPlacementViolation,
   directoryExists,
   parseAcceptanceDefinition,
   writeAcceptanceDefinition,
@@ -111,6 +112,17 @@ export async function runPropose(deps: ProposeDeps, rawInput: ProposeInput): Pro
   const inputViolation = proposeInputViolation(input)
   if (inputViolation !== undefined) {
     return { ok: false, steps: [], reason: inputViolation }
+  }
+  // Re-checked here, not only once at plugin construction (`index.ts`): the
+  // runner re-validates placement at the moment it reads the written
+  // definition, so this package does the same at the moment it is about to
+  // write one, in case the configured directories were swapped after
+  // construction. Before the approval request, not after: a misplaced
+  // controlDirectory fails every campaign round closed, so there is no
+  // reason to ask the user first.
+  const placementViolation = controlDirectoryPlacementViolation(deps.config.controlDirectory, deps.config.experimentsRoot)
+  if (placementViolation !== undefined) {
+    return { ok: false, steps: [], reason: placementViolation }
   }
   const steps: ProposeStep[] = []
   const config = deps.config

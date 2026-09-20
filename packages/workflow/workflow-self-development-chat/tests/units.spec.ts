@@ -6,7 +6,7 @@
  * @module units.spec
  */
 
-import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   acceptancePath,
   assertPlanCoveredByDefinition,
+  controlDirectoryPlacementViolation,
   directoryExists,
   parseAcceptanceDefinition,
   writeAcceptanceDefinition,
@@ -184,6 +185,38 @@ describe('writeAcceptanceDefinition', () => {
     // A non-ENOENT stat failure propagates: a file used as a directory segment.
     await writeFile(join(control, 'blocker'), 'x')
     await expect(directoryExists(join(control, 'blocker', 'inner'))).rejects.toThrow()
+  })
+})
+
+describe('controlDirectoryPlacementViolation', () => {
+  it('flags a controlDirectory that resolves inside (or as) experimentsRoot, naming both paths', async () => {
+    // The exact field-test bug this guards: the runner refuses to judge an
+    // acceptance definition placed inside the experiments root, so a nested
+    // controlDirectory failed every campaign round closed for 20,000 rounds
+    // before anyone noticed.
+    root = await mkdtemp(join(tmpdir(), 'self-dev-chat-placement-'))
+    const experimentsRoot = join(root, 'experiments')
+    const controlDirectory = join(experimentsRoot, 'control')
+    await mkdir(controlDirectory, { recursive: true })
+    const violation = controlDirectoryPlacementViolation(controlDirectory, experimentsRoot)
+    expect(violation).toContain(controlDirectory)
+    expect(violation).toContain(experimentsRoot)
+    // The experiments root counts as being "inside" itself too.
+    expect(controlDirectoryPlacementViolation(experimentsRoot, experimentsRoot)).toBeDefined()
+  })
+
+  it('accepts a controlDirectory outside experimentsRoot, and is lenient when either side does not resolve yet', async () => {
+    root = await mkdtemp(join(tmpdir(), 'self-dev-chat-placement-'))
+    const experimentsRoot = join(root, 'experiments')
+    const controlDirectory = join(root, 'control')
+    await mkdir(experimentsRoot, { recursive: true })
+    await mkdir(controlDirectory, { recursive: true })
+    expect(controlDirectoryPlacementViolation(controlDirectory, experimentsRoot)).toBeUndefined()
+    // Neither directory has to exist yet: writeAcceptanceDefinition creates
+    // controlDirectory lazily, and nothing has been placed under a directory
+    // that does not exist.
+    expect(controlDirectoryPlacementViolation(join(root, 'missing-control'), experimentsRoot)).toBeUndefined()
+    expect(controlDirectoryPlacementViolation(controlDirectory, join(root, 'missing-experiments'))).toBeUndefined()
   })
 })
 

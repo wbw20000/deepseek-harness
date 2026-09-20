@@ -8,7 +8,7 @@
  * @module index.spec
  */
 
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -316,6 +316,20 @@ describe('construction', () => {
       { facade: new FakeFacade() },
       { ...VALID_CONFIG, defaultBudget: { mode: 'time', hours: 99 } },
     )).toThrow('defaultBudget')
+  })
+
+  it('rejects a controlDirectory that resolves inside experimentsRoot at construction, before any campaign round can burn', async () => {
+    // The exact field-test bug this guards: the runner refuses to judge an
+    // acceptance definition placed inside the experiments root, so a nested
+    // controlDirectory failed every campaign round closed for 20,000 rounds
+    // before anyone noticed. Failing to mount catches it immediately instead.
+    const experimentsRoot = VALID_CONFIG.experimentsRoot
+    const controlDirectory = join(experimentsRoot, 'control')
+    await mkdir(controlDirectory, { recursive: true })
+    expect(() => makeService(
+      { facade: new FakeFacade() },
+      { ...VALID_CONFIG, controlDirectory },
+    )).toThrow('must live outside experimentsRoot')
   })
 
   it('unregisters every tool and the event subscription on disposal', async () => {
