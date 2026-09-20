@@ -38,6 +38,7 @@ import type { SpawnOptionsWithStdioTuple } from 'node:child_process'
 import { StringDecoder } from 'node:string_decoder'
 import { SelfDevelopmentRunnerError } from './runtime.ts'
 import { assertProcessGroupSupport, finishProcessGroup, readGroupLeaderStartedAt } from './process-group.ts'
+import { DEFAULT_SANDBOX_CONFIG, assertSandboxAvailable, sandboxEffectivelyEnabled, sandboxLaunchFailed, spawnConfined } from './sandbox.ts'
 import type { RunnerConfig } from './types.ts'
 
 /** One supervised headless execution request. */
@@ -148,6 +149,9 @@ export async function runHeadlessExecutor(config: RunnerConfig, request: Executo
       stdoutTruncated: false,
     }
   }
+  const sandboxConfig = config.sandbox ?? DEFAULT_SANDBOX_CONFIG
+  await assertSandboxAvailable(sandboxConfig)
+  const dshHomeReal = request.dshHome ?? config.dshHome
   // Ambient provider credentials and proxy variables are not inherited.
   // HOME and DSH_HOME still refer to files accessible under the child's UID.
   const options: SpawnOptionsWithStdioTuple<'ignore', 'pipe', 'pipe'> = {
@@ -155,13 +159,20 @@ export async function runHeadlessExecutor(config: RunnerConfig, request: Executo
     env: {
       PATH: process.env.PATH,
       HOME: process.env.HOME,
-      DSH_HOME: request.dshHome ?? config.dshHome,
+      DSH_HOME: dshHomeReal,
       DSH_PERMISSION_MODE: 'workspace-write',
     },
     detached: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   }
-  const child = spawn(config.nodeBinary, [config.dshBin, '--profile', 'headless', '--json', request.task], options)
+  const rawArgv = [config.dshBin, '--profile', 'headless', '--json', request.task]
+  const sandboxWrapped = sandboxEffectivelyEnabled(sandboxConfig)
+  // sandbox-exec `execve`s the target program in place: the pid it reports is
+  // the same pid `node`/the CLI ultimately runs under, so the process-group
+  // leader fingerprint captured below is unaffected by the wrap.
+  const child = sandboxWrapped
+    ? await spawnConfined(sandboxConfig, { worktreeReal: request.worktree, dshHomeReal }, config.nodeBinary, rawArgv, options)
+    : spawn(config.nodeBinary, rawArgv, options)
   // Fingerprint the group leader now, before its `exit` event can reap it and
   // free the pgid for reuse. The read never rejects; a missing fingerprint
   // leaves the caller's own exit observation to separate a reused pgid from a
@@ -222,6 +233,12 @@ export async function runHeadlessExecutor(config: RunnerConfig, request: Executo
       beginTeardown()
     }
     request.signal.addEventListener('abort', onAbort, { once: true })
+    // The sandbox probe and profile resolution above are the first `await`s
+    // between the early aborted-check and this listener: a signal that fired
+    // during that gap already dispatched its (one-shot) 'abort' event and
+    // would never reach `onAbort` otherwise, leaving a cancelled attempt
+    // running until its own deadline instead of tearing down immediately.
+    if (request.signal.aborted) onAbort()
 
     const deadline = setTimeout(() => {
       timedOut = true
@@ -326,6 +343,16 @@ export async function runHeadlessExecutor(config: RunnerConfig, request: Executo
           ? undefined
           : { pid: child.pid, exited: true, startedAt: await leaderStartedAt }
         const groupExit = await finishProcessGroup(child.pid, config.killGraceMs, leader)
+        if (sandboxWrapped && sessionId === undefined && sandboxLaunchFailed(result.stderrTail)) {
+          // sandbox-exec could not execve() the CLI at all (missing binary,
+          // EACCES, or a profile the kernel refused): the CLI never ran, so
+          // this is a spawn failure, not a CLI exit — reported the same way
+          // an unwrapped ENOENT would be, through the 'error' handler below.
+          throw new SelfDevelopmentRunnerError(
+            `headless executor could not spawn ${JSON.stringify(config.nodeBinary)} under sandbox-exec: ${result.stderrTail.trim()}`,
+            'SELF_DEV_RUNNER_EXECUTOR_FAILED',
+          )
+        }
         resolve({ ...result, pgidReused: groupExit.pgidReused })
       })().then(undefined, reject)
     })

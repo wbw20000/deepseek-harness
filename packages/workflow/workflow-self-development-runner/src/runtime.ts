@@ -20,6 +20,7 @@ export const SelfDevelopmentRunnerErrorCode = [
   'SELF_DEV_RUNNER_BUDGET_INVALID',
   'SELF_DEV_RUNNER_LAUNCH_MISMATCH',
   'SELF_DEV_RUNNER_ATTEMPT_ACTIVE',
+  'SELF_DEV_RUNNER_SANDBOX_UNAVAILABLE',
 ] as const
 
 /** One machine-routable supervised-runner failure code. */

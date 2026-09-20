@@ -28,8 +28,9 @@ import {
 import type { BudgetApproval, SelfDevelopmentTaskController } from '@deepseek-ai/dsh-workflow-self-development'
 import SelfDevelopmentRunner from '../src/index.ts'
 import { HostClock } from '../src/clock.ts'
+import { DEFAULT_SANDBOX_CONFIG } from '../src/sandbox.ts'
 import type { PresenceConfirmation } from '../src/presence.ts'
-import type { RunnerConfig } from '../src/types.ts'
+import type { RunnerConfig, SandboxConfig } from '../src/types.ts'
 
 const execFileAsync = promisify(execFile)
 const fakeDsh = fileURLToPath(new URL('./fixtures/fake-dsh-attempt.mjs', import.meta.url))
@@ -152,6 +153,48 @@ describe('boot-time config validation', () => {
     const config = await makeConfig({ killGraceMs })
     const rejected = () => new SelfDevelopmentRunner(new Context(), config)
     expect(rejected).toThrow(expect.objectContaining({ code: 'SELF_DEV_RUNNER_CONFIG_INVALID' }))
+  })
+
+  it.each([
+    ['sandboxExec', { sandboxExec: 'relative/sandbox-exec' }],
+    ['denyReadRoots', { denyReadRoots: ['relative-root'] }],
+    ['extraWritableRoots', { extraWritableRoots: ['relative-root'] }],
+  ] as const)('refuses a relative sandbox.%s entry at construction', async (_field, sandboxOverride) => {
+    const config = await makeConfig({ sandbox: { ...DEFAULT_SANDBOX_CONFIG, ...sandboxOverride } })
+    const rejected = () => new SelfDevelopmentRunner(new Context(), config)
+    expect(rejected).toThrow(expect.objectContaining({ code: 'SELF_DEV_RUNNER_CONFIG_INVALID' }))
+  })
+})
+
+describe('sandbox config defaults', () => {
+  it('defaults an entirely omitted sandbox field to DEFAULT_SANDBOX_CONFIG through the Cordis schema', async () => {
+    const config = await makeConfig()
+    expect('sandbox' in config).toBe(false)
+    const parsed = SelfDevelopmentRunner.Config(config)
+    expect(parsed.sandbox).toEqual(DEFAULT_SANDBOX_CONFIG)
+  })
+
+  it('fills in every missing sandbox sub-field when the deployment configures only some', async () => {
+    // Deliberately incomplete: the schema (not this test) supplies the rest,
+    // which is exactly what this case checks.
+    const config = await makeConfig({ sandbox: { enabled: false } as SandboxConfig })
+    const parsed = SelfDevelopmentRunner.Config(config)
+    expect(parsed.sandbox).toEqual({ ...DEFAULT_SANDBOX_CONFIG, enabled: false })
+  })
+
+  it('keeps every explicitly configured sandbox field as given', async () => {
+    const explicit = { enabled: true, denyReadRoots: ['/deny'], extraWritableRoots: ['/extra'], sandboxExec: '/opt/sandbox-exec' }
+    const config = await makeConfig({ sandbox: explicit })
+    const parsed = SelfDevelopmentRunner.Config(config)
+    expect(parsed.sandbox).toEqual(explicit)
+  })
+
+  it('constructs successfully with the schema-parsed default sandbox (sandboxing on by default)', async () => {
+    const config = await makeConfig()
+    const parsed = SelfDevelopmentRunner.Config(config)
+    context = new Context()
+    const service = new SelfDevelopmentRunner(context, parsed)
+    expect(service.name).toBe('selfDevelopmentRunner')
   })
 })
 

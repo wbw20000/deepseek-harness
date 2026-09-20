@@ -20,6 +20,7 @@ import type { SupervisedAttemptRequest, SupervisedAttemptOutcome } from './attem
 import { HostClock } from './clock.ts'
 import { SelfDevelopmentRunnerError } from './runtime.ts'
 import { isInsideReal } from './path-containment.ts'
+import { DEFAULT_SANDBOX_CONFIG, assertSandboxRootsAbsolute } from './sandbox.ts'
 import type { RunnerConfig } from './types.ts'
 
 export { HostClock, parseKernBoottime, readBootTimeSysctl } from './clock.ts'
@@ -28,11 +29,22 @@ export { artifactDigestOf, sourceDigestOf } from './digests.ts'
 export { SelfDevelopmentRunnerError, SelfDevelopmentRunnerErrorCode } from './runtime.ts'
 export { runHeadlessExecutor } from './executor.ts'
 export { checkAcceptanceCoversPlan, loadAcceptance, runAcceptance } from './acceptor.ts'
+export {
+  DEFAULT_SANDBOX_CONFIG,
+  assertSandboxAvailable,
+  buildSeatbeltProfile,
+  prepareSandboxProfile,
+  probeSandbox,
+  resolveSandboxRoot,
+  sandboxEffectivelyEnabled,
+  wrapCommand,
+} from './sandbox.ts'
+export type { PreparedSandbox, SandboxAvailability, SeatbeltProfileInput } from './sandbox.ts'
 export type { BootTime, BootTimeReader } from './clock.ts'
 export type { PresenceAcknowledgement, PresenceConfirmation } from './presence.ts'
 export type { ExecutorRequest, ExecutorRun } from './executor.ts'
 export type { AcceptanceAssertion, AcceptanceCase, AcceptanceRun } from './acceptor.ts'
-export type { RunnerConfig } from './types.ts'
+export type { RunnerConfig, SandboxConfig } from './types.ts'
 export { planAttemptBudget, phaseLimitMs, armDeadline } from './budget.ts'
 export type { ArmedDeadline } from './budget.ts'
 export { assertConfirmationBinds, resolveAttemptDshHome, resolveExperimentWorktree } from './binding.ts'
@@ -65,6 +77,16 @@ export class SelfDevelopmentRunner extends Service {
     experimentsRoot: z.string().required(),
     evidenceRoot: z.string().required(),
     killGraceMs: z.number().step(1).required(),
+    // Every field defaults, so an omitted `sandbox` key parses to
+    // DEFAULT_SANDBOX_CONFIG's values (enabled, no extra roots, the system
+    // `sandbox-exec`) — sandboxing on by default, per the decision this
+    // package implements.
+    sandbox: z.object({
+      enabled: z.boolean().default(true),
+      denyReadRoots: z.array(z.string()).default([]),
+      extraWritableRoots: z.array(z.string()).default([]),
+      sandboxExec: z.string().default(DEFAULT_SANDBOX_CONFIG.sandboxExec),
+    }),
   }) as unknown as z<RunnerConfig>
 
   // Cordis service shadows read state through a prototype-extended proxy, so
@@ -218,8 +240,9 @@ const ABSOLUTE_FIELDS = ['nodeBinary', 'dshBin', 'dshHome', 'experimentsRoot', '
  * @param config - configuration as parsed from cordis.yml.
  * @returns the same configuration once every field is proven usable.
  * @throws SelfDevelopmentRunnerError with `SELF_DEV_RUNNER_CONFIG_INVALID` when a path field is
- *   missing, empty, or not absolute, `evidenceRoot` sits inside or equals `experimentsRoot`, or
- *   `killGraceMs` is not a positive finite integer.
+ *   missing, empty, or not absolute, `evidenceRoot` sits inside or equals `experimentsRoot`,
+ *   `killGraceMs` is not a positive finite integer, or a configured `sandbox.sandboxExec`,
+ *   `sandbox.denyReadRoots` entry, or `sandbox.extraWritableRoots` entry is not an absolute path.
  */
 function validateConfig(config: RunnerConfig): RunnerConfig {
   const invalid = (detail: string): SelfDevelopmentRunnerError =>
@@ -236,5 +259,6 @@ function validateConfig(config: RunnerConfig): RunnerConfig {
   if (!Number.isInteger(config.killGraceMs) || config.killGraceMs < 1) {
     throw invalid(`killGraceMs must be a positive finite integer, got ${String(config.killGraceMs)}`)
   }
+  assertSandboxRootsAbsolute(config.sandbox ?? DEFAULT_SANDBOX_CONFIG)
   return config
 }
