@@ -449,6 +449,58 @@ isJournalHandoff(error: unknown): boolean
 
 Source: [`packages/workflow/workflow-self-development/src/index.ts`](../../packages/workflow/workflow-self-development/src/index.ts)
 
+<a id="ctxselfdevelopmenttrial--selfdevelopmenttrial"></a>
+
+### `ctx.selfDevelopmentTrial` — `SelfDevelopmentTrial`
+
+Host-only trial-instance service. Ordinary chat messages never reach its methods: each is a `@Remote` method invoked explicitly through the Typert gateway, and a non-host caller is refused.
+
+```ts cordis-catalog
+/**
+ * Open (or reuse) one task's trial instance. The worktree and data home
+ * come from the task's stored launch profile through the facade's
+ * `getTask`; a profile without `dataHome` falls back to the runner's
+ * configured `dshHome`. A worktree whose root `package.json` is not the
+ * DSH root returns a reason instead of an instance.
+ * @param taskId - task identity.
+ * @returns the ready instance's URL, port, and pid, or `url: undefined` with the reason
+ *   when the worktree is not a DSH repository.
+ * @throws SelfDevelopmentTrialError with `self-development/host-only-field` from a non-host caller,
+ *   `self-development/config-invalid` when the task id is malformed or the task has no launch
+ *   profile, `self-development/task-unknown` when the facade does not know the task,
+ *   `self-development/trial-unavailable` when neither the profile nor the runner supplies a data
+ *   home, `self-development/trial-build-failed` when the worktree build fails or times out,
+ *   `self-development/trial-port-exhausted` when no port in the range is free, or
+ *   `self-development/trial-start-failed` when the web process never becomes ready.
+ * @throws whatever the facade rejects with, verbatim: the facade owns its own error codes.
+ */
+@Remote('openTrial') async openTrial(taskId: string): Promise<OpenTrialResult>
+
+/**
+ * Close one task's trial instance: SIGTERM to the registered process
+ * group, a five-second grace, then SIGKILL, and a bounded wait for the
+ * group leader this service spawned to exit. The registration and the
+ * sidecar are removed. Closing a task without a live instance still
+ * removes a stale sidecar.
+ * @param taskId - task identity.
+ * @throws SelfDevelopmentTrialError with `self-development/host-only-field` from a non-host caller,
+ *   `self-development/config-invalid` when the task id is malformed, or
+ *   `self-development/trial-stop-failed` when the group cannot be signalled or its exit is not
+ *   confirmed within the teardown deadlines.
+ */
+@Remote('closeTrial') async closeTrial(taskId: string): Promise<void>
+
+/**
+ * List the live trial instances this process owns.
+ * @returns one row per live instance, sorted by task id; a process restart starts from `[]`
+ *   because instances are never resurrected from sidecars.
+ * @throws SelfDevelopmentTrialError with `self-development/host-only-field` from a non-host caller.
+ */
+@Remote('trials') async trials(): Promise<readonly TrialSummary[]>
+```
+
+Source: [`packages/workflow/workflow-self-development-trial/src/index.ts`](../../packages/workflow/workflow-self-development-trial/src/index.ts)
+
 <a id="ctxselfdevelopmentworkspaces--selfdevelopmentworkspaces"></a>
 
 ### `ctx.selfDevelopmentWorkspaces` — `SelfDevelopmentWorkspaces`
