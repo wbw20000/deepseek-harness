@@ -282,6 +282,11 @@
     - id: ui-attachment
       name: '@deepseek-ai/dsh-client-ui-attachment'
 
+    # Settings section: one-time pairing links (QR) for phones and the paired
+    # browser-session list with revocation, over Connection's own routes.
+    - id: ui-phone-pairing
+      name: '@deepseek-ai/dsh-client-ui-phone-pairing'
+
     # Tool call tree, generic fallback, and keyed business Tool views.
     - id: ui-tool
       name: '@deepseek-ai/dsh-client-ui-tool'

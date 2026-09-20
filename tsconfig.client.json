@@ -82,6 +82,7 @@
     { "path": "./packages/client/ui-deliverables/tsconfig.client.json" },
     { "path": "./packages/client/ui-workflow-run" },
     { "path": "./packages/client/ui-workspace" },
+    { "path": "./packages/client/ui-phone-pairing" },
     { "path": "./packages/client/ui-self-development" },
     { "path": "./packages/client/ui-input-trigger" },
     { "path": "./packages/client/ui-commands" },

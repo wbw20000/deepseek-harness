@@ -1,0 +1,91 @@
+/* Phone pairing section: mint form, QR result, and the paired-session table, over --dsw-* tokens only. */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dsw-space-4, 16px);
+  padding: var(--dsw-space-3, 12px);
+  min-width: 0;
+}
+
+.heading {
+  margin: 0;
+  font-size: var(--dsw-font-size-md, 14px);
+  font-weight: 600;
+  color: var(--dsw-text-primary, inherit);
+}
+
+.text {
+  margin: 0;
+  color: var(--dsw-text-secondary, inherit);
+  font-size: var(--dsw-font-size-sm, 12px);
+}
+
+.error {
+  margin: 0;
+  color: var(--dsw-text-danger, #c0392b);
+  font-size: var(--dsw-font-size-sm, 12px);
+}
+
+.form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--dsw-space-2, 8px);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dsw-space-1, 4px);
+  font-size: var(--dsw-font-size-sm, 12px);
+  color: var(--dsw-text-secondary, inherit);
+}
+
+.select {
+  font: inherit;
+  color: inherit;
+  background: var(--dsw-bg-surface, transparent);
+  border: 1px solid var(--dsw-border, currentColor);
+  border-radius: var(--dsw-radius-sm, 4px);
+  padding: 4px 8px;
+}
+
+.result {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--dsw-space-3, 12px);
+  align-items: flex-start;
+}
+
+.qr {
+  width: 220px;
+  height: 220px;
+  background: #fff;
+  border-radius: var(--dsw-radius-sm, 4px);
+}
+
+.link {
+  word-break: break-all;
+  font-family: var(--dsw-font-mono, monospace);
+  font-size: var(--dsw-font-size-sm, 12px);
+  user-select: all;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--dsw-font-size-sm, 12px);
+}
+
+.table th,
+.table td {
+  text-align: left;
+  padding: var(--dsw-space-1, 4px) var(--dsw-space-2, 8px);
+  border-bottom: 1px solid var(--dsw-border-subtle, rgba(128, 128, 128, 0.2));
+}
+
+.revoked {
+  color: var(--dsw-text-tertiary, inherit);
+  text-decoration: line-through;
+}
