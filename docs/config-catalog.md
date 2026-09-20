@@ -3869,6 +3869,8 @@ export interface SelfDevelopmentChatConfig {
   readonly integrationGates?: readonly string[] | undefined
   /** How `self_development_merge` rebuilds and restarts the stable version after an `integrated` result; defaults to `{ kind: 'none' }`. */
   readonly upgrade?: UpgradeConfig | undefined
+  /** Author identity for a dirty task worktree's snapshot commit; defaults to {@link DEFAULT_COMMIT_IDENTITY}. */
+  readonly commitIdentity?: CommitIdentity | undefined
   /** Language of the approval-card copy; defaults to `zh`. */
   readonly cardLocale?: 'zh' | 'en' | undefined
   /** Budget used when the tool call omits one; defaults to the `unlimited` preset. */
@@ -3885,6 +3887,19 @@ export interface SelfDevelopmentChatConfig {
 
 /** Post-integration upgrade strategy; see {@link UpgradeSourceConfig}. */
 export type UpgradeConfig = UpgradeSourceConfig | UpgradeLauncherConfig | UpgradeNoneConfig
+
+/**
+ * Git author identity for the snapshot commit `self_development_merge` asks
+ * `workspaces.integrate` to make of a dirty task worktree before rebasing
+ * (`IntegrationRequest.snapshot.author` in `types.ts`), so an experimental
+ * agent's uncommitted changes are not silently discarded by the merge.
+ */
+export interface CommitIdentity {
+  /** Author and committer name recorded on the snapshot commit. */
+  readonly name: string
+  /** Author and committer e-mail recorded on the snapshot commit. */
+  readonly email: string
+}
 
 /** Budget terms the proposing agent selects; "unlimited" is the 24-hour time preset. */
 export type ProposeBudget =
@@ -3939,7 +3954,7 @@ export interface UpgradeNoneConfig {
 }
 ```
 
-Source: [`packages/workflow/workflow-self-development-chat/src/config.ts:60`](../packages/workflow/workflow-self-development-chat/src/config.ts)
+Source: [`packages/workflow/workflow-self-development-chat/src/config.ts:79`](../packages/workflow/workflow-self-development-chat/src/config.ts)
 
 <a id="deepseek-aidsh-workflow-self-development-events"></a>
 
@@ -4066,6 +4081,13 @@ export interface TrialConfig {
   readonly readyTimeoutMs: number
   /** Whether a `campaign-passed` event automatically opens the task's trial instance. */
   readonly autoOpen: boolean
+  /**
+   * Explicit pnpm binary to try first when resolving the build command;
+   * absolute path. Falls through to `pnpm` on the host `PATH`, the
+   * worktree's own installed pnpm, and the corepack shim next to
+   * `nodeBinary` when unset or when the configured path does not exist.
+   */
+  readonly pnpmBinary?: string
 }
 ```
 

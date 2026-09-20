@@ -63,7 +63,9 @@ export type UpgradeConfig = UpgradeSourceConfig | UpgradeLauncherConfig | Upgrad
  * agent's uncommitted changes are not silently discarded by the merge.
  */
 export interface CommitIdentity {
+  /** Author and committer name recorded on the snapshot commit. */
   readonly name: string
+  /** Author and committer e-mail recorded on the snapshot commit. */
   readonly email: string
 }
 

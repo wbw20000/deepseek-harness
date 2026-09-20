@@ -5591,7 +5591,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'MergeIntegratedEventPayload',
-    declaration: 'export interface MergeIntegratedEventPayload {\n    readonly taskId: string;\n    readonly commit: string;\n    readonly baseMoved: boolean;\n    readonly occurredAt: number;\n    readonly revision: number;\n}',
+    declaration: 'export interface MergeIntegratedEventPayload {\n    readonly taskId: string;\n    readonly commit: string;\n    readonly baseMoved: boolean;\n    readonly occurredAt: number;\n    readonly revision: number;\n    readonly snapshotCommit?: string;\n}',
   },
   {
     name: 'MergeIntegratedPayload',
