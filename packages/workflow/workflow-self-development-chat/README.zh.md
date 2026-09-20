@@ -42,6 +42,7 @@ kind: "package-reference"
 | `targetBranch` | `self_development_merge` 把已通过任务的工作区合并进的分支。必填、非空——构造时校验。 |
 | `integrationGates` | `self_development_merge` 的 `verify` 在合并后的工作区内以 `sh -c` 依次执行的命令；任一命令非零退出或超过每条 20 分钟的超时都会让合并拒绝关闭。默认 `[]`。 |
 | `upgrade` | `self_development_merge` 在 `integrated` 结果后如何重建并重启稳定版——见[升级](#upgrade)。默认 `{ kind: 'none' }`。构造时校验——显式给出的非法值会让加载失败。 |
+| `commitIdentity` | `self_development_merge` 请 `workspaces.integrate` 在 rebase 前给脏的任务工作区打快照提交时用的 `{ name, email }` git 作者——见[合并到稳定版](#merge-to-stable)。默认 `{ name: 'DSH self-development', email: 'self-development@dsh.local' }`。构造时校验——显式给出空的 `name` 或 `email` 会让加载失败。 |
 | `cardLocale` | `'zh'`（默认）或 `'en'`：审批卡文案与战役结果聊天通知使用的语言。 |
 | `defaultBudget` | 提案省略预算时使用的默认值；默认为 `{ preset: 'unlimited' }`。构造时校验——显式给出的非法值会让加载失败。 |
 | `defaultUnattended` | 提案省略无人值守选择时的默认值；默认 `true`。 |
@@ -93,9 +94,9 @@ kind: "package-reference"
 
 Host-only：这个工具会重建并重启它所在的这个稳定版，所以只有当调用方进程就是那个部署本身时才有意义（见[已知限制](#known-limitations-and-deferred-work)——没有运行时的调用方身份校验来强制这一点）。
 
-参数：`{ taskId? }`——要合并的任务；省略时取最近一次本进程自己发起、且状态为 `awaiting-trial` 的任务（按最新优先搜索）。显式给出的 `taskId` 若不是 `awaiting-trial`，或省略后找不到任何一个，都会在发起任何审批之前就被拒绝。
+参数：`{ taskId? }`——要合并的任务；省略时取最近一次本进程自己发起、且状态为 `awaiting-trial` 的任务（按最新优先搜索）。显式给出的 `taskId` 若不是 `awaiting-trial`，或省略后找不到任何一个，都会在发起任何审批之前就被拒绝——没有任何改动可合的任务也一样（见[合并到稳定版](#merge-to-stable)）。
 
-行为：展示**一张**审批卡，写明任务、目标分支、合并会重建并重启稳定版、以及冲突或验证失败会自动起一个修复战役——因此那种情况不会再弹第二张卡。只有 `allowed-once` 才会继续。放行后：`recordTrialApproval(taskId, revision, actor)`，然后 `workspaces.integrate({ taskId, targetBranch, actor, verify })`——`verify` 与四种结果见[合并到稳定版](#merge-to-stable)。已经完成的部分（已记录的试用批准、留在工作区上的 rebase、已起的修复战役）不会因为后续失败而回滚。
+行为：展示**一张**审批卡，写明任务、目标分支、合并会重建并重启稳定版、以及冲突或验证失败会自动起一个修复战役——因此那种情况不会再弹第二张卡。只有 `allowed-once` 才会继续。放行后：`recordTrialApproval(taskId, revision, actor)`，然后 `workspaces.integrate({ taskId, targetBranch, actor, verify, snapshot })`——`verify`、`snapshot` 与四种结果见[合并到稳定版](#merge-to-stable)。已经完成的部分（已记录的试用批准、留在工作区上的快照或 rebase、已起的修复战役）不会因为后续失败而回滚。
 
 -----
 
@@ -147,21 +148,23 @@ Host-only：这个工具会重建并重启它所在的这个稳定版，所以�
 <a id="merge-to-stable"></a>
 ## 合并到稳定版
 
-`self_development_merge` 驱动工作区服务的 `integrate({ taskId, targetBranch, actor, verify })`（DI-a 冻结接口），传入本包自己构造的 `verify(worktree)`，依次做两步，任一步失败都会终止：
+在其它任何事之前——包括审批卡本身——`self_development_merge` 会先检查有没有任何东西可合并：如果解出的任务工作区没有未提交的改动，*并且*它的分支 HEAD 已经等于 `targetBranch` 自己的 tip（任务工作区与稳定版仓库共享 refs，所以 `targetBranch` 在其内部也能解出），就直接返回 `{ ok: false, reason: 'nothing to merge' }`，不会询问。这项检查本身的任何失败——还没有启动档案、工作区不可读、分支解不出来——都会失开（fail open），走下面的正常流程，而不是拦住它。
+
+`self_development_merge` 驱动工作区服务的 `integrate({ taskId, targetBranch, actor, verify, snapshot })`（DI-a 冻结接口），传入本包自己构造的 `verify(worktree)`，依次做两步，任一步失败都会终止：
 
 1. **runner 验收验证** ——`selfDevelopmentRunner` 的 `verifyAcceptance(worktree, acceptancePath, { experimentsRoot })`：在合并后（可能已 rebase）的工作区上，由独立进程、而不是模型，重新核对同一份验收定义。
 2. **集成门禁** ——依次执行 `integrationGates` 里配置的每条命令，每条都在工作区内以 `sh -c` 运行，20 分钟后强制终止；非零退出或超时都会拒绝关闭，原因里点名命令与其合并输出（stdout/stderr）的最后 2 KB。
 
-`integrate` 在 rebase（如果目标分支动过）之后、快进之前调用 `verify`，无论基线是否动过都会调用。它会落到以下四种结果之一：
+`snapshot` 是 `{ message: 'selfdev(<taskId>): <需求首行，最多 72 字符>', author: commitIdentity }`（任务需求拿不到时就是单纯的 `selfdev(<taskId>)`）。当任务工作区有未提交的改动时——比如实验 Agent 的工作还没提交——`integrate` 会在 rebase *之前*用这条消息和这个作者把它们暂存并提交，这样合并就永远不会悄悄丢掉这些改动；干净的工作区不会产生快照提交。不管哪种情况，`integrate` 都会在 rebase（如果目标分支动过）之后、快进之前调用 `verify`，无论基线是否动过都会调用。它会落到以下四种结果之一：
 
 | 状态 | 含义 | 本包的反应 |
 |---|---|---|
-| `integrated` | 已快进；汇报 `commit` 与 `baseMoved`。 | 发出 `merge-integrated`；除非 `upgrade.kind` 是 `none`，否则跑配置的[升级](#upgrade)。 |
+| `integrated` | 已快进；汇报 `commit`、`baseMoved`，打过快照时还有 `snapshotCommit`。 | 发出 `merge-integrated`；除非 `upgrade.kind` 是 `none`，否则跑配置的[升级](#upgrade)。 |
 | `conflict` | rebase 无法干净应用；`files` 点名冲突文件。 | 发出 `merge-blocked`；自动起一个无人值守的修复战役（见下）。不会快进任何东西。 |
 | `verification-failed` | rebase 后（或基线未动时）`verify` 失败；rebase 结果（如有）留在工作区上。 | 与 `conflict` 相同的修复战役反应。 |
 | `failed` | 门面本身未能完成这次操作。 | 发出 `merge-blocked`；只报告，不起修复战役——这不是一个能靠改代码修的失败。 |
 
-上面每处"发出"实际是两个 Cordis 事件，不是一个：本包自己的 `self-development-chat/merge-integrated`/`self-development-chat/merge-blocked`（`{ taskId, commit, baseMoved, occurredAt, revision }` / `{ taskId, status, occurredAt, revision, files?, reason? }`，声明在 `src/index.ts`），以及 `self-development/merge-integrated`/`self-development/merge-blocked`（`{ taskId, revision }` / `{ taskId, status, revision }`，`revision` 取自 `recordTrialApproval` 的返回结果）——后者是 `@deepseek-ai/dsh-workflow-self-development-events` 真正订阅的名字与形状，会折进它统一的通知事件（`Task integrated into stable` / `Merge blocked: <status>`）。
+上面每处"发出"实际是两个 Cordis 事件，不是一个：本包自己的 `self-development-chat/merge-integrated`/`self-development-chat/merge-blocked`（`{ taskId, commit, baseMoved, occurredAt, revision, snapshotCommit? }` / `{ taskId, status, occurredAt, revision, files?, reason? }`，声明在 `src/index.ts`），以及 `self-development/merge-integrated`/`self-development/merge-blocked`（`{ taskId, revision }` / `{ taskId, status, revision }`，`revision` 取自 `recordTrialApproval` 的返回结果）——后者是 `@deepseek-ai/dsh-workflow-self-development-events` 真正订阅的名字与形状，会折进它统一的通知事件（`Task integrated into stable` / `Merge blocked: <status>`）。`snapshotCommit` 只存在于本包自己的事件里；上游事件的 payload 就是 DI-a 声明的那个形状，一个字段都不多。
 
 **修复战役**：对 `conflict`/`verification-failed`，本包直接调用自己的提案编排——无人值守、`{ preset: 'unlimited' }` 预算、`allowedModificationScope: ['**']`（修复的是同一处改动，不是一个新划定范围的改动）、被拒任务已写好的**同一份**验收定义（原样读回并转发）、以及直接从该定义自身的用例推出的计划，因此天然满足计划覆盖校验。需求文案点名目标分支与冲突文件，或验证失败的原因。关键是**跳过第二张审批卡**：合并卡上已经写明冲突或验证失败会自动起修复战役，再问一次就是多余的。修复战役是一个全新任务（有自己的 id），不是被拒任务的延续。
 

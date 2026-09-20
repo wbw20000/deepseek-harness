@@ -1,14 +1,17 @@
 /**
- * The merge orchestration: one approval, `recordTrialApproval`, then
- * `workspaces.integrate` with a `verify` built from the runner's acceptance
- * check plus the configured integration gates. `integrated` triggers the
- * configured upgrade; `conflict`/`verification-failed` auto-starts a repair
- * campaign under the same approval, naming the conflicted files or the
- * verification reason; `failed` only reports.
+ * The merge orchestration: a "nothing to merge" pre-check, one approval,
+ * `recordTrialApproval`, then `workspaces.integrate` with a `verify` built
+ * from the runner's acceptance check plus the configured integration gates,
+ * and a `snapshot` request so a dirty task worktree (an experimental agent's
+ * uncommitted work) is committed before rebase instead of discarded.
+ * `integrated` triggers the configured upgrade; `conflict`/`verification-failed`
+ * auto-starts a repair campaign under the same approval, naming the
+ * conflicted files or the verification reason; `failed` only reports.
  */
 
 import { readFile } from 'node:fs/promises'
 import { acceptancePath, parseAcceptanceDefinition } from './acceptance.ts'
+import { runGit } from './baseline.ts'
 import { mergeApprovalReason } from './card.ts'
 import type { ResolvedChatConfig } from './config.ts'
 import { errorOf } from './errors.ts'
@@ -75,6 +78,8 @@ export interface MergeDeps {
   readonly gateDeps?: GateDeps
   /** Injectable upgrade side effects, replaceable by direct unit tests. */
   readonly upgradeDeps?: UpgradeDeps
+  /** Git runner used for the "nothing to merge" pre-check; defaults to `baseline.ts`'s `runGit`. */
+  readonly git?: (args: readonly string[], cwd: string) => Promise<string>
 }
 
 /** `resolveTaskId`'s outcome: the task to merge and its current detail, or why none could be resolved. */
@@ -110,6 +115,63 @@ async function resolveTaskId(deps: MergeDeps, requestedTaskId: string | undefine
     }
   }
   return { ok: false, reason: 'no awaiting-trial task found; pass taskId explicitly, or propose and let a campaign pass first' }
+}
+
+/**
+ * Whether the task's worktree has nothing new to bring to `targetBranch`: no
+ * uncommitted changes (so there is nothing a `snapshot` commit would save
+ * either) and its branch HEAD already equals `targetBranch`'s own tip. A
+ * courtesy pre-check, like `parallel: false`'s own: task worktrees share the
+ * stable repository's object store and refs (the same assumption `verify`
+ * and the eight-step sequence's baseline digest already rely on), so
+ * `targetBranch` resolves from inside the task worktree too. Any failure —
+ * no launch profile yet, an unreadable worktree, an unresolvable branch —
+ * fails open into the normal merge attempt rather than blocking it.
+ * @param git - the injectable git runner.
+ * @param worktree - the task's worktree path, when a launch profile set one.
+ * @param targetBranch - the configured merge target branch.
+ * @returns `true` only when the worktree is clean and already at the target tip.
+ */
+async function hasNothingToMerge(
+  git: (args: readonly string[], cwd: string) => Promise<string>,
+  worktree: string | undefined,
+  targetBranch: string,
+): Promise<boolean> {
+  if (worktree === undefined) return false
+  try {
+    const status = await git(['status', '--porcelain'], worktree)
+    if (status !== '') return false
+    const [head, targetTip] = await Promise.all([
+      git(['rev-parse', 'HEAD'], worktree),
+      git(['rev-parse', targetBranch], worktree),
+    ])
+    return head === targetTip
+  } catch {
+    return false
+  }
+}
+
+/** Cap on the requirement-derived portion of {@link snapshotMessage}. */
+const SNAPSHOT_MESSAGE_REQUIREMENT_MAX_LENGTH = 72
+
+/**
+ * Build the snapshot commit message: `selfdev(<taskId>): <requirement's
+ * first line, capped at 72 characters>`, or just `selfdev(<taskId>)` when
+ * the task's requirement was not readable from its projection.
+ * @param taskId - the task being merged.
+ * @param requirement - the task's requirement, when its projection carried a spec.
+ * @returns the one-line commit message.
+ */
+function snapshotMessage(taskId: string, requirement: string | undefined): string {
+  if (requirement === undefined) return `selfdev(${taskId})`
+  // `String.prototype.split` always returns at least one element, even for
+  // '' (['']), so index 0 is never actually undefined here.
+  /* v8 ignore next -- see above; noUncheckedIndexedAccess cannot see the length guarantee. */
+  const firstLine = requirement.split('\n')[0] ?? ''
+  const capped = firstLine.length > SNAPSHOT_MESSAGE_REQUIREMENT_MAX_LENGTH
+    ? firstLine.slice(0, SNAPSHOT_MESSAGE_REQUIREMENT_MAX_LENGTH)
+    : firstLine
+  return `selfdev(${taskId}): ${capped}`
 }
 
 /** The two {@link IntegrationResult} statuses that auto-start a repair campaign. */
@@ -202,8 +264,16 @@ async function startRepairCampaign(deps: MergeDeps, blockedTaskId: string, resul
  */
 function emitMergeEvent(deps: MergeDeps, taskId: string, result: IntegrationResult, revision: number): void {
   const occurredAt = Date.now()
+  const snapshotCommit = result.snapshotCommit
   if (result.status === 'integrated') {
-    deps.emitIntegrated?.({ taskId, commit: result.commit, baseMoved: result.baseMoved, occurredAt, revision })
+    deps.emitIntegrated?.({
+      taskId,
+      commit: result.commit,
+      baseMoved: result.baseMoved,
+      occurredAt,
+      revision,
+      ...(snapshotCommit === undefined ? {} : { snapshotCommit }),
+    })
     return
   }
   if (result.status === 'conflict') {
@@ -233,6 +303,11 @@ export async function runMerge(deps: MergeDeps, input: MergeInput): Promise<Merg
     return { ok: false, steps, reason: resolved.reason }
   }
   const { taskId, detail } = resolved
+
+  const nothingToMerge = await hasNothingToMerge(deps.git ?? runGit, detail.card.launchProfile?.worktree, config.targetBranch)
+  if (nothingToMerge) {
+    return { ok: false, taskId, steps, reason: 'nothing to merge' }
+  }
 
   if (deps.runner === undefined) {
     return { ok: false, taskId, steps, reason: 'selfDevelopmentRunner is not mounted; acceptance cannot be independently verified before merging to stable' }
@@ -270,9 +345,13 @@ export async function runMerge(deps: MergeDeps, input: MergeInput): Promise<Merg
   }
 
   const verify = buildVerify(deps.runner, config, taskId, deps.gateDeps)
+  const snapshot = {
+    message: snapshotMessage(taskId, detail.projection.spec?.requirement),
+    author: config.commitIdentity,
+  }
   let result: IntegrationResult
   try {
-    result = await deps.workspaces.integrate({ taskId, targetBranch: config.targetBranch, actor: config.actor, verify })
+    result = await deps.workspaces.integrate({ taskId, targetBranch: config.targetBranch, actor: config.actor, verify, snapshot })
     steps.push({ step: 'integrate', detail: result.status })
   } catch (error: unknown) {
     return { ok: false, taskId, steps, reason: 'integrate failed', error: errorOf(error) }

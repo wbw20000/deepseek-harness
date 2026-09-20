@@ -19,8 +19,8 @@ import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-workflow-self-development-events'
 import { ASSERTION_SHAPE_REFERENCE, controlDirectoryPlacementViolation } from './acceptance.ts'
-import { resolveChatConfig } from './config.ts'
-import type { ResolvedChatConfig, SelfDevelopmentChatConfig, UpgradeConfig } from './config.ts'
+import { DEFAULT_COMMIT_IDENTITY, resolveChatConfig } from './config.ts'
+import type { CommitIdentity, ResolvedChatConfig, SelfDevelopmentChatConfig, UpgradeConfig } from './config.ts'
 import { budgetViolation } from './budget.ts'
 import { GUIDANCE_SECTION_NAME, GUIDANCE_SECTION_ORDER_NAME, GUIDANCE_TEXT } from './guidance.ts'
 import { runMerge } from './merge.ts'
@@ -111,6 +111,7 @@ export class SelfDevelopmentChat extends Service {
     targetBranch: z.string(),
     integrationGates: z.array(z.string()).default([]),
     upgrade: z.any<UpgradeConfig>().default({ kind: 'none' }),
+    commitIdentity: z.any<CommitIdentity>().default(DEFAULT_COMMIT_IDENTITY),
     cardLocale: z.union(['zh', 'en'] as const).default('zh'),
     defaultUnattended: z.boolean().default(true),
     defaultBudget: z.any<ProposeBudget>().default({ preset: 'unlimited' }),
@@ -535,7 +536,8 @@ function mergeResultLine(value: JsonValue): string {
   const result = outcome.result
   if (result.status === 'integrated') {
     const upgradeText = outcome.upgrade === undefined ? '' : `; ${outcome.upgrade.detail}`
-    return `Task ${outcome.taskId}: merged ${result.commit} into stable, rebuilding and restarting${upgradeText}`
+    const snapshotText = result.snapshotCommit === undefined ? '' : ` (uncommitted worktree changes were snapshotted as ${result.snapshotCommit})`
+    return `Task ${outcome.taskId}: merged ${result.commit} into stable, rebuilding and restarting${snapshotText}${upgradeText}`
   }
   if (result.status === 'conflict' || result.status === 'verification-failed') {
     const repairText = outcome.repair?.ok === true

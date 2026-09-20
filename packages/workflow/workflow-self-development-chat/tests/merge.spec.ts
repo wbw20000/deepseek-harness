@@ -237,6 +237,11 @@ async function makeDeps(overrides: Partial<MergeDeps> = {}): Promise<{
     agent: { id: 'agent-1' },
     callId: 'call-1',
     knownTaskIds: ['task-1'],
+    // Simulates a dirty worktree by default, so the "nothing to merge"
+    // pre-check never short-circuits a test that is not itself about that
+    // check — every existing scenario proceeds to the normal merge attempt,
+    // exactly as before this pre-check existed.
+    git: async (args: readonly string[]) => (args[0] === 'status' ? 'M some-file.txt' : 'unused-rev'),
     ...overrides,
   }
   return { facade, approval, workspaces, runner, deps, control }
@@ -300,6 +305,53 @@ describe('runMerge: task resolution', () => {
     expect(outcome.ok).toBe(true)
     if (!outcome.ok) return
     expect(outcome.taskId).toBe('task-1')
+  })
+})
+
+describe('runMerge: nothing to merge', () => {
+  it('rejects before any approval request when the worktree is clean and already at the target tip', async () => {
+    const { approval, deps } = await makeDeps({
+      git: async (args: readonly string[]) => (args[0] === 'status' ? '' : 'same-commit'),
+    })
+    const outcome = await runMerge(deps, {})
+    expect(outcome.ok).toBe(false)
+    if (outcome.ok) return
+    expect(outcome.reason).toBe('nothing to merge')
+    expect(approval.requests).toEqual([])
+  })
+
+  it('proceeds normally when the worktree is dirty even though HEAD already equals the target tip', async () => {
+    const { deps } = await makeDeps({
+      git: async (args: readonly string[]) => (args[0] === 'status' ? 'M dirty.txt' : 'same-commit'),
+    })
+    const outcome = await runMerge(deps, {})
+    expect(outcome.ok).toBe(true)
+  })
+
+  it('proceeds normally when the worktree is clean but HEAD differs from the target tip', async () => {
+    const { deps } = await makeDeps({
+      git: async (args: readonly string[]) => {
+        if (args[0] === 'status') return ''
+        return args[1] === 'HEAD' ? 'commit-a' : 'commit-b'
+      },
+    })
+    const outcome = await runMerge(deps, {})
+    expect(outcome.ok).toBe(true)
+  })
+
+  it('fails open (proceeds normally) when the git check itself throws', async () => {
+    const { deps } = await makeDeps({ git: async () => { throw new Error('git not found') } })
+    const outcome = await runMerge(deps, {})
+    expect(outcome.ok).toBe(true)
+  })
+
+  it('fails open when the task has no launch profile worktree yet, without calling git', async () => {
+    const { facade, deps } = await makeDeps({ git: async () => { throw new Error('must not be called without a worktree') } })
+    const withoutLaunchProfile = facade.defaultTask
+    if (withoutLaunchProfile === undefined) throw new Error('test setup: defaultTask must be set')
+    facade.defaultTask = { ...withoutLaunchProfile, card: { launchProfile: undefined } }
+    const outcome = await runMerge(deps, {})
+    expect(outcome.ok).toBe(true)
   })
 })
 
@@ -385,7 +437,7 @@ describe('runMerge: integrate outcomes', () => {
     expect(outcome.error?.message).toBe('lock timeout')
   })
 
-  it('passes taskId, targetBranch, actor, and a verify function to integrate', async () => {
+  it('passes taskId, targetBranch, actor, a verify function, and a snapshot request to integrate', async () => {
     const { workspaces, deps } = await makeDeps()
     await runMerge(deps, {})
     expect(workspaces.integrateRequests).toHaveLength(1)
@@ -394,6 +446,34 @@ describe('runMerge: integrate outcomes', () => {
     expect(request?.targetBranch).toBe('stable')
     expect(request?.actor).toBe('user')
     expect(typeof request?.verify).toBe('function')
+    // taskDetail()'s default projection.spec.requirement is 'add chat transcript search'.
+    expect(request?.snapshot).toEqual({
+      message: 'selfdev(task-1): add chat transcript search',
+      author: { name: 'DSH self-development', email: 'self-development@dsh.local' },
+    })
+  })
+
+  it('uses the configured commitIdentity as the snapshot author', async () => {
+    const { workspaces, deps: baseDeps } = await makeDeps()
+    const deps: MergeDeps = {
+      ...baseDeps,
+      config: resolveChatConfig({ ...baseDeps.config, commitIdentity: { name: 'Custom Bot', email: 'bot@example.com' } }),
+    }
+    await runMerge(deps, {})
+    expect(workspaces.integrateRequests[0]?.snapshot?.author).toEqual({ name: 'Custom Bot', email: 'bot@example.com' })
+  })
+
+  it('caps the snapshot message\'s requirement portion at 72 characters, and falls back without a requirement', async () => {
+    const { facade, workspaces, deps } = await makeDeps()
+    const longRequirement = 'x'.repeat(100)
+    facade.defaultTask = taskDetail({ spec: { requirement: longRequirement } })
+    await runMerge(deps, {})
+    expect(workspaces.integrateRequests[0]?.snapshot?.message).toBe(`selfdev(task-1): ${'x'.repeat(72)}`)
+
+    const { facade: facade2, workspaces: workspaces2, deps: deps2 } = await makeDeps()
+    facade2.defaultTask = taskDetail({ spec: undefined })
+    await runMerge(deps2, {})
+    expect(workspaces2.integrateRequests[0]?.snapshot?.message).toBe('selfdev(task-1)')
   })
 
   it('on integrated: emits merge-integrated and skips the upgrade when upgrade.kind is none', async () => {
@@ -408,6 +488,18 @@ describe('runMerge: integrate outcomes', () => {
     // revision: 1 — the FakeFacade's recordTrialApproval is the only
     // revision-bumping call before the event fires (see its own class doc).
     expect(integratedPayload).toMatchObject({ taskId: 'task-1', commit: 'f'.repeat(40), baseMoved: true, revision: 1 })
+    expect(integratedPayload?.snapshotCommit).toBeUndefined()
+  })
+
+  it('on integrated: carries a snapshotCommit into the local event payload when integrate reports one', async () => {
+    const { workspaces, deps } = await makeDeps()
+    workspaces.integrateResult = { status: 'integrated', commit: 'f'.repeat(40), baseMoved: true, snapshotCommit: 'a'.repeat(40) }
+    let integratedPayload: MergeIntegratedEventPayload | undefined
+    const outcome = await runMerge({ ...deps, emitIntegrated: (payload) => { integratedPayload = payload } }, {})
+    expect(outcome.ok).toBe(true)
+    if (!outcome.ok) return
+    expect(outcome.result).toMatchObject({ snapshotCommit: 'a'.repeat(40) })
+    expect(integratedPayload?.snapshotCommit).toBe('a'.repeat(40))
   })
 
   it('on integrated: runs the configured upgrade and reports its outcome', async () => {

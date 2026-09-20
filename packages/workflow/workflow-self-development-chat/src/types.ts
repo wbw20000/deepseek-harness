@@ -263,6 +263,18 @@ export interface IntegrationRequest {
   readonly targetBranch: string
   readonly actor: string
   readonly verify?: (worktree: string) => Promise<VerifyOutcome>
+  /**
+   * When the task worktree has uncommitted changes, `integrate` stages and
+   * commits them (`git add -A` then commit with this message and author)
+   * before rebasing/fast-forwarding, so an experimental agent's uncommitted
+   * work is not silently discarded by the merge. Omitted, or the worktree is
+   * already clean: no snapshot commit is made and `IntegrationResult`'s
+   * `snapshotCommit` is absent.
+   */
+  readonly snapshot?: {
+    readonly message: string
+    readonly author: { readonly name: string; readonly email: string }
+  }
 }
 
 /** Outcome of one `verify(worktree)` call; a thrown `verify` counts as `{ ok: false }` to the caller. */
@@ -270,12 +282,19 @@ export type VerifyOutcome =
   | { readonly ok: true }
   | { readonly ok: false; readonly reason: string }
 
-/** Result of one {@link WorkspacesPort.integrate} call (DI-a frozen interface). */
+/**
+ * Result of one {@link WorkspacesPort.integrate} call (DI-a frozen interface).
+ * `snapshotCommit` is the commit id `IntegrationRequest.snapshot` produced
+ * for a dirty task worktree, present on any status once one was made (a
+ * snapshot is taken before rebase/verify even run, so it can survive a
+ * `conflict` or `verification-failed` outcome too); absent when the worktree
+ * was already clean or no `snapshot` was requested.
+ */
 export type IntegrationResult =
-  | { readonly status: 'integrated'; readonly commit: string; readonly baseMoved: boolean }
-  | { readonly status: 'conflict'; readonly files: readonly string[]; readonly baseMoved: true }
-  | { readonly status: 'verification-failed'; readonly reason: string; readonly baseMoved: boolean }
-  | { readonly status: 'failed'; readonly reason: string }
+  | { readonly status: 'integrated'; readonly commit: string; readonly baseMoved: boolean; readonly snapshotCommit?: string }
+  | { readonly status: 'conflict'; readonly files: readonly string[]; readonly baseMoved: true; readonly snapshotCommit?: string }
+  | { readonly status: 'verification-failed'; readonly reason: string; readonly baseMoved: boolean; readonly snapshotCommit?: string }
+  | { readonly status: 'failed'; readonly reason: string; readonly snapshotCommit?: string }
 
 /**
  * Structural view of the optional runner verification port
@@ -433,7 +452,10 @@ export type MergeOutcome = MergeSuccess | MergeFailure
  * `@deepseek-ai/dsh-workflow-self-development-events` actually subscribes to
  * (`packages/workflow/workflow-self-development-events/src/merge.ts`) —
  * `revision` here is the `FacadeOperationResult` `recordTrialApproval`
- * returned, threaded through so both destinations can be built from one payload.
+ * returned, threaded through so both destinations can be built from one
+ * payload. `snapshotCommit` (present only when `IntegrationResult` carried
+ * one) is local to this event — the upstream `self-development/*` events do
+ * not gain a field DI-a did not declare for them.
  */
 export interface MergeIntegratedEventPayload {
   readonly taskId: string
@@ -441,6 +463,7 @@ export interface MergeIntegratedEventPayload {
   readonly baseMoved: boolean
   readonly occurredAt: number
   readonly revision: number
+  readonly snapshotCommit?: string
 }
 
 /**

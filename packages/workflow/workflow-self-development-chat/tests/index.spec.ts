@@ -694,6 +694,33 @@ describe('self_development_merge tool', () => {
     expect((rendered[0] as { text: string }).text).toContain('merged')
   })
 
+  it('renders the snapshot commit in the chat text when integrate reports one, and carries it only on the local event', async () => {
+    const facade = new FakeFacade()
+    facade.getTaskDetail = {
+      ...facade.getTaskDetail,
+      projection: { ...facade.getTaskDetail.projection, status: 'awaiting-trial' },
+    }
+    const workspaces = new FakeWorkspaces()
+    workspaces.integrateResult = { status: 'integrated', commit: 'c'.repeat(40), baseMoved: false, snapshotCommit: 'e'.repeat(40) }
+    const { tools, ctx } = makeService({ facade, approval: new FakeApproval(), workspaces, runner: new FakeRunner() })
+    const localEvents: unknown[] = []
+    const upstreamEvents: unknown[] = []
+    ctx.on('self-development-chat/merge-integrated', (payload: unknown) => { localEvents.push(payload) })
+    ctx.on('self-development/merge-integrated', (payload: unknown) => { upstreamEvents.push(payload) })
+    const def = tools.find('self_development_merge')
+    const value = await def.execute({ taskId: 'task-1' }, fakeExec({ agent: fakeAgent() }))
+    const outcome = value as { ok: boolean; result: { snapshotCommit?: string } }
+    expect(outcome.ok).toBe(true)
+    expect(outcome.result.snapshotCommit).toBe('e'.repeat(40))
+    const rendered = def.output.render({}, value as never)
+    expect((rendered[0] as { text: string }).text).toContain(`snapshotted as ${'e'.repeat(40)}`)
+    expect(localEvents).toEqual([expect.objectContaining({ snapshotCommit: 'e'.repeat(40) })])
+    // The upstream event's declared payload ({ taskId, revision }) has no
+    // snapshotCommit field at all — asserting the exact object (not
+    // objectContaining) proves this package does not smuggle an extra field in.
+    expect(upstreamEvents).toEqual([{ taskId: 'task-1', revision: 1 }])
+  })
+
   it('renders the failed-status line', async () => {
     const facade = new FakeFacade()
     facade.getTaskDetail = {

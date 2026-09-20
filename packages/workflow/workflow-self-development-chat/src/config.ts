@@ -56,6 +56,23 @@ export interface UpgradeNoneConfig {
 /** Post-integration upgrade strategy; see {@link UpgradeSourceConfig}. */
 export type UpgradeConfig = UpgradeSourceConfig | UpgradeLauncherConfig | UpgradeNoneConfig
 
+/**
+ * Git author identity for the snapshot commit `self_development_merge` asks
+ * `workspaces.integrate` to make of a dirty task worktree before rebasing
+ * (`IntegrationRequest.snapshot.author` in `types.ts`), so an experimental
+ * agent's uncommitted changes are not silently discarded by the merge.
+ */
+export interface CommitIdentity {
+  readonly name: string
+  readonly email: string
+}
+
+/** Default {@link CommitIdentity} when the deployment configures none. */
+export const DEFAULT_COMMIT_IDENTITY: CommitIdentity = {
+  name: 'DSH self-development',
+  email: 'self-development@dsh.local',
+}
+
 /** cordis.yml configuration of the service. */
 export interface SelfDevelopmentChatConfig {
   /** Absolute path of the repository whose stable branch the tasks fork from. */
@@ -75,6 +92,8 @@ export interface SelfDevelopmentChatConfig {
   readonly integrationGates?: readonly string[] | undefined
   /** How `self_development_merge` rebuilds and restarts the stable version after an `integrated` result; defaults to `{ kind: 'none' }`. */
   readonly upgrade?: UpgradeConfig | undefined
+  /** Author identity for a dirty task worktree's snapshot commit; defaults to {@link DEFAULT_COMMIT_IDENTITY}. */
+  readonly commitIdentity?: CommitIdentity | undefined
   /** Language of the approval-card copy; defaults to `zh`. */
   readonly cardLocale?: 'zh' | 'en' | undefined
   /** Budget used when the tool call omits one; defaults to the `unlimited` preset. */
@@ -98,6 +117,7 @@ export interface ResolvedChatConfig {
   readonly targetBranch: string
   readonly integrationGates: readonly string[]
   readonly upgrade: UpgradeConfig
+  readonly commitIdentity: CommitIdentity
   readonly cardLocale: 'zh' | 'en'
   readonly defaultBudget: ProposeBudget
   readonly defaultUnattended: boolean
@@ -109,8 +129,9 @@ export interface ResolvedChatConfig {
  * @param config - configuration as parsed from cordis.yml.
  * @returns the resolved configuration with defaults applied.
  * @throws Error when a path field is empty or relative, the actor or targetBranch
- *   is empty, or the locale is unknown. The default budget and the upgrade
- *   config are validated by the caller through {@link budgetViolation} and
+ *   is empty, an explicit commitIdentity has an empty name or email, or the
+ *   locale is unknown. The default budget and the upgrade config are
+ *   validated by the caller through {@link budgetViolation} and
  *   `upgradeViolation` (`upgrade.ts`) to keep this module free of their import cycles.
  */
 export function resolveChatConfig(config: SelfDevelopmentChatConfig): ResolvedChatConfig {
@@ -127,6 +148,14 @@ export function resolveChatConfig(config: SelfDevelopmentChatConfig): ResolvedCh
   if (typeof config.targetBranch !== 'string' || config.targetBranch.length === 0) {
     throw new Error('self-development chat config is invalid: targetBranch must be a non-empty string')
   }
+  if (config.commitIdentity !== undefined) {
+    if (typeof config.commitIdentity.name !== 'string' || config.commitIdentity.name.length === 0) {
+      throw new Error('self-development chat config is invalid: commitIdentity.name must be a non-empty string')
+    }
+    if (typeof config.commitIdentity.email !== 'string' || config.commitIdentity.email.length === 0) {
+      throw new Error('self-development chat config is invalid: commitIdentity.email must be a non-empty string')
+    }
+  }
   const locale = config.cardLocale ?? 'zh'
   // oxlint-disable-next-line typescript/no-unnecessary-condition -- same defensive reason: not a runtime guarantee.
   if (locale !== 'zh' && locale !== 'en') {
@@ -140,6 +169,7 @@ export function resolveChatConfig(config: SelfDevelopmentChatConfig): ResolvedCh
     targetBranch: config.targetBranch,
     integrationGates: config.integrationGates ?? [],
     upgrade: config.upgrade ?? { kind: 'none' },
+    commitIdentity: config.commitIdentity ?? DEFAULT_COMMIT_IDENTITY,
     cardLocale: locale,
     defaultBudget: config.defaultBudget ?? { preset: 'unlimited' },
     defaultUnattended: config.defaultUnattended ?? true,

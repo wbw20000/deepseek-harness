@@ -414,6 +414,7 @@ describe('resolveChatConfig', () => {
     expect(resolved.defaultBudget).toEqual({ preset: 'unlimited' })
     expect(resolved.integrationGates).toEqual([])
     expect(resolved.upgrade).toEqual({ kind: 'none' })
+    expect(resolved.commitIdentity).toEqual({ name: 'DSH self-development', email: 'self-development@dsh.local' })
   })
 
   it('keeps explicit values', () => {
@@ -424,21 +425,25 @@ describe('resolveChatConfig', () => {
       defaultBudget: { mode: 'rounds', maxRounds: 2 },
       integrationGates: ['node test.mjs'],
       upgrade: { kind: 'launcher', dshUpgradeBin: 'dsh-upgrade' },
+      commitIdentity: { name: 'Custom Bot', email: 'bot@example.com' },
     })
     expect(resolved.cardLocale).toBe('en')
     expect(resolved.defaultUnattended).toBe(false)
     expect(resolved.defaultBudget).toEqual({ mode: 'rounds', maxRounds: 2 })
     expect(resolved.integrationGates).toEqual(['node test.mjs'])
     expect(resolved.upgrade).toEqual({ kind: 'launcher', dshUpgradeBin: 'dsh-upgrade' })
+    expect(resolved.commitIdentity).toEqual({ name: 'Custom Bot', email: 'bot@example.com' })
   })
 
-  it('fails loud on invalid paths, actor, targetBranch, and locale', () => {
+  it('fails loud on invalid paths, actor, targetBranch, commitIdentity, and locale', () => {
     expect(() => resolveChatConfig({ ...base, stableRepo: 'relative/path' })).toThrow('stableRepo must be an absolute path')
     expect(() => resolveChatConfig({ ...base, controlDirectory: '' })).toThrow('controlDirectory')
     expect(() => resolveChatConfig({ ...base, experimentsRoot: undefined as unknown as string })).toThrow('experimentsRoot')
     expect(() => resolveChatConfig({ ...base, actor: '' })).toThrow('actor')
     expect(() => resolveChatConfig({ ...base, actor: 3 as unknown as string })).toThrow('actor')
     expect(() => resolveChatConfig({ ...base, targetBranch: '' })).toThrow('targetBranch')
+    expect(() => resolveChatConfig({ ...base, commitIdentity: { name: '', email: 'bot@example.com' } })).toThrow('commitIdentity.name')
+    expect(() => resolveChatConfig({ ...base, commitIdentity: { name: 'Bot', email: '' } })).toThrow('commitIdentity.email')
     expect(() => resolveChatConfig({ ...base, cardLocale: 'fr' as unknown as 'zh' | 'en' })).toThrow('cardLocale')
   })
 })
