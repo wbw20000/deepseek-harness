@@ -808,3 +808,73 @@ describe('spent-budget execution', () => {
     expect(executed.acceptance).toBeUndefined()
   })
 })
+
+/**
+ * Reason printed on every skipped case below: `assertSandboxAvailable` and
+ * `sandboxEffectivelyEnabled` read the real `process.platform` (they take no
+ * override, unlike their unit-tested counterparts in `sandbox.spec.ts`), so
+ * only an actual darwin host ever gates or wraps an attempt on sandboxing.
+ */
+const DARWIN_ONLY_REASON = 'sandbox-exec gating reads the real process.platform, so it only runs on darwin'
+
+/** Run a sandbox-gated case on darwin, or record it skipped with a printed reason elsewhere. */
+function itDarwinOnly(name: string, fn: () => Promise<void>, timeout?: number): void {
+  if (process.platform !== 'darwin') {
+    it.skip(`${name} (skipped: ${DARWIN_ONLY_REASON})`, fn)
+    return
+  }
+  it(name, fn, timeout)
+}
+
+describe('macOS sandbox gate', () => {
+  itDarwinOnly('refuses the attempt before the core commits attempt/started when the sandbox probe fails', async () => {
+    const harness = await makeHarness({ requirement: 'dev' })
+    const fakeSandboxExec = join(root ?? '', 'fake-sandbox-exec-probe-fail.sh')
+    await writeFile(fakeSandboxExec, '#!/bin/sh\nexit 9\n')
+    await chmod(fakeSandboxExec, 0o755)
+    const config = {
+      ...harness.config,
+      sandbox: { enabled: true, denyReadRoots: [], extraWritableRoots: [], sandboxExec: fakeSandboxExec },
+    }
+    await expect(runSupervisedAttempt({ ...depsOf(harness), config }, attemptRequest(harness, 'op-1')))
+      .rejects.toMatchObject({ code: 'SELF_DEV_RUNNER_SANDBOX_UNAVAILABLE' })
+    // Refused before the launch record and before the core's attempt/started:
+    // preflight → sandbox gate is the very first await in runSupervisedAttempt,
+    // ahead of worktree resolution, binding, and the launch record write.
+    expect((await journalRecords(harness)).some(record => record.event.type === 'attempt/started')).toBe(false)
+    await expect(readLaunchRecord(harness.config.evidenceRoot, TASK_ID, 'op-1')).resolves.toBeUndefined()
+    expect(await launchCount(harness)).toBe(0)
+  }, 60_000)
+
+  itDarwinOnly('records a disabled sandbox on evidence and still runs the attempt when sandbox.enabled is false', async () => {
+    const harness = await makeHarness({ requirement: 'dev' })
+    // Pre-seeded with one line, same as every other harness test that expects
+    // a passing `dev` attempt: the fixture writes `marker.txt` DONE only from
+    // its second recorded launch onward.
+    const dshHome = await makeDataHome(harness, 'task-home')
+    const config = {
+      ...harness.config,
+      sandbox: { enabled: false, denyReadRoots: [], extraWritableRoots: [], sandboxExec: '/usr/bin/sandbox-exec' },
+    }
+    const outcome = await runSupervisedAttempt({ ...depsOf(harness), config }, attemptRequest(harness, 'op-1', { dshHome }))
+    expect(outcome.operation.replayed).toBe(false)
+    const evidence = await readAttemptEvidence(harness.config.evidenceRoot, TASK_ID, await firstAttemptId(harness))
+    expect(evidence?.evidence.sandbox).toEqual({ kind: 'disabled' })
+  }, 60_000)
+
+  itDarwinOnly('records the real seatbelt profile digest on evidence for an attempt run under the default (enabled) sandbox', async () => {
+    // No `sandbox` override: the harness's config leaves `sandbox` undefined,
+    // so this runs exactly as every other harness test does — wrapped in the
+    // real /usr/bin/sandbox-exec by default — and checks what it leaves on
+    // evidence.
+    const harness = await makeHarness({ requirement: 'dev' })
+    const dshHome = await makeDataHome(harness, 'task-home')
+    const outcome = await runSupervisedAttempt(depsOf(harness), attemptRequest(harness, 'op-1', { dshHome }))
+    expect(outcome.operation.replayed).toBe(false)
+    expect(harness.controller.projection.status).toBe('awaiting-trial')
+    const evidence = await readAttemptEvidence(harness.config.evidenceRoot, TASK_ID, await firstAttemptId(harness))
+    const sandboxRecord = evidence?.evidence.sandbox
+    expect(sandboxRecord?.kind).toBe('seatbelt')
+    if (sandboxRecord?.kind === 'seatbelt') expect(sandboxRecord.profileDigest).toMatch(/^[0-9a-f]{64}$/)
+  }, 60_000)
+})

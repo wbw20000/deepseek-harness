@@ -58,6 +58,16 @@ export interface AttemptEvidence {
   readonly capabilitySource: 'human-presence'
   /** Launch-input identity: the digests the launch record was written with. */
   readonly launch: DigestPair
+  /**
+   * Sandbox status this attempt's executor and acceptance-case spawns ran
+   * under: `disabled` when the deployment configured `sandbox.enabled: false`
+   * or ran off `darwin` (this package's only sandbox tier), else `seatbelt`
+   * with the sha-256 digest of the resolved SBPL profile text — the digest,
+   * not the full profile, so evidence never carries the deployment's real
+   * absolute path layout (worktree, data home, and every deny-read root)
+   * off the stable host it was written on.
+   */
+  readonly sandbox: { readonly kind: 'disabled' } | { readonly kind: 'seatbelt'; readonly profileDigest: string }
   /** Digest A: content identity taken after the development phase ended. */
   readonly tested: DigestPair
   /** Digest B: content identity taken after acceptance, or `undefined` before acceptance. */
@@ -213,6 +223,21 @@ function validOptionalDigestPair(value: unknown, field: string): DigestPair | un
 }
 
 /**
+ * Validate the recorded sandbox status.
+ * @param value - `sandbox` as read from evidence.
+ * @returns an owned copy of the validated record.
+ * @throws SelfDevelopmentRunnerError with `SELF_DEV_RUNNER_EVIDENCE_INVALID` when the value is not
+ *   `{ kind: 'disabled' }` or `{ kind: 'seatbelt', profileDigest: <sha-256 hex> }`.
+ */
+function validSandboxRecord(value: unknown): AttemptEvidence['sandbox'] {
+  if (typeof value !== 'object' || value === null) throw invalid(`sandbox ${JSON.stringify(value)} must be an object`)
+  const record = value as Record<string, unknown>
+  if (record.kind === 'disabled') return { kind: 'disabled' }
+  if (record.kind === 'seatbelt') return { kind: 'seatbelt', profileDigest: validDigest(record.profileDigest, 'sandbox.profileDigest') }
+  throw invalid(`sandbox.kind ${JSON.stringify(record.kind)} must be 'disabled' or 'seatbelt'`)
+}
+
+/**
  * Validate the recorded clock observation.
  * @param value - `recordedAt` as read from evidence.
  * @returns an owned copy of the validated observation.
@@ -290,6 +315,7 @@ function parseAttemptEvidence(value: unknown): AttemptEvidence {
     operationId: validOperationId(evidence.operationId),
     capabilitySource: 'human-presence',
     launch: validDigestPair(evidence.launch, 'launch'),
+    sandbox: validSandboxRecord(evidence.sandbox),
     tested: validDigestPair(evidence.tested, 'tested'),
     afterAcceptance: validOptionalDigestPair(evidence.afterAcceptance, 'afterAcceptance'),
     contentStable: evidence.contentStable,

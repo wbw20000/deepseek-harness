@@ -15,6 +15,7 @@ import { isInsideReal, staysInside } from './path-containment.ts'
 import { SelfDevelopmentRunnerError } from './runtime.ts'
 import { assertProcessGroupSupport, finishProcessGroup, readGroupLeaderStartedAt } from './process-group.ts'
 import type { ProcessGroupLeader } from './process-group.ts'
+import { DEFAULT_SANDBOX_CONFIG, assertSandboxAvailable, sandboxEffectivelyEnabled, sandboxLaunchFailed, spawnConfined } from './sandbox.ts'
 import type { RunnerConfig } from './types.ts'
 
 /** One assertion a case's process must satisfy after it exits. */
@@ -70,6 +71,9 @@ const SPAWN_ENV = {
 
 /** Upper bound on the stdout one case may accumulate; past it the tail is dropped. */
 const STDOUT_MAX_BYTES = 1 << 20
+
+/** Byte bound of the retained stderr tail, kept only to detect a sandbox-exec launch failure. */
+const STDERR_TAIL_BYTES = 4096
 
 /**
  * Read and validate the stable-side acceptance definition. The definition must
@@ -398,17 +402,27 @@ async function runCase(
   // receive a directory outside the worktree.
   if (testCase.cwd !== undefined) await assertCwdInsideWorktree(worktree, testCase.cwd, testCase.caseId)
   if (signal.aborted) return { exitCode: null, signal: null, timedOut: false, cancelled: true, stdout: '', stdoutTruncated: false, pgidReused: false }
+  const command = program === 'node' ? config.nodeBinary : program
+  const dshHomeReal = dshHome ?? config.dshHome
+  // Ambient provider credentials and proxy variables are not inherited.
+  // HOME and DSH_HOME still refer to files accessible under the child's UID.
+  const options: SpawnOptionsWithStdioTuple<'ignore', 'pipe', 'pipe'> = {
+    cwd: resolve(worktree, testCase.cwd ?? '.'),
+    env: { ...SPAWN_ENV, DSH_HOME: dshHomeReal },
+    detached: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }
+  const sandboxConfig = config.sandbox ?? DEFAULT_SANDBOX_CONFIG
+  await assertSandboxAvailable(sandboxConfig)
+  const sandboxWrapped = sandboxEffectivelyEnabled(sandboxConfig)
+  const args = testCase.command.slice(1)
+  // sandbox-exec `execve`s the target program in place: the pid it reports is
+  // the same pid the case's own command ultimately runs under, so the
+  // process-group leader fingerprint below is unaffected by the wrap.
+  const child = sandboxWrapped
+    ? await spawnConfined(sandboxConfig, { worktreeReal: worktree, dshHomeReal }, command, args, options)
+    : spawn(command, args, options)
   return new Promise((resolveCase, rejectCase) => {
-    const command = program === 'node' ? config.nodeBinary : program
-    // Ambient provider credentials and proxy variables are not inherited.
-    // HOME and DSH_HOME still refer to files accessible under the child's UID.
-    const options: SpawnOptionsWithStdioTuple<'ignore', 'pipe', 'pipe'> = {
-      cwd: resolve(worktree, testCase.cwd ?? '.'),
-      env: { ...SPAWN_ENV, DSH_HOME: dshHome ?? config.dshHome },
-      detached: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    }
-    const child = spawn(command, testCase.command.slice(1), options)
     // A spawn that fails before creating the process (ENOENT, EACCES) assigns
     // no pid and reports through the 'error' event; there is no group to tear down.
     const groupPid = child.pid
@@ -453,6 +467,12 @@ async function runCase(
       teardown(false, true)
     }
     signal.addEventListener('abort', onAbort, { once: true })
+    // The sandbox probe and profile resolution above are `await`s between the
+    // early aborted-check and this listener: a signal that fired during that
+    // gap already dispatched its (one-shot) 'abort' event and would never
+    // reach `onAbort` otherwise, leaving a cancelled case running until its
+    // own deadline instead of tearing down immediately.
+    if (signal.aborted) onAbort()
     child.stdout.setEncoding('utf8')
     child.stdout.on('data', (chunk: string) => {
       // A runaway case must not grow the buffer without bound: once the cap is
@@ -467,8 +487,13 @@ async function runCase(
       stdout += Buffer.from(chunk, 'utf8').subarray(0, Buffer.byteLength(chunk) - over).toString('utf8')
       stdoutTruncated = true
     })
-    // Drain stderr: an unread pipe would block a chatty case at the 64 KiB buffer.
-    child.stderr.resume()
+    // Retain a bounded stderr tail so a sandbox-wrapped launch failure (below)
+    // can be told apart from the case's own output; an unread pipe would
+    // otherwise block a chatty case at the 64 KiB kernel buffer regardless.
+    let stderrTail = Buffer.alloc(0)
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderrTail = Buffer.concat([stderrTail, chunk]).subarray(-STDERR_TAIL_BYTES)
+    })
     const cleanup = (): void => {
       clearTimeout(deadline)
       clearTimeout(graceTimer)
@@ -494,6 +519,16 @@ async function runCase(
           ? undefined
           : { pid: groupPid, exited: true, startedAt: await leaderStartedAt }
         const groupExit = await finishProcessGroup(groupPid, config.killGraceMs, leader)
+        if (sandboxWrapped && stdout === '' && sandboxLaunchFailed(stderrTail.toString('utf8'))) {
+          // sandbox-exec could not execve() the case command at all (missing
+          // binary, EACCES, or a profile the kernel refused): the command
+          // never ran, so this is a spawn failure, not a case exit — reported
+          // the same way an unwrapped ENOENT would be, through 'error' above.
+          throw new SelfDevelopmentRunnerError(
+            `acceptance case ${testCase.caseId} could not start under sandbox-exec: ${stderrTail.toString('utf8').trim()}`,
+            'SELF_DEV_RUNNER_EXECUTOR_FAILED',
+          )
+        }
         resolveCase({ exitCode, signal: terminatingSignal, timedOut, cancelled, stdout, stdoutTruncated, pgidReused: groupExit.pgidReused })
       })().then(undefined, rejectCase)
     })

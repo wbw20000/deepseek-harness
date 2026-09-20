@@ -10,7 +10,7 @@
  * @module executor.spec
  */
 
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -331,5 +331,153 @@ describe.skipIf(process.platform === 'win32')('headless executor', () => {
       stepCapHit: false,
       pgidReused: false,
     })
+  }, 20_000)
+})
+
+/**
+ * Reason printed on every skipped case below: `sandboxEffectivelyEnabled` and
+ * `assertSandboxAvailable` read the real `process.platform` inside the
+ * executor (they take no override, unlike their unit-tested counterparts in
+ * `sandbox.spec.ts`), so only an actual darwin host ever wraps a spawn.
+ */
+const DARWIN_ONLY_REASON = 'sandbox-exec wrapping reads the real process.platform, so it only runs on darwin'
+
+/** Run a sandbox-wrapping case on darwin, or record it skipped with a printed reason elsewhere. */
+function itDarwinOnly(name: string, fn: () => Promise<void>, timeout?: number): void {
+  if (process.platform !== 'darwin') {
+    it.skip(`${name} (skipped: ${DARWIN_ONLY_REASON})`, fn)
+    return
+  }
+  it(name, fn, timeout)
+}
+
+/** Write an executable POSIX shell fake `sandbox-exec` at `path`. */
+async function writeFakeSandboxExec(path: string, body: string): Promise<void> {
+  await writeFile(path, body)
+  await chmod(path, 0o755)
+}
+
+describe('macOS sandbox wrapping', () => {
+  itDarwinOnly('wraps the spawn in sandbox-exec by default; the profile names the worktree, the data home, and only the configured deny-read root', async () => {
+    const config = await makeConfig()
+    const base = root ?? ''
+    const log = join(base, 'sandbox-exec.log')
+    const fakeSandboxExec = join(base, 'fake-sandbox-exec.sh')
+    const denyRoot = join(base, 'deny-me')
+    await mkdir(denyRoot, { recursive: true })
+    // Pre-created so the assertions below can realpath() it directly; the
+    // profile resolver itself (resolveSandboxRoot) tolerates a not-yet-created
+    // data home too, proven separately in sandbox.spec.ts.
+    await mkdir(config.dshHome, { recursive: true })
+    // Records every argv on one line each, then execs the real command
+    // (skipping the leading `-p <profile>` this fake was invoked with) so the
+    // wrapped fixture still actually runs.
+    await writeFakeSandboxExec(fakeSandboxExec, [
+      '#!/bin/sh',
+      `: > '${log}'`,
+      `for a in "$@"; do printf '%s\\n' "$a" >> '${log}'; done`,
+      'shift 2',
+      'exec "$@"',
+      '',
+    ].join('\n'))
+    const sandboxed: RunnerConfig = {
+      ...config,
+      sandbox: { enabled: true, denyReadRoots: [denyRoot], extraWritableRoots: [], sandboxExec: fakeSandboxExec },
+    }
+    const run = await runHeadlessExecutor(sandboxed, req('ok'))
+    expect(run.exitCode).toBe(0)
+    expect(run.sessionId).toMatch(/^session-/)
+    const lines = (await readFile(log, 'utf8')).split('\n')
+    expect(lines[0]).toBe('-p')
+    const profile = lines[1] ?? ''
+    expect(profile).toContain(await realpath(worktree ?? ''))
+    expect(profile).toContain(await realpath(config.dshHome))
+    const denyForms = profile.match(/\(deny file-read\* \(subpath [^)]*\)\)/g) ?? []
+    expect(denyForms).toEqual([`(deny file-read* (subpath ${JSON.stringify(await realpath(denyRoot))}))`])
+    expect(lines[2]).toBe(config.nodeBinary)
+  }, 20_000)
+
+  itDarwinOnly('does not wrap the spawn when sandbox.enabled is false', async () => {
+    const config = await makeConfig()
+    const base = root ?? ''
+    const log = join(base, 'sandbox-exec.log')
+    const fakeSandboxExec = join(base, 'fake-sandbox-exec.sh')
+    await writeFakeSandboxExec(fakeSandboxExec, `#!/bin/sh\n: > '${log}'\nexit 0\n`)
+    const disabled: RunnerConfig = {
+      ...config,
+      sandbox: { enabled: false, denyReadRoots: [], extraWritableRoots: [], sandboxExec: fakeSandboxExec },
+    }
+    const run = await runHeadlessExecutor(disabled, req('ok'))
+    expect(run.exitCode).toBe(0)
+    // The fake sandbox-exec was never invoked at all: the plain unwrapped
+    // spawn ran the CLI directly.
+    await expect(readFile(log, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  }, 20_000)
+
+  itDarwinOnly('rejects with the executor error code when sandbox-exec cannot launch the CLI at all', async () => {
+    const config = await makeConfig()
+    const fakeSandboxExec = join(root ?? '', 'fake-sandbox-exec-launch-fail.sh')
+    // Succeeds only for the probe's own `/usr/bin/true` invocation; any other
+    // program (the real spawn below) gets sandbox-exec's own launch-failure
+    // stderr signature instead of ever running.
+    await writeFakeSandboxExec(fakeSandboxExec, [
+      '#!/bin/sh',
+      'shift 2',
+      'if [ "$1" = "/usr/bin/true" ]; then exec /usr/bin/true; fi',
+      'echo "sandbox-exec: fake launch failure for $1" >&2',
+      'exit 1',
+    ].join('\n'))
+    const sandboxed: RunnerConfig = {
+      ...config,
+      sandbox: { enabled: true, denyReadRoots: [], extraWritableRoots: [], sandboxExec: fakeSandboxExec },
+    }
+    await expect(runHeadlessExecutor(sandboxed, req('ok')))
+      .rejects.toMatchObject({ code: 'SELF_DEV_RUNNER_EXECUTOR_FAILED' })
+  }, 20_000)
+
+  itDarwinOnly('rejects with SELF_DEV_RUNNER_SANDBOX_UNAVAILABLE before spawning the CLI when the probe fails', async () => {
+    const config = await makeConfig()
+    const fakeSandboxExec = join(root ?? '', 'fake-sandbox-exec-probe-fail.sh')
+    await writeFakeSandboxExec(fakeSandboxExec, '#!/bin/sh\nexit 9\n')
+    const sandboxed: RunnerConfig = {
+      ...config,
+      sandbox: { enabled: true, denyReadRoots: [], extraWritableRoots: [], sandboxExec: fakeSandboxExec },
+    }
+    await expect(runHeadlessExecutor(sandboxed, req('ok')))
+      .rejects.toMatchObject({ code: 'SELF_DEV_RUNNER_SANDBOX_UNAVAILABLE' })
+  }, 20_000)
+
+  itDarwinOnly('tears down immediately when cancellation fires while the sandbox probe is still in flight', async () => {
+    // Real sandbox-exec: spawning it for the probe genuinely crosses the
+    // event loop, so a synchronous abort() right after the call below lands
+    // in the gap between the function's first await and its 'abort' listener
+    // registration — the exact race `if (request.signal.aborted) onAbort()`
+    // (executor.ts) closes.
+    const config = await makeConfig()
+    const sandboxed: RunnerConfig = {
+      ...config,
+      sandbox: { enabled: true, denyReadRoots: [], extraWritableRoots: [], sandboxExec: '/usr/bin/sandbox-exec' },
+    }
+    const controller = new AbortController()
+    const pending = runHeadlessExecutor(sandboxed, req('slow', { signal: controller.signal }))
+    controller.abort()
+    const run = await pending
+    expect(run.cancelled).toBe(true)
+    expect(run.exitCode).toBeNull()
+  }, 20_000)
+
+  // Not darwin-gated: sandboxing is disabled here, so this exercises the
+  // ordinary unwrapped `spawn()` 'error' event on every platform — the same
+  // path the whole suite relied on before sandboxing existed, which a bad
+  // nodeBinary no longer reaches by default now that sandbox-exec itself (not
+  // the missing binary) is what spawn() launches on darwin.
+  it('rejects with the executor error code through the plain spawn error path when sandboxing is disabled', async () => {
+    const config = await makeConfig({ nodeBinary: join(root ?? '', 'missing-node') })
+    const disabled: RunnerConfig = {
+      ...config,
+      sandbox: { enabled: false, denyReadRoots: [], extraWritableRoots: [], sandboxExec: '/usr/bin/sandbox-exec' },
+    }
+    await expect(runHeadlessExecutor(disabled, req('ok')))
+      .rejects.toMatchObject({ code: 'SELF_DEV_RUNNER_EXECUTOR_FAILED' })
   }, 20_000)
 })

@@ -54,6 +54,26 @@ describe('verifyAcceptance', () => {
     ])
   })
 
+  it('applies a configured sandbox to the case processes, with enabled:false spawning them unconfined', async () => {
+    const { experimentsRoot, worktree, acceptancePath } = await makeFixture()
+    await writeFile(acceptancePath, JSON.stringify({
+      cases: [{
+        caseId: 'case-pass',
+        command: ['node', fixture, 'exit', '0'],
+        timeoutMs: 5000,
+        assertions: [{ assertionId: 'case-pass-exit', kind: 'exit-code', expected: 0 }],
+      }],
+    }))
+    const disabled = await verifyAcceptance(worktree, acceptancePath, {
+      experimentsRoot,
+      killGraceMs: 200,
+      sandbox: { enabled: false, denyReadRoots: [], extraWritableRoots: [], sandboxExec: '/usr/bin/sandbox-exec' },
+    })
+    expect(disabled.ok).toBe(true)
+    if (!disabled.ok) throw new Error('unreachable')
+    expect(disabled.report.cases[0]?.assertions[0]?.status).toBe('pass')
+  })
+
   it('honors a configured phaseTimeoutMs on a run that finishes well within it', async () => {
     const { experimentsRoot, worktree, acceptancePath } = await makeFixture()
     await writeFile(acceptancePath, JSON.stringify({

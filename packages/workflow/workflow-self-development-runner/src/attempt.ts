@@ -42,6 +42,7 @@ import type { LaunchRecord } from './launch-record.ts'
 import { HumanPresenceCapabilitySource } from './presence.ts'
 import type { PresenceConfirmation } from './presence.ts'
 import { SelfDevelopmentRunnerError } from './runtime.ts'
+import { DEFAULT_SANDBOX_CONFIG, assertSandboxAvailable, prepareSandboxProfile, sandboxEffectivelyEnabled } from './sandbox.ts'
 import type { AttemptBudget, RunnerConfig } from './types.ts'
 
 /** One supervised attempt a caller asks this process to run. */
@@ -188,10 +189,24 @@ export async function runSupervisedAttempt(
   req: SupervisedAttemptRequest,
 ): Promise<SupervisedAttemptOutcome> {
   const plan = preflight(deps.controller, req)
+  // Gate on the sandbox mechanism before any filesystem resolution or digest
+  // work: a probe failure refuses the launch here, before the core commits
+  // `attempt/started`, which the core's own `sideEffect` timing (it commits
+  // that event and only then invokes the side effect) would otherwise make
+  // impossible to undo — the executor's and acceptor's own gates run again
+  // regardless, but only as defense in depth once this attempt already runs.
+  const sandboxConfig = deps.config.sandbox ?? DEFAULT_SANDBOX_CONFIG
+  await assertSandboxAvailable(sandboxConfig)
   const worktreeReal = await resolveExperimentWorktree(deps.config.experimentsRoot, req.worktree)
   const dshHomeReal = req.dshHome === undefined
     ? deps.config.dshHome
     : await resolveAttemptDshHome(deps.config, req.dshHome, worktreeReal)
+  // Recorded on the evidence below, not used to run anything here: the
+  // executor and the acceptor each resolve and apply their own profile from
+  // the same config and roots at spawn time.
+  const sandboxRecord = sandboxEffectivelyEnabled(sandboxConfig)
+    ? { kind: 'seatbelt' as const, profileDigest: (await prepareSandboxProfile({ sandbox: sandboxConfig, worktreeReal, dshHomeReal })).profileDigest }
+    : { kind: 'disabled' as const }
   const cases = await loadAcceptance(req.acceptancePath, deps.config.experimentsRoot)
   checkAcceptanceCoversPlan(cases, plan.plan)
   const acceptanceDefinitionDigest = await acceptanceDefinitionDigestOf(req.acceptancePath)
@@ -236,6 +251,7 @@ export async function runSupervisedAttempt(
           operationId: req.operationId,
           capabilitySource: 'human-presence',
           launch: { sourceDigest: attempt.sourceDigest, artifactDigest: attempt.artifactDigest },
+          sandbox: sandboxRecord,
           tested: executed.tested,
           afterAcceptance: executed.afterAcceptance,
           contentStable: executed.contentStable,

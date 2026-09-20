@@ -54,6 +54,7 @@ const evidence: AttemptEvidence = {
   operationId: 'op-1',
   capabilitySource: 'human-presence',
   launch: { sourceDigest: DIGEST_SOURCE, artifactDigest: DIGEST_ARTIFACT },
+  sandbox: { kind: 'disabled' },
   tested: { sourceDigest: DIGEST_SOURCE, artifactDigest: DIGEST_ARTIFACT },
   afterAcceptance: undefined,
   contentStable: false,
@@ -153,6 +154,13 @@ describe('writeAttemptEvidence and readAttemptEvidence', () => {
     expect(read?.evidence.phases).not.toBe(evidence.phases)
   })
 
+  it('round-trips evidence recording an enabled seatbelt sandbox by its profile digest', async () => {
+    const base = await tempRoot()
+    const sandboxed = { ...evidence, sandbox: { kind: 'seatbelt' as const, profileDigest: 'b'.repeat(64) } }
+    await writeAttemptEvidence(base, sandboxed)
+    await expect(readAttemptEvidence(base, TASK, ATTEMPT)).resolves.toEqual({ evidence: sandboxed, outcome: undefined })
+  })
+
   it('writes the outcome beside the evidence and round-trips it', async () => {
     const base = await tempRoot()
     await writeAttemptEvidence(base, evidence)
@@ -196,6 +204,11 @@ describe('writeAttemptEvidence and readAttemptEvidence', () => {
     await expectEvidenceTamperInvalid((stored) => { stored.contentStable = 'yes' })
     await expectEvidenceTamperInvalid((stored) => { stored.launch = { ...evidence.launch, sourceDigest: 'abc' } })
     await expectEvidenceTamperInvalid((stored) => { stored.launch = 5 })
+    await expectEvidenceTamperInvalid((stored) => { delete stored.sandbox })
+    await expectEvidenceTamperInvalid((stored) => { stored.sandbox = null })
+    await expectEvidenceTamperInvalid((stored) => { stored.sandbox = { kind: 'unattended' } })
+    await expectEvidenceTamperInvalid((stored) => { stored.sandbox = { kind: 'seatbelt' } })
+    await expectEvidenceTamperInvalid((stored) => { stored.sandbox = { kind: 'seatbelt', profileDigest: 'not-hex' } })
     await expectEvidenceTamperInvalid((stored) => { stored.tested = { ...evidence.tested, artifactDigest: null } })
     await expectEvidenceTamperInvalid((stored) => { stored.afterAcceptance = { sourceDigest: 'x' } })
     await expectEvidenceTamperInvalid((stored) => { stored.executor = null })

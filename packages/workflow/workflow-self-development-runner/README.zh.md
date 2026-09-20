@@ -10,7 +10,7 @@ kind: "package-reference"
 <a id="summary"></a>
 ## 概述
 
-端到端运行一次有人监督的自开发尝试。该服务组合受信时钟、人工在场证据、操作绑定的启动记录、headless 执行器与独立验收器，把持久尝试证据与终局结果一起落盘，停止则经由任务控制器。每次启动都要求一条已记录的人工确认和有限预算。这是带明确记录限制的有人监督模式，不是无人值守运行：这里没有任何东西提供操作系统隔离，也不会升级已有安装。
+端到端运行一次有人监督的自开发尝试。该服务组合受信时钟、人工在场证据、操作绑定的启动记录、headless 执行器与独立验收器，把持久尝试证据与终局结果一起落盘，停止则经由任务控制器。每次启动都要求一条已记录的人工确认和有限预算。这是带明确记录限制的有人监督模式，不是无人值守运行：在 macOS 上，执行器与每个验收用例的进程默认由一层文件写入沙箱（[第一档](#sandbox-tier-1)）约束；这不是完整的操作系统隔离，本包也不会升级已有安装。
 
 ## 目录
 
@@ -21,6 +21,7 @@ kind: "package-reference"
 - [启动绑定与启动记录](#launch-binding-and-the-launch-record)
 - [每次尝试的数据目录](#per-attempt-data-directory)
 - [执行与验收](#execution-and-acceptance)
+- [沙箱（第一档）](#sandbox-tier-1)
 - [尝试证据](#attempt-evidence)
 - [尝试编排](#attempt-orchestration)
 - [错误码](#error-codes)
@@ -53,8 +54,9 @@ kind: "package-reference"
 | `experimentsRoot` | 所有实验 worktree 的父目录绝对路径。 |
 | `evidenceRoot` | 稳定侧证据目录的绝对路径；必须位于 `experimentsRoot` 之外。 |
 | `killGraceMs` | 升级为 `SIGKILL` 前的毫秒宽限，以及最终确认进程组退出的单独最长等待时间。 |
+| `sandbox` | 包裹执行器与每个验收用例的 macOS 文件级沙箱（[第一档](#sandbox-tier-1)）；可选，缺省该键时按"开启、无额外根"解析。 |
 
-每个字段都是必需的。相对路径、词法上位于 `experimentsRoot` 之内的 `evidenceRoot`，或者不是正有限整数的 `killGraceMs`，都会在构造时抛出带 `SELF_DEV_RUNNER_CONFIG_INVALID` 的 `SelfDevelopmentRunnerError`。这项配置检查不能建立文件系统隔离，也不能阻止以同一用户身份运行的其他进程访问目录。
+以上每个必需字段都必须给出。相对路径、词法上位于 `experimentsRoot` 之内的 `evidenceRoot`、不是正有限整数的 `killGraceMs`，或者配置的 `sandbox.sandboxExec`、`sandbox.denyReadRoots` 条目、`sandbox.extraWritableRoots` 条目不是绝对路径，都会在构造时抛出带 `SELF_DEV_RUNNER_CONFIG_INVALID` 的 `SelfDevelopmentRunnerError`。这项配置检查本身不能建立文件系统隔离，也不能阻止以同一用户身份运行的其他进程访问目录；在 macOS 上，为执行器与每个验收用例自身的写入做到这一点（在它自己的限度内）的是下文的沙箱。
 
 没有发布运行时不变式伴生包：本包不暴露自己的运行时观察流，它拥有的启动记录、尝试证据与核心结果之间的关系由聚焦行为测试覆盖，而证据目录与控制目录之间的漂移通过拒绝并转人工处理，而不是由进程内检查来调和。
 
@@ -103,23 +105,51 @@ await runner.runAttempt({
 })
 ```
 
-这种分离只是记账与 spawn 环境的管道，不是隔离。子进程仍以操作用户身份运行，同用户进程——包括被启动的 Agent——可以读写其他每个任务的数据目录、证据根目录与控制目录；保护它们需要外层沙箱或本包不提供的操作系统级访问控制。
+这种分离本身只是记账与 spawn 环境的管道，不是隔离。子进程仍以操作用户身份运行。在 macOS 上，默认的[第一档沙箱](#sandbox-tier-1)约束的是执行器与每个验收用例**自身**进程可以写到哪里——限定在本次尝试自己的根目录集合内，因此一旦被沙箱约束，该进程自己就不能再写其他任务的数据目录了——但**其他**同用户进程依然可以；未配置 `denyReadRoots` 的路径读取仍是开放的；`sandbox.enabled: false`（或非 macOS 主机）会连这层写入围栏也一并拿掉：保护证据根目录与控制目录不被任何同用户进程触碰，仍然需要 `denyReadRoots` 或本包本身不提供的操作系统级访问控制。
 
 <a id="execution-and-acceptance"></a>
 ## 执行与验收
 
-[执行器](src/executor.ts) 通过 headless profile 启动配置的 CLI，以实验目录为工作目录，并以该尝试的数据目录为 `DSH_HOME`。[验收器](src/acceptor.ts) 加载独立定义，检查命令结果与文件断言，并把同一数据目录交给它的用例进程。二者均使用 POSIX 进程组执行取消。上文的在场证据源记录的是一次确认；它不会检测人员是否持续在场，也不会强制执行所记录的回环端口允许清单。
+[执行器](src/executor.ts) 通过 headless profile 启动配置的 CLI，以实验目录为工作目录，并以该尝试的数据目录为 `DSH_HOME`。[验收器](src/acceptor.ts) 加载独立定义，检查命令结果与文件断言，并把同一数据目录交给它的用例进程。二者均使用 POSIX 进程组执行取消；在 macOS 上，二者默认都被包裹在下文的[第一档沙箱](#sandbox-tier-1)里。上文的在场证据源记录的是一次确认；它不会检测人员是否持续在场，也不会强制执行所记录的回环端口允许清单。
 
 验收定义必须位于实验根目录之外。这种放置方式可以减少误改，但不能保证同一用户的进程无法修改它。调用方必须独立保护控制文件与已批准输入。只有完整接入任务控制器，才能将这些辅助函数的结果与任务预算、冻结计划及人工试用关联起来。
 
 [`verify.ts`](src/verify.ts) 导出 `verifyAcceptance(worktree, acceptancePath, config)`——建立在同一个验收器之上的纯校验入口：它只调用 `loadAcceptance` 与 `runAcceptance`，不启动 headless 执行器、不写证据、不触碰任务控制核心，面向已经拿到一个 worktree、只想让验收定义对它判定通过与否的调用方——例如集成流程 fast-forward 之前的校验门。`config` 是本路径所需部署配置的一个窄切片——`experimentsRoot`、`killGraceMs`，以及可选的整体 `phaseTimeoutMs`——而不是完整的 runner `Config`；`acceptancePath` 仍必须解析到 `experimentsRoot` 之外，与 `loadAcceptance` 一贯的要求相同；冻结测试计划的覆盖度检查完全不会执行，因为这里根本没有计划在场。验收器跑完后返回 `{ ok: true, report }`，携带观察到的 `AcceptanceRun`——某个用例断言失败也仍是一次跑完的验收，是 `report` 里的结果，不是 `verifyAcceptance` 自身的失败；验收定义无法加载、或某个用例无法启动或收尾失败时返回 `{ ok: false, reason }`；它不会抛出异常。每个用例进程都把该 worktree 本身当作自己的 `DSH_HOME`，因为这个入口不会启动单独配置的 dsh agent。挂载后的服务把同一条路径暴露为方法 `ctx.selfDevelopmentRunner.verifyAcceptance(worktree, acceptancePath, { phaseTimeoutMs? })`，`experimentsRoot` 与 `killGraceMs` 由它自己校验过的配置填入，供通过 `ctx.get` 而不是导入本包来拿到 runner 的调用方使用——chat 包的合并门禁就是其中之一。
 
-执行器遇到标准输出溢出就停止，不会把截断结果当作成功。验收输出溢出会使所有断言失败。二者都会读完直接子进程的管道，杀掉其进程组内剩余成员，并等待进程组消失后才返回。最终清理按我们自己 spawn 的组长判定组归属——组长 pid、辅助函数自己对组长退出的观察、以及 spawn 后立即用 `ps -o lstart=` 读到的启动时间：当组长已不再能被确认为我们的进程而组信号得到 `EPERM` 时，运行结果记录 `pgidReused` 而不是让运行失败。退出仍无法确认就拒绝本次运行，包括仍可观察到未回收进程、或按指纹组长仍属于我们的情形。验收路径和产物祖先目录通过文件系统检查；产物符号链接只记录链接文本，不读取目标内容。这些检查不能阻止同用户的并发写入者在两次观察之间替换文件。
+执行器遇到标准输出溢出就停止，不会把截断结果当作成功。验收输出溢出会使所有断言失败。二者都会读完直接子进程的管道，杀掉其进程组内剩余成员，并等待进程组消失后才返回。最终清理按我们自己 spawn 的组长判定组归属——组长 pid、辅助函数自己对组长退出的观察、以及 spawn 后立即用 `ps -o lstart=` 读到的启动时间：当组长已不再能被确认为我们的进程而组信号得到 `EPERM` 时，运行结果记录 `pgidReused` 而不是让运行失败。退出仍无法确认就拒绝本次运行，包括仍可观察到未回收进程、或按指纹组长仍属于我们的情形。下文的 `sandbox-exec` 会原地 `execve()` 被包裹的程序，spawn 得到的 pid 不受包裹影响，因此无论该次 spawn 是否被沙箱约束，这份指纹都依然有效。验收路径和产物祖先目录通过文件系统检查；产物符号链接只记录链接文本，不读取目标内容。这些检查不能阻止同用户的并发写入者在两次观察之间替换文件。
+
+<a id="sandbox-tier-1"></a>
+## 沙箱（第一档）
+
+在 macOS 上，执行器的 headless CLI 子进程与每个验收用例的进程默认都在 `sandbox-exec -p <profile>`（Seatbelt）下启动。[`sandbox.ts`](src/sandbox.ts) 为每次 spawn 构建一份小而完整、自包含的 SBPL profile；它不依赖 `@deepseek-ai/dsh-sandbox-local`，因此宿主自己的沙箱 provider 策略对象绝不会泄露进这条路径。
+
+**规则。** 每份 profile 依次是 `(version 1)`、默认允许、全局 `file-write*` 拒绝、`/dev/null` 重新允许写入、每个可写根重新允许写入，最后是每个禁读根各一条 `file-read*` 拒绝。禁读规则刻意写在最后：Seatbelt 按 profile 中**最后一条**匹配的规则判定一次操作，因此追加在开头默认允许之后的禁读规则会覆盖它，只对该根之下的读取生效，而不影响它上面那些只管写入的规则。
+
+**可写根**，每次被约束的 spawn 都会获得：实验 worktree、本次尝试的数据目录（`request.dshHome ?? config.dshHome`）、本机携带的每种临时目录写法（`/private/tmp`、`/tmp`、`os.tmpdir()`，以及设置了的话的 `$TMPDIR`），以及部署配置的 `extraWritableRoots`。`dshBin` 所在的稳定 runtime worktree 不会被加进这份清单——它保持可读（默认允许覆盖读取）但不可写。每个根在进入 profile 文本之前都先经过文件系统解析（`realpath`，对尚不存在的尾部逐段上溯），因此一个带符号链接的写法（`/tmp` 在解析到 `/private/tmp` 之前，或者某次部署的 `~/.dsh` 在解析到它实际指向的地方之前）是按它的真实目标判定的，而不是按配置时的拼写。
+
+**禁读根**：部署配置的 `denyReadRoots`——默认为空。想让被沙箱约束的进程**读不到**自己稳定 runtime home、控制目录或证据根目录的部署，必须显式把它们列进去；示例见 [`self-development.overlay.yml`](../../bundle/web-app/overlays/self-development.overlay.yml) 中的 overlay 片段。
+
+**默认值**（`RunnerConfig.sandbox`；每个字段都可选，缺省的键经由 Cordis schema 解析成下表的值）：
+
+| 字段 | 默认值 | 含义 |
+|---|---|---|
+| `enabled` | `true` | 在 macOS 上默认开启沙箱。 |
+| `denyReadRoots` | `[]` | 除写入围栏外不额外拒绝任何读取。 |
+| `extraWritableRoots` | `[]` | 除 worktree、数据目录与临时目录外没有额外可写根。 |
+| `sandboxExec` | `/usr/bin/sandbox-exec` | 探针与每次包裹调用的系统二进制。 |
+
+**探针与拒绝启动。** 在一次尝试的 `startAttempt` 副作用运行之前——以及作为纵深防御，在执行器或验收器的每次 spawn 处再次——[`probeSandbox`](src/sandbox.ts) 会通过配置的 `sandboxExec`，把能给出的最宽松 profile（`(version 1)(allow default)`）应用到 `/usr/bin/true` 上。在 darwin 且沙箱开启时，探针退出码非 0、spawn 失败、或 `sandboxExec` 不存在，都会在尝试开始前将其拒绝，错误码 `SELF_DEV_RUNNER_SANDBOX_UNAVAILABLE`——发生在核心提交 `attempt/started` 之前，也发生在写入启动记录之前。不在 darwin 上、或 `sandbox.enabled: false` 时，探针根本不会跑，也不会因此拒绝任何东西：本包在那些场合本就没有沙箱这一档，"没有 macOS 机制"是那个平台的正常状态，不是环境坏掉了。
+
+**`sandbox.enabled: false`** 是部署方的显式选择——为这个部署运行的每次尝试都完全不要文件级隔离：执行器与每个验收用例照本包拥有沙箱这一档之前的样子 spawn，下文[已知限制](#known-limitations-and-deferred-work)里关于同用户可达性的条目届时描述的是**整次尝试**，而不只是沙箱自己留下的那部分口子。
+
+**证据。** 每次尝试的证据（见下文）记录 `sandbox: { kind: 'disabled' }`，或者 `sandbox: { kind: 'seatbelt', profileDigest }`——是解析后 profile 文本的 sha-256 摘要，不是文本本身，因此证据不会把部署的真实绝对路径布局（worktree、数据 home、每个禁读根）带出它写入时所在的稳定侧主机。
+
+**不能宣称**，在下文[已知限制](#known-limitations-and-deferred-work)已经写明的之外：这是一层文件写入围栏，不是完整隔离。被沙箱约束的进程仍保留网络——被启动的实验 Agent 仍必须能连到它配置的模型提供方，profile 从不限制网络访问——也仍保留对其他进程的可见性，以及对文件系统里除已配置 `denyReadRoots` 之外的读取面的可见性。`sandbox-exec` 本身也是 Apple 已经标记为弃用好几个大版本的机制；本包用它是因为它在每个当前受支持的 macOS 版本上仍然随系统提供、仍然生效，不是因为它是受支持的长期 API。如果未来某个版本把它拿掉，本包除了 `sandbox.enabled: false`（完全不隔离）之外没有别的退路。
 
 <a id="attempt-evidence"></a>
 ## 尝试证据
 
-[`evidence.ts`](src/evidence.ts) 把一次尝试的持久记录发布到 `<evidenceRoot>/tasks/<taskId>/attempts/<attemptId>.json`，并把终局决定作为 `<attemptId>.outcome.json` 写在其旁边。证据记录启动摘要、开发阶段结束后取的摘要 A、验收后取的摘要 B（验收未运行时为 `undefined`）、两者是否相等、观察到的执行器与验收事实、阶段运行以及结构化结果。结果文件记录终局决定——`passed`、`failed`、`cancelled`、`late` 或 `unknown`——已提交的 revision，以及结构化失败。
+[`evidence.ts`](src/evidence.ts) 把一次尝试的持久记录发布到 `<evidenceRoot>/tasks/<taskId>/attempts/<attemptId>.json`，并把终局决定作为 `<attemptId>.outcome.json` 写在其旁边。证据记录启动摘要、执行器与验收器当时跑在哪种沙箱状态下（见[沙箱（第一档）](#sandbox-tier-1)）、开发阶段结束后取的摘要 A、验收后取的摘要 B（验收未运行时为 `undefined`）、两者是否相等、观察到的执行器与验收事实、阶段运行以及结构化结果。结果文件记录终局决定——`passed`、`failed`、`cancelled`、`late` 或 `unknown`——已提交的 revision，以及结构化失败。
 
 没有结果文件的证据只算诊断记录：它绝不声称核心日志已通过。写入经由 [`durable-json.ts`](src/durable-json.ts)：独占临时文件、fsync、原子重命名加目录同步，因此中断的写入绝不会留下可读的半发布文件。重写相同字节返回 `unchanged`；目标路径已持有不同字节时抛出 `SELF_DEV_RUNNER_EVIDENCE_CONFLICT`。
 
@@ -149,6 +179,7 @@ await runner.runAttempt({
 | `SELF_DEV_RUNNER_BUDGET_INVALID` | 批准的预算缺失、畸形、不约束任何东西，或总量已经花完。 |
 | `SELF_DEV_RUNNER_LAUNCH_MISMATCH` | 已存在的启动记录与本次重试启动的内容或路径不一致。 |
 | `SELF_DEV_RUNNER_ATTEMPT_ACTIVE` | 对 runner 内已有进行中尝试的任务再次调用 `runAttempt`，在触碰核心之前抛出。 |
+| `SELF_DEV_RUNNER_SANDBOX_UNAVAILABLE` | 在 darwin 上开启了沙箱，而[第一档](#sandbox-tier-1)探针未报告该机制可用；在核心提交 `attempt/started` 之前抛出。 |
 
 <a id="further-exploration"></a>
 ## 进一步探索
@@ -172,10 +203,13 @@ await runner.runAttempt({
 
 - **墙钟敏感性** —— `HostClock.monotonicMs` 派生自 `Date.now()`，墙钟调整可能使时长测量失效。JavaScript 定时器不是能够应对进程故障或主机休眠的独立监督者。
 - **没有自动尝试循环** —— 服务不会重复失败的尝试，也不提供无人值守执行或升级路径。重试是由调用方发起、携带自己幂等键的操作；启动记录要么重放它，要么把它拒绝给人工。
-- **同用户执行** —— 选择工作目录和限制环境变量不是沙箱。子进程仍拥有操作系统用户的权限；所提供的实验 home 可能含有凭据。验收命令也没有外层沙箱。每次尝试的数据目录只改变子进程 `DSH_HOME` 的指向，不改变它能到达的范围：同用户进程仍可读写其他每个任务的数据目录。
+- **同用户执行** —— 选择工作目录和限制环境变量本身不是沙箱。子进程仍拥有操作系统用户的权限；所提供的实验 home 可能含有凭据。在 macOS 上，默认的[第一档沙箱](#sandbox-tier-1)约束的是执行器与每个验收用例**自身**对本次尝试根目录集合之外的写入——但也仅限于该进程自己的写入：未配置 `denyReadRoots` 的路径读取仍是开放的，**其他**同用户进程仍可读写其他每个任务的数据目录，`sandbox.enabled: false`（或非 macOS 主机）会连这层写入围栏也一并拿掉。每次尝试的数据目录改变的是子进程 `DSH_HOME` 的指向；它本身并不改变子进程能到达的范围——真正做到这点的是上文的沙箱，且仅在它自己的限度内。
+- **沙箱是写入围栏，不是完整隔离** —— 第一档 macOS 沙箱（`sandbox.enabled`，默认 `true`）拒绝写入其授权根目录之外的任何位置，并在配置了的情况下拒绝读取 `denyReadRoots` 之下的内容；它不隔离网络、进程可见性、IPC，也不隔离已配置禁读根之外的任何文件系统读取。被沙箱约束的进程仍能看到并向其他进程发信号，仍能读取文件系统的绝大部分内容。
+- **沙箱放行出站网络** —— 本包构建的 profile 从不限制网络访问：被启动的实验 Agent 仍必须能连到它配置的模型提供方，所以沙箱不隔离、也不可能隔离出站网络。
+- **`sandbox-exec` 是 Apple 已弃用的机制** —— Seatbelt 的命令行前端已经带着 Apple 的弃用警告跨越了好几个 macOS 大版本；本包用它，是因为它在每个当前受支持的版本上仍然随系统提供、仍然生效，而不是因为它是受支持的长期 API。如果未来某个 macOS 版本把它拿掉，本包除了 `sandbox.enabled: false`（完全不隔离）之外没有别的退路——见[沙箱（第一档）](#sandbox-tier-1)。
 - **进程组身份与逃逸** —— 离开进程组的后代（例如调用 `setsid`）可以逃过进程组取消。数字进程组 ID 在退出后也可能被复用；发信号并未固定操作系统拥有的进程身份。最终清理因此按我们自己 spawn 的组长判定归属——组长 pid、辅助函数自己对组长退出的观察、以及 spawn 后立即用 `ps -o lstart=` 读到的启动时间：组长已不再能被确认为我们的进程而组信号得到 `EPERM` 时，运行结果记录 `pgidReused` 而不是失败；组长按指纹仍是我们的进程、或进程组在等待后仍可见时，仍然拒绝本次运行。某些宿主上被复用的 pid 仍可能读到一致的启动时间；被复用的同用户进程组也可能收到本应发给我们组的信号。执行辅助函数在启动进程前拒绝 Windows；它们没有实现 Windows 进程监督机制。
 - **时钟源仅限 macOS** —— `readBootTimeSysctl` 依赖 `sysctl kern.boottime`，Linux 与 Windows 上不存在；没有后备时钟。
-- **监督不是隔离** —— 工作目录选择、环境变量白名单、workspace-write 和路径检查不是外层操作系统沙箱。同一用户的子进程可能访问正式 home、实验凭据、控制目录与其他进程。人工确认不会自动生成配额、隔离或真实在场检测。Node 墙钟差与 JavaScript 定时器不能替代独立监督者的时钟、休眠计账和崩溃清理。当前阶段只能提供明确记录限制的有人监督测试，不得据此放行无人值守。
+- **监督不是完整隔离** —— 工作目录选择、环境变量白名单、workspace-write 和路径检查本身是记账，不是外层操作系统沙箱；本包里真正算沙箱的只有上文的[第一档沙箱](#sandbox-tier-1)，而且只管文件写入、只在 macOS 上、只在它授权与禁读的根目录范围内。在沙箱没有约束到某条具体路径、或沙箱被关闭的地方，同一用户的子进程仍可能访问正式 home、实验凭据、控制目录与其他进程。人工确认不会自动生成配额、隔离或真实在场检测。Node 墙钟差与 JavaScript 定时器不能替代独立监督者的时钟、休眠计账和崩溃清理。当前阶段只能提供明确记录限制的有人监督测试，不得据此放行无人值守。
 - **预算期限结束的是观察，不是逃逸的进程** —— 阶段期限与取消经由 POSIX 进程组生效，而进程组无法约束用 `setsid` 逃逸的后代；限制触发时会拆除组内成员并记录超时，但停不掉已离开进程组的进程。
 - **检查与使用之间的符号链接竞态** —— worktree 包含关系、验收放置与产物路径检查在执行时解析路径；同用户的并发写入者可以在检查与使用之间把某个路径组件替换成符号链接，这些检查不能消除这一竞态。
 - **证据目录与控制目录同属操作用户** —— 证据根目录与任务控制目录都是与尝试同用户的普通目录；本包没有任何东西阻止同用户进程（包括实验本身）改写证据、启动记录或结果文件。

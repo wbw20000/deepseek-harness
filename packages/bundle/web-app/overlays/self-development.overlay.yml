@@ -17,7 +17,14 @@
         maxRecordsPerSegment: 100
         checkpointInterval: 10
 
-    # Supervised runner: executes attempts. Every field is required.
+    # Supervised runner: executes attempts. Every field is required except
+    # `sandbox` (an absent key defaults to enabled, no extra roots, the
+    # system sandbox-exec); it is shown explicitly here so a deployment
+    # copying this overlay sees the shape to fill in. `denyReadRoots` below
+    # names the paths this seam's own experiment Agent must not be able to
+    # *read* once sandboxed: the stable runtime home, this seam's control
+    # directory, and the evidence root — see the runner package's README,
+    # "Sandbox (Tier 1)", for the full rule and what it cannot claim.
     - id: workflow-self-development-runner
       name: '@deepseek-ai/dsh-workflow-self-development-runner'
       config:
@@ -27,6 +34,12 @@
         experimentsRoot: /absolute/path/to/self-development/experiments
         evidenceRoot: /absolute/path/to/self-development/evidence
         killGraceMs: 5000
+        sandbox:
+          enabled: true
+          denyReadRoots:
+            - /absolute/path/to/stable-home
+            - /absolute/path/to/self-development/control
+            - /absolute/path/to/self-development/evidence
 
     # Notification consumer: folds committed events into the unified
     # notification event and keeps the recent buffer `recentEvents` reads.

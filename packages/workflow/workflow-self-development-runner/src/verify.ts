@@ -12,7 +12,7 @@
 
 import { loadAcceptance, runAcceptance } from './acceptor.ts'
 import type { AcceptanceRun } from './acceptor.ts'
-import type { RunnerConfig } from './types.ts'
+import type { RunnerConfig, SandboxConfig } from './types.ts'
 
 /**
  * Placeholder absolute path for a `RunnerConfig` field `verifyAcceptance`
@@ -34,6 +34,13 @@ export interface VerifyAcceptanceConfig {
   readonly killGraceMs: number
   /** Optional wall-clock deadline for the whole run; absent runs with no bound beyond each case's own `timeoutMs`. */
   readonly phaseTimeoutMs?: number
+  /**
+   * The deployment's sandbox configuration, applied to every case process
+   * exactly as a supervised attempt applies it (writable roots: the
+   * worktree, the temp roots; unreadable: `denyReadRoots`). Absent means the
+   * package default — sandboxing on, no deny-read roots.
+   */
+  readonly sandbox?: SandboxConfig
 }
 
 /** Outcome of {@link verifyAcceptance}. */
@@ -76,6 +83,7 @@ export async function verifyAcceptance(
       experimentsRoot: config.experimentsRoot,
       evidenceRoot: UNUSED_RUNNER_CONFIG_PATH,
       killGraceMs: config.killGraceMs,
+      ...(config.sandbox === undefined ? {} : { sandbox: config.sandbox }),
     }
     const signal = config.phaseTimeoutMs === undefined ? new AbortController().signal : AbortSignal.timeout(config.phaseTimeoutMs)
     const report = await runAcceptance(runnerConfig, { worktree, cases, signal })
