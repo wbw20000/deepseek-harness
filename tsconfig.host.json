@@ -373,6 +373,7 @@
     { "path": "./packages/experimental/agent-team-web-profile" },
     { "path": "./packages/workflow/workflow" },
     { "path": "./packages/workflow/workflow-self-development" },
+    { "path": "./packages/workflow/workflow-self-development-chat" },
     { "path": "./packages/workflow/workflow-self-development-events" },
     { "path": "./packages/workflow/workflow-self-development-runner" },
     { "path": "./packages/workflow/workflow-self-development-remote" },
