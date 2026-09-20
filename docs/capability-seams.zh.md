@@ -175,6 +175,10 @@ flowchart LR
   svc_selfDevelopmentEvents["ctx.selfDevelopmentEvents<br/>Self-development notification events"]
   pkg_workflow_self_development_workspaces["workflow-self-development-workspaces"]
   svc_selfDevelopmentWorkspaces["ctx.selfDevelopmentWorkspaces<br/>Self-development workspaces"]
+  pkg_workflow_self_development_trial["workflow-self-development-trial"]
+  svc_selfDevelopmentTrial["ctx.selfDevelopmentTrial<br/>Self-development trial instances"]
+  pkg_workflow_self_development_chat["workflow-self-development-chat"]
+  svc_selfDevelopmentChat["ctx.selfDevelopmentChat<br/>Self-development chat tools"]
   pkg_ssh["ssh"]
   svc_ssh["ctx.ssh<br/>POSIX SSH connection owner"]
   pkg_fs_ssh["fs-ssh"]
@@ -402,9 +406,11 @@ flowchart LR
   pkg_workflow --> svc_workflowEngine
   pkg_workflow_ptc --> svc_workflowEngine
   pkg_workflow_self_development --> svc_selfDevelopmentTasks
+  pkg_workflow_self_development_chat --> svc_selfDevelopmentChat
   pkg_workflow_self_development_events --> svc_selfDevelopmentEvents
   pkg_workflow_self_development_remote --> svc_selfDevelopmentRemote
   pkg_workflow_self_development_runner --> svc_selfDevelopmentRunner
+  pkg_workflow_self_development_trial --> svc_selfDevelopmentTrial
   pkg_workflow_self_development_workspaces --> svc_selfDevelopmentWorkspaces
   pkg_workspace --> svc_workspaceRegistry
   pkg_workspace_changes --> svc_workspaceChanges
@@ -468,9 +474,11 @@ flowchart LR
   svc_sandboxPolicy --> pkg_bash_sandbox
   svc_sandboxPolicy --> pkg_fs_sandbox
   svc_sandboxPolicy --> pkg_terminal_bash
+  svc_selfDevelopmentChat --> pkg_workflow_self_development_remote
   svc_selfDevelopmentEvents --> pkg_workflow_self_development
   svc_selfDevelopmentRemote --> pkg_workflow_self_development
   svc_selfDevelopmentRemote --> pkg_workflow_self_development_runner
+  svc_selfDevelopmentTrial --> pkg_workflow_self_development_remote
   svc_sessionPersistence --> pkg_agent_loop
   svc_sessionPersistence --> pkg_hooks_claude_code
   svc_sessionPersistence --> pkg_hooks_codex
@@ -618,6 +626,8 @@ flowchart LR
 | `ctx.selfDevelopmentRemote` | `core` | [`workflow-self-development-remote`](../packages/workflow/workflow-self-development-remote) | - | [`workflow-self-development`](../packages/workflow/workflow-self-development), [`workflow-self-development-runner`](../packages/workflow/workflow-self-development-runner) | - | 可选启用的稳定侧 Remote 门面，面向任务控制服务与有人监督 runner，供 M4 UI 与手机白名单使用；未开启前一律拒绝，不注册工具、提示或事件，也不提供升级批准。 |
 | `ctx.selfDevelopmentEvents` | `core` | [`workflow-self-development-events`](../packages/workflow/workflow-self-development-events) | - | [`workflow-self-development`](../packages/workflow/workflow-self-development) | - | 可选启用的事件投影：把已提交的任务事件折叠为统一的事件级标题通知事件，提供有界内存 recent 缓冲、进程内订阅者与可选的 macOS 本地通知命令；不注册工具、提示或持久存储。 |
 | `ctx.selfDevelopmentWorkspaces` | `core` | [`workflow-self-development-workspaces`](../packages/workflow/workflow-self-development-workspaces) | - | - | - | 可选启用的逐任务工作区分配：在持久登记文件下为每个任务分配一个 git worktree、分支与复制的数据目录，并把完成的任务分支串行集成回项目基线；目录分离，不是沙箱。 |
+| `ctx.selfDevelopmentTrial` | `core` | [`workflow-self-development-trial`](../packages/workflow/workflow-self-development-trial) | - | [`workflow-self-development-remote`](../packages/workflow/workflow-self-development-remote) | - | 可选启用的宿主专属服务：为已通过的任务构建其 DSH worktree，并配上实验数据目录，将其作为回环试验版实例对外提供；不注册工具、提示或事件，只终止自己 spawn 的进程组，且不提供隔离。 |
+| `ctx.selfDevelopmentChat` | `core` | [`workflow-self-development-chat`](../packages/workflow/workflow-self-development-chat) | - | [`workflow-self-development-remote`](../packages/workflow/workflow-self-development-remote) | - | 可选启用的服务，注册三个 Agent 工具，让聊天可以发起、查看并终止一次自开发战役；每次提案都先经过用户审批 seam，只有用户批准一次后才会运行任何内容。 |
 | `ctx.ssh` | `core` | [`ssh`](../packages/ssh/ssh) | - | [`fs-ssh`](../packages/ssh/fs-ssh), [`subprocess-ssh`](../packages/ssh/subprocess-ssh), [`sandbox-ssh`](../packages/ssh/sandbox-ssh) | - | 负责一条经过认证的 OpenSSH 连接、已安装辅助程序身份、独立程序流，以及配套远端提供方的断连清理。 |
 | `ctx.subprocess` | `seam` | [`subprocess`](../packages/subprocess/subprocess) | [`subprocess-local`](../packages/subprocess/subprocess-local), [`subprocess-ssh`](../packages/ssh/subprocess-ssh) | [`bash-local`](../packages/shell/bash-local), [`bash-sandbox`](../packages/shell/bash-sandbox), [`terminal-bash`](../packages/terminal/terminal-bash), [`lsp-stdio`](../packages/lsp/lsp-stdio), [`subagent-acp`](../packages/subagent/subagent-acp), [`subagent-codex`](../packages/subagent/subagent-codex), [`subagent-claude-code`](../packages/subagent/subagent-claude-code) | - | Bash 执行器、PTY shell 后端、LSP Host，以及进程外 ACP、Codex 和 Claude Code subagent 后端都通过 ctx.subprocess 执行 spawn；该服务负责进程坐标、进程树／会话生命周期、stdio 处置、终端机制和 kill 升级。 |
 | `ctx.shell` | `seam` | [`shell`](../packages/shell/shell) | [`bash-local`](../packages/shell/bash-local), [`bash-sandbox`](../packages/shell/bash-sandbox), [`pwsh-local`](../packages/shell/pwsh-local) | [`tool-bash`](../packages/shell/tool-bash), [`tool-pwsh`](../packages/shell/tool-pwsh), [`hooks-claude-code`](../packages/hooks/hooks-claude-code), [`hooks-codex`](../packages/hooks/hooks-codex) | - | 面向模型的 shell 工具和钩子桥接消费此 seam；沙箱、远程或 PowerShell 执行器可以替换 bash-local，而无需改动这些消费方。 |

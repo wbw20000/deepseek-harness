@@ -579,6 +579,22 @@ const SERVICE_ROLES: ServiceRole[] = [
     note: 'Opt-in per-task workspace allocation: one git worktree, branch, and copied data home per task under a durable registry, and serialized fast-forward integration back to the project baseline; directory separation, not a sandbox.',
   },
   {
+    key: 'selfDevelopmentTrial',
+    pkg: 'workflow-self-development-trial',
+    title: 'Self-development trial instances',
+    mode: 'core',
+    consumers: ['workflow-self-development-remote'],
+    note: 'Opt-in host-only service that builds a passing task\'s DSH worktree and serves it as a loopback trial instance with its experiment home; it registers no tool, prompt, or event, terminates only the process groups it spawned, and provides no isolation.',
+  },
+  {
+    key: 'selfDevelopmentChat',
+    pkg: 'workflow-self-development-chat',
+    title: 'Self-development chat tools',
+    mode: 'core',
+    consumers: ['workflow-self-development-remote'],
+    note: 'Opt-in service that registers three Agent tools so a chat can propose, watch, and stop a self-development campaign; every proposal passes the user-approval seam first and nothing runs unless the user allows it once.',
+  },
+  {
     key: 'ssh',
     pkg: 'ssh',
     title: 'POSIX SSH connection owner',

@@ -568,7 +568,7 @@ Host-only trial-instance service. Ordinary chat messages never reach its methods
  *   because instances are never resurrected from sidecars.
  * @throws SelfDevelopmentTrialError with `self-development/host-only-field` from a non-host caller.
  */
-@Remote('trials') async trials(): Promise<readonly TrialSummary[]>
+@Remote('trials') // async is load-bearing here, not stylistic: it is what turns // assertCallerIsHost's synchronous throw into a rejected promise instead // of a same-tick exception at the call site, matching openTrial's and // closeTrial's rejection behavior for a non-host caller. // oxlint-disable-next-line typescript/require-await async trials(): Promise<readonly TrialSummary[]>
 ```
 
 Source: [`packages/workflow/workflow-self-development-trial/src/index.ts`](../../packages/workflow/workflow-self-development-trial/src/index.ts)

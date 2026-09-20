@@ -3843,6 +3843,53 @@ export interface Config {
 
 Source: [`packages/workflow/workflow-self-development/src/index.ts:80`](../packages/workflow/workflow-self-development/src/index.ts)
 
+<a id="deepseek-aidsh-workflow-self-development-chat"></a>
+
+## `@deepseek-ai/dsh-workflow-self-development-chat`
+
+Requires: `tools` · `selfDevelopmentRemote` · `approval`
+
+```ts config-catalog
+/** cordis.yml configuration of the service. */
+export interface SelfDevelopmentChatConfig {
+  /** Absolute path of the repository whose stable branch the tasks fork from. */
+  readonly stableRepo: string
+  /** Absolute control directory; acceptance definitions are written under `<controlDirectory>/acceptance/`. */
+  readonly controlDirectory: string
+  /** Absolute experiments root used to resolve workspaces when the workspaces service is not mounted. */
+  readonly experimentsRoot: string
+  /** Actor recorded as creator, plan confirmer, budget approver, and campaign acceptor. */
+  readonly actor: string
+  /** Language of the approval-card copy; defaults to `zh`. */
+  readonly cardLocale?: 'zh' | 'en' | undefined
+  /** Budget used when the tool call omits one; defaults to the `unlimited` preset. */
+  readonly defaultBudget?: ProposeBudget | undefined
+  /** Unattended default; defaults to `true`. */
+  readonly defaultUnattended?: boolean | undefined
+}
+
+/** Budget terms the proposing agent selects; "unlimited" is the 24-hour time preset. */
+export type ProposeBudget =
+  | {
+    /** No round limit; the campaign runs until the frozen 24-hour time cap (`MAX_BUDGET_HOURS`). */
+    readonly preset: 'unlimited'
+  }
+  | {
+    /** Selects the rounds-only budget form. */
+    readonly mode: 'rounds'
+    /** Maximum campaign rounds; must be a positive integer. */
+    readonly maxRounds: number
+  }
+  | {
+    /** Selects the time-only budget form. */
+    readonly mode: 'time'
+    /** Time budget in hours; must be positive and at most `MAX_BUDGET_HOURS` (24). */
+    readonly hours: number
+  }
+```
+
+Source: [`packages/workflow/workflow-self-development-chat/src/config.ts:24`](../packages/workflow/workflow-self-development-chat/src/config.ts)
+
 <a id="deepseek-aidsh-workflow-self-development-events"></a>
 
 ## `@deepseek-ai/dsh-workflow-self-development-events`
@@ -3930,6 +3977,36 @@ export interface RunnerConfig {
 ```
 
 Source: [`packages/workflow/workflow-self-development-runner/src/types.ts:8`](../packages/workflow/workflow-self-development-runner/src/types.ts)
+
+<a id="deepseek-aidsh-workflow-self-development-trial"></a>
+
+## `@deepseek-ai/dsh-workflow-self-development-trial`
+
+Requires: `selfDevelopmentRemote`
+
+```ts config-catalog
+/** Deployment configuration of the trial-instance manager. */
+export interface TrialConfig {
+  /** Node binary used to spawn the worktree's `apps/cli/lib/bin.js web` process; absolute path. */
+  readonly nodeBinary: string
+  /**
+   * The facade's control directory. The manager writes only its own
+   * `trials/<taskId>.json` sidecars and `trials/<taskId>.log` files under it;
+   * it never touches the `tasks/` or `launch-profiles/` subtrees.
+   */
+  readonly controlDirectory: string
+  /** Inclusive `[from, to]` loopback port range trial instances are allocated from. */
+  readonly portRange: readonly [number, number]
+  /** Maximum wall time of one worktree build before the open fails. */
+  readonly buildTimeoutMs: number
+  /** Maximum wait for the `dsh web: http://…` readiness line after spawn. */
+  readonly readyTimeoutMs: number
+  /** Whether a `campaign-passed` event automatically opens the task's trial instance. */
+  readonly autoOpen: boolean
+}
+```
+
+Source: [`packages/workflow/workflow-self-development-trial/src/types.ts:7`](../packages/workflow/workflow-self-development-trial/src/types.ts)
 
 <a id="deepseek-aidsh-workflow-self-development-workspaces"></a>
 

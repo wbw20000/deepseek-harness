@@ -1902,6 +1902,33 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'selfDevelopmentTrial',
+    summary: 'Host-only trial-instance service.',
+    description: 'Host-only trial-instance service. Ordinary chat messages never reach its methods: each is a `@Remote` method invoked explicitly through the Typert gateway, and a non-host caller is refused.',
+    methods: [
+      {
+        signature: '@Remote(\'openTrial\') async openTrial(taskId: string): Promise<OpenTrialResult>',
+        description: 'Open (or reuse) one task\'s trial instance. The worktree and data home come from the task\'s stored launch profile through the facade\'s `getTask`; a profile without `dataHome` falls back to the runner\'s configured `dshHome`. A worktree whose root `package.json` is not the DSH root returns a reason instead of an instance.',
+        parameters: [{ name: 'taskId', description: 'task identity.' }],
+        returns: 'the ready instance\'s URL, port, and pid, or `url: undefined` with the reason when the worktree is not a DSH repository.',
+        throws: ['SelfDevelopmentTrialError with `self-development/host-only-field` from a non-host caller, `self-development/config-invalid` when the task id is malformed or the task has no launch profile, `self-development/task-unknown` when the facade does not know the task, `self-development/trial-unavailable` when neither the profile nor the runner supplies a data home, `self-development/trial-build-failed` when the worktree build fails or times out, `self-development/trial-port-exhausted` when no port in the range is free, or `self-development/trial-start-failed` when the web process never becomes ready.', 'whatever the facade rejects with, verbatim: the facade owns its own error codes.'],
+      },
+      {
+        signature: '@Remote(\'closeTrial\') async closeTrial(taskId: string): Promise<void>',
+        description: 'Close one task\'s trial instance: SIGTERM to the registered process group, a five-second grace, then SIGKILL, and a bounded wait for the group leader this service spawned to exit. The registration and the sidecar are removed. Closing a task without a live instance still removes a stale sidecar.',
+        parameters: [{ name: 'taskId', description: 'task identity.' }],
+        throws: ['SelfDevelopmentTrialError with `self-development/host-only-field` from a non-host caller, `self-development/config-invalid` when the task id is malformed, or `self-development/trial-stop-failed` when the group cannot be signalled or its exit is not confirmed within the teardown deadlines.'],
+      },
+      {
+        signature: '@Remote(\'trials\') // async is load-bearing here, not stylistic: it is what turns // assertCallerIsHost\'s synchronous throw into a rejected promise instead // of a same-tick exception at the call site, matching openTrial\'s and // closeTrial\'s rejection behavior for a non-host caller. // oxlint-disable-next-line typescript/require-await async trials(): Promise<readonly TrialSummary[]>',
+        description: 'List the live trial instances this process owns.',
+        parameters: [],
+        returns: 'one row per live instance, sorted by task id; a process restart starts from `[]` because instances are never resurrected from sidecars.',
+        throws: ['SelfDevelopmentTrialError with `self-development/host-only-field` from a non-host caller.'],
+      },
+    ],
+  },
+  {
     key: 'selfDevelopmentWorkspaces',
     summary: 'Cordis service composing workspace allocation, release, and serialized integration.',
     description: 'Cordis service composing workspace allocation, release, and serialized integration.',
@@ -4583,24 +4610,8 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type CampaignEndedStatus = \'exhausted\' | \'stopped\' | \'failed\';',
   },
   {
-    name: 'CampaignOptions',
-    declaration: 'export interface CampaignOptions {\n    readonly unattended: boolean;\n    readonly acceptedBy: string;\n    readonly maxConcurrentCampaigns?: number | undefined;\n}',
-  },
-  {
     name: 'CampaignPassedPayload',
     declaration: 'export interface CampaignPassedPayload {\n    readonly taskId: string;\n    readonly revision: number;\n}',
-  },
-  {
-    name: 'CampaignRoundOutcome',
-    declaration: 'export type CampaignRoundOutcome = \'passed\' | \'failed\' | \'cancelled\' | \'late\' | \'unknown\';',
-  },
-  {
-    name: 'CampaignState',
-    declaration: 'export interface CampaignState {\n    readonly taskId: string;\n    readonly status: CampaignStatus;\n    readonly startedAt: number;\n    readonly updatedAt: number;\n    readonly rounds: number;\n    readonly lastAttemptId?: string | undefined;\n    readonly lastOutcome?: CampaignRoundOutcome | undefined;\n    readonly reason?: string | undefined;\n    readonly acknowledgement: PresenceAcknowledgement;\n}',
-  },
-  {
-    name: 'CampaignStatus',
-    declaration: 'export type CampaignStatus = \'running\' | \'passed\' | \'exhausted\' | \'stopped\' | \'failed\';',
   },
   {
     name: 'CapabilityDigest',
@@ -5709,6 +5720,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'OneShotSubagentDescriptorData',
     declaration: 'export interface OneShotSubagentDescriptorData extends SubagentDescriptorBase {\n    readonly mode: \'one-shot\';\n    readonly label?: string;\n}',
+  },
+  {
+    name: 'OpenTrialResult',
+    declaration: 'export type OpenTrialResult = {\n    readonly url: string;\n    readonly port: number;\n    readonly pid: number;\n} | {\n    readonly url?: undefined;\n    readonly reason: string;\n};',
   },
   {
     name: 'OperationHeader',
@@ -7409,6 +7424,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ToolSchema',
     declaration: 'export interface ToolSchema {\n    name: string;\n    description: string;\n    parameters: Record<string, unknown>;\n}',
+  },
+  {
+    name: 'TrialSummary',
+    declaration: 'export interface TrialSummary {\n    readonly taskId: string;\n    readonly url: string;\n    readonly port: number;\n    readonly startedAt: number;\n}',
   },
   {
     name: 'TrustedClock',

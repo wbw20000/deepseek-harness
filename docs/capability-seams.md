@@ -173,6 +173,10 @@ flowchart LR
   svc_selfDevelopmentEvents["ctx.selfDevelopmentEvents<br/>Self-development notification events"]
   pkg_workflow_self_development_workspaces["workflow-self-development-workspaces"]
   svc_selfDevelopmentWorkspaces["ctx.selfDevelopmentWorkspaces<br/>Self-development workspaces"]
+  pkg_workflow_self_development_trial["workflow-self-development-trial"]
+  svc_selfDevelopmentTrial["ctx.selfDevelopmentTrial<br/>Self-development trial instances"]
+  pkg_workflow_self_development_chat["workflow-self-development-chat"]
+  svc_selfDevelopmentChat["ctx.selfDevelopmentChat<br/>Self-development chat tools"]
   pkg_ssh["ssh"]
   svc_ssh["ctx.ssh<br/>POSIX SSH connection owner"]
   pkg_fs_ssh["fs-ssh"]
@@ -400,9 +404,11 @@ flowchart LR
   pkg_workflow --> svc_workflowEngine
   pkg_workflow_ptc --> svc_workflowEngine
   pkg_workflow_self_development --> svc_selfDevelopmentTasks
+  pkg_workflow_self_development_chat --> svc_selfDevelopmentChat
   pkg_workflow_self_development_events --> svc_selfDevelopmentEvents
   pkg_workflow_self_development_remote --> svc_selfDevelopmentRemote
   pkg_workflow_self_development_runner --> svc_selfDevelopmentRunner
+  pkg_workflow_self_development_trial --> svc_selfDevelopmentTrial
   pkg_workflow_self_development_workspaces --> svc_selfDevelopmentWorkspaces
   pkg_workspace --> svc_workspaceRegistry
   pkg_workspace_changes --> svc_workspaceChanges
@@ -466,9 +472,11 @@ flowchart LR
   svc_sandboxPolicy --> pkg_bash_sandbox
   svc_sandboxPolicy --> pkg_fs_sandbox
   svc_sandboxPolicy --> pkg_terminal_bash
+  svc_selfDevelopmentChat --> pkg_workflow_self_development_remote
   svc_selfDevelopmentEvents --> pkg_workflow_self_development
   svc_selfDevelopmentRemote --> pkg_workflow_self_development
   svc_selfDevelopmentRemote --> pkg_workflow_self_development_runner
+  svc_selfDevelopmentTrial --> pkg_workflow_self_development_remote
   svc_sessionPersistence --> pkg_agent_loop
   svc_sessionPersistence --> pkg_hooks_claude_code
   svc_sessionPersistence --> pkg_hooks_codex
@@ -616,6 +624,8 @@ flowchart LR
 | `ctx.selfDevelopmentRemote` | `core` | [`workflow-self-development-remote`](../packages/workflow/workflow-self-development-remote) | - | [`workflow-self-development`](../packages/workflow/workflow-self-development), [`workflow-self-development-runner`](../packages/workflow/workflow-self-development-runner) | - | Opt-in stable-side Remote face over the task-control service and the supervised runner for the M4 UI and the phone whitelist; disabled until enabled, and it registers no tool, prompt, or event and no upgrade approval. |
 | `ctx.selfDevelopmentEvents` | `core` | [`workflow-self-development-events`](../packages/workflow/workflow-self-development-events) | - | [`workflow-self-development`](../packages/workflow/workflow-self-development) | - | Opt-in event projection over committed task events: unified title-level notification events, a bounded in-memory recent buffer, in-process subscribers, and an optional macOS local-notification command; it registers no tool, prompt, or durable store. |
 | `ctx.selfDevelopmentWorkspaces` | `core` | [`workflow-self-development-workspaces`](../packages/workflow/workflow-self-development-workspaces) | - | - | - | Opt-in per-task workspace allocation: one git worktree, branch, and copied data home per task under a durable registry, and serialized fast-forward integration back to the project baseline; directory separation, not a sandbox. |
+| `ctx.selfDevelopmentTrial` | `core` | [`workflow-self-development-trial`](../packages/workflow/workflow-self-development-trial) | - | [`workflow-self-development-remote`](../packages/workflow/workflow-self-development-remote) | - | Opt-in host-only service that builds a passing task's DSH worktree and serves it as a loopback trial instance with its experiment home; it registers no tool, prompt, or event, terminates only the process groups it spawned, and provides no isolation. |
+| `ctx.selfDevelopmentChat` | `core` | [`workflow-self-development-chat`](../packages/workflow/workflow-self-development-chat) | - | [`workflow-self-development-remote`](../packages/workflow/workflow-self-development-remote) | - | Opt-in service that registers three Agent tools so a chat can propose, watch, and stop a self-development campaign; every proposal passes the user-approval seam first and nothing runs unless the user allows it once. |
 | `ctx.ssh` | `core` | [`ssh`](../packages/ssh/ssh) | - | [`fs-ssh`](../packages/ssh/fs-ssh), [`subprocess-ssh`](../packages/ssh/subprocess-ssh), [`sandbox-ssh`](../packages/ssh/sandbox-ssh) | - | Owns one authenticated OpenSSH connection, installed helper identity, independent program streams and disconnect cleanup for the paired remote providers. |
 | `ctx.subprocess` | `seam` | [`subprocess`](../packages/subprocess/subprocess) | [`subprocess-local`](../packages/subprocess/subprocess-local), [`subprocess-ssh`](../packages/ssh/subprocess-ssh) | [`bash-local`](../packages/shell/bash-local), [`bash-sandbox`](../packages/shell/bash-sandbox), [`terminal-bash`](../packages/terminal/terminal-bash), [`lsp-stdio`](../packages/lsp/lsp-stdio), [`subagent-acp`](../packages/subagent/subagent-acp), [`subagent-codex`](../packages/subagent/subagent-codex), [`subagent-claude-code`](../packages/subagent/subagent-claude-code) | - | The bash executors, the PTY shell backend, the LSP host, and the out-of-process ACP, Codex, and Claude Code subagent backends spawn through ctx.subprocess; the service owns process coordinates, tree/session lifetime, stdio dispositions, terminal mechanics, and kill escalation. |
 | `ctx.shell` | `seam` | [`shell`](../packages/shell/shell) | [`bash-local`](../packages/shell/bash-local), [`bash-sandbox`](../packages/shell/bash-sandbox), [`pwsh-local`](../packages/shell/pwsh-local) | [`tool-bash`](../packages/shell/tool-bash), [`tool-pwsh`](../packages/shell/tool-pwsh), [`hooks-claude-code`](../packages/hooks/hooks-claude-code), [`hooks-codex`](../packages/hooks/hooks-codex) | - | The model-facing shell tools and hook bridges consume this seam; sandboxed, remote, or PowerShell executors replace bash-local without touching them. |
