@@ -1,7 +1,8 @@
 /** Acceptance definition validation and durable write under the control directory. */
 
+import { realpathSync } from 'node:fs'
 import { mkdir, open, rename, stat } from 'node:fs/promises'
-import { join } from 'node:path'
+import { isAbsolute, join, relative, sep } from 'node:path'
 import type { AcceptanceAssertion, AcceptanceCase, AcceptanceDefinition, RequiredCaseInput } from './types.ts'
 
 /** Directory mode of `<controlDirectory>/acceptance/`. */
@@ -157,6 +158,53 @@ function parseAssertion(value: unknown): AcceptanceAssertion {
  */
 export function acceptancePath(controlDirectory: string, taskId: string): string {
   return join(controlDirectory, 'acceptance', `${taskId}.json`)
+}
+
+/**
+ * Whether `controlDirectory` resolves inside `experimentsRoot` — and so
+ * would place every acceptance definition this package writes (always at
+ * `<controlDirectory>/acceptance/<taskId>.json`, see {@link acceptancePath})
+ * inside it too. Mirrors the runner's own placement rule (`loadAcceptance` in
+ * `workflow-self-development-runner/src/acceptor.ts`): the runner refuses to
+ * judge an acceptance definition placed inside the experiments root, so a
+ * misplaced `controlDirectory` fails every campaign round closed before it
+ * starts — a field test burned 20,000 rounds this way before the
+ * misconfiguration was noticed. Both sides are resolved with `realpathSync`
+ * (synchronous so the check can run inside a synchronous constructor) so a
+ * symlinked ancestor cannot hide the placement, matching the runner's own
+ * `isInsideReal`/`realpath` check. Called once at plugin construction (see
+ * `index.ts`) so a misconfigured deployment fails to mount instead of
+ * starting and burning rounds, and again just before every proposal writes
+ * an acceptance definition (see `propose.ts`) in case the directories were
+ * swapped after construction — the runner's own `path-containment.ts`
+ * documents the same "re-run at the moment a path is used" discipline.
+ * @param controlDirectory - configured control directory.
+ * @param experimentsRoot - configured experiments root.
+ * @returns a message naming both paths when `controlDirectory` resolves
+ *   inside (or as) `experimentsRoot`; `undefined` when the placement is fine,
+ *   or when either directory does not resolve yet — nothing has been placed
+ *   under a directory that does not exist, and {@link writeAcceptanceDefinition}
+ *   creates `controlDirectory` on first write.
+ */
+export function controlDirectoryPlacementViolation(controlDirectory: string, experimentsRoot: string): string | undefined {
+  const controlReal = realpathIfExists(controlDirectory)
+  const experimentsReal = realpathIfExists(experimentsRoot)
+  if (controlReal === undefined || experimentsReal === undefined) return undefined
+  const rel = relative(experimentsReal, controlReal)
+  const inside = rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel)
+  if (!inside) return undefined
+  return `controlDirectory ${controlDirectory} must live outside experimentsRoot ${experimentsRoot}: `
+    + 'the runner refuses to judge an acceptance definition placed inside the experiments root, '
+    + 'so every campaign round would fail closed before it starts'
+}
+
+/** Resolve `path` with `realpathSync`, or `undefined` when it does not resolve. */
+function realpathIfExists(path: string): string | undefined {
+  try {
+    return realpathSync(path)
+  } catch {
+    return undefined
+  }
 }
 
 /**

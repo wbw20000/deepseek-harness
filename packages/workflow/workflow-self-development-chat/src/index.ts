@@ -17,7 +17,7 @@ import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type {} from '@deepseek-ai/dsh-system-prompt'
-import { ASSERTION_SHAPE_REFERENCE } from './acceptance.ts'
+import { ASSERTION_SHAPE_REFERENCE, controlDirectoryPlacementViolation } from './acceptance.ts'
 import { resolveChatConfig } from './config.ts'
 import type { ResolvedChatConfig, SelfDevelopmentChatConfig } from './config.ts'
 import { budgetViolation } from './budget.ts'
@@ -147,6 +147,13 @@ export class SelfDevelopmentChat extends Service {
       // absent defaultBudget defaults to the always-valid unlimited preset,
       // so this branch never needs a fallback for the JSON.stringify input.
       throw new Error(`self-development chat config is invalid: defaultBudget ${JSON.stringify(config.defaultBudget)} is not a valid budget`)
+    }
+    const placement = controlDirectoryPlacementViolation(config.controlDirectory, config.experimentsRoot)
+    if (placement !== undefined) {
+      // Fail to mount rather than starting and burning campaign rounds: a
+      // field test found this misconfiguration only after 20,000 rounds all
+      // failed closed at the runner (see `controlDirectoryPlacementViolation`).
+      throw new Error(`self-development chat config is invalid: ${placement}`)
     }
     this.resolved = resolveChatConfig(config)
     this.facade = ports.facade
