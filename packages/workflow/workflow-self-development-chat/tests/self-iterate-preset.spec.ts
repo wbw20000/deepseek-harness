@@ -103,6 +103,18 @@ describe('the self-iterate preset', () => {
     ])
   })
 
+  it('supplies the required config the standard preset also sets, so both rows actually activate', async () => {
+    // A field-test regression: both rows below are REQUIRED with no default
+    // (see packages/preset/agent-presets/presets/standard/agent.cordis.yml),
+    // so omitting either failed the whole composition and the session fell
+    // back to the standard preset instead of self-iterate.
+    const entries = await selfIterateEntries()
+    const agentInstructions = entries.find(entry => entry.id === 'agent-instructions')
+    expect(agentInstructions?.config?.maxBytes).toBe(65536)
+    const toolFsSearch = entries.find(entry => entry.id === 'tool-fs-search')
+    expect(toolFsSearch?.config?.sampleOverCapGlobResults).toBe(false)
+  })
+
   it('mounts no file-editing or shell tool', async () => {
     const entries = await selfIterateEntries()
     const names = entries.map(entry => entry.name)

@@ -17,6 +17,7 @@ import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type {} from '@deepseek-ai/dsh-system-prompt'
+import { ASSERTION_SHAPE_REFERENCE } from './acceptance.ts'
 import { resolveChatConfig } from './config.ts'
 import type { ResolvedChatConfig, SelfDevelopmentChatConfig } from './config.ts'
 import { budgetViolation } from './budget.ts'
@@ -199,9 +200,82 @@ export class SelfDevelopmentChat extends Service {
           },
         },
         acceptance: {
-          type: 'json',
+          oneOf: [
+            {
+              type: 'object',
+              additionalProperties: false,
+              description: 'The acceptance definition you drafted. Every plan.requiredCases[].caseId must appear as a cases[].caseId here, and every assertionIds entry it names must appear as an assertions[].assertionId in that case.',
+              properties: {
+                cases: {
+                  type: 'array',
+                  required: true,
+                  description: 'One or more acceptance cases.',
+                  items: {
+                    type: 'object',
+                    additionalProperties: false,
+                    properties: {
+                      caseId: { type: 'string', required: true, description: 'Matches a plan.requiredCases[].caseId.' },
+                      command: { type: 'array', required: true, items: { type: 'string' }, description: 'Argv to run, e.g. ["node", "cli.mjs", "--json"].' },
+                      cwd: { type: 'string', description: 'Working directory for the command; defaults to the worktree root.' },
+                      timeoutMs: { type: 'integer', required: true, description: 'Positive timeout in milliseconds.' },
+                      assertions: {
+                        type: 'array',
+                        required: true,
+                        description: ASSERTION_SHAPE_REFERENCE,
+                        items: {
+                          oneOf: [
+                            {
+                              type: 'object',
+                              additionalProperties: false,
+                              properties: {
+                                assertionId: { type: 'string', required: true, description: 'Matches a plan.requiredCases[].assertionIds entry.' },
+                                kind: { type: 'string', required: true, const: 'exit-code' },
+                                expected: { type: 'integer', required: true, description: 'Expected process exit code.' },
+                              },
+                            },
+                            {
+                              type: 'object',
+                              additionalProperties: false,
+                              properties: {
+                                assertionId: { type: 'string', required: true, description: 'Matches a plan.requiredCases[].assertionIds entry.' },
+                                kind: { type: 'string', required: true, const: 'stdout-includes' },
+                                text: { type: 'string', required: true, description: 'Substring stdout must contain.' },
+                              },
+                            },
+                            {
+                              type: 'object',
+                              additionalProperties: false,
+                              properties: {
+                                assertionId: { type: 'string', required: true, description: 'Matches a plan.requiredCases[].assertionIds entry.' },
+                                kind: { type: 'string', required: true, const: 'file-exists' },
+                                path: { type: 'string', required: true, description: 'Worktree-relative path that must exist.' },
+                              },
+                            },
+                            {
+                              type: 'object',
+                              additionalProperties: false,
+                              properties: {
+                                assertionId: { type: 'string', required: true, description: 'Matches a plan.requiredCases[].assertionIds entry.' },
+                                kind: { type: 'string', required: true, const: 'file-includes' },
+                                path: { type: 'string', required: true, description: 'Worktree-relative path to read.' },
+                                text: { type: 'string', required: true, description: 'Substring the file must contain.' },
+                              },
+                            },
+                          ],
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            {
+              type: 'string',
+              description: 'Only when your tool call cannot emit a nested object for this parameter: the identical shape as a JSON-encoded string.',
+            },
+          ],
           required: true,
-          description: 'The acceptance definition you drafted: { "cases": [ { caseId, command: string[], cwd?, timeoutMs, assertions: [ { assertionId, kind: "exit-code" | "stdout-includes" | "file-exists" | "file-includes", ... } ] } ] }. Every requiredCases id must appear here.',
+          description: 'The acceptance definition you drafted, matching the object shape above (or that same JSON as a string).',
         },
         budget: {
           oneOf: [

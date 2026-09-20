@@ -18,16 +18,36 @@ const ASSERTION_FIELDS: Record<string, readonly string[]> = {
 }
 
 /**
+ * One-line reference to every assertion kind's exact shape, shared verbatim
+ * between the tool parameter description (`index.ts`) and every assertion
+ * validation error below. A field test found a model guessing a wrong field
+ * name (`value` instead of `expected`) and getting back only the one
+ * violated rule, not the other kinds' shapes, so it could not self-correct
+ * in one retry. Keeping one string used in both places also means the
+ * schema the model sees and the error it can hit never drift apart.
+ */
+export const ASSERTION_SHAPE_REFERENCE =
+  'assertion shapes: exit-code needs { assertionId, kind: "exit-code", expected (integer) }; '
+  + 'stdout-includes needs { assertionId, kind: "stdout-includes", text (string) }; '
+  + 'file-exists needs { assertionId, kind: "file-exists", path (string) }; '
+  + 'file-includes needs { assertionId, kind: "file-includes", path (string), text (string) }.'
+
+/**
  * Validate one drafted acceptance definition against the runner's acceptance schema.
- * @param value - the JSON value the tool received as `acceptance`.
+ * @param value - the JSON value the tool received as `acceptance`: an object,
+ *   or a JSON-encoded string of the same shape. The harness has been observed
+ *   delivering a `type: 'json'`-declared parameter as a string rather than an
+ *   already-parsed object, so both forms are accepted here regardless of what
+ *   the tool's declared parameter schema accepts.
  * @returns the validated definition.
  * @throws Error naming the first violated rule, mirroring the runner's `SELF_DEV_RUNNER_ACCEPTANCE_INVALID` wording.
  */
 export function parseAcceptanceDefinition(value: unknown): AcceptanceDefinition {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+  const parsed = typeof value === 'string' ? parseAcceptanceJson(value) : value
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
     throw new Error('acceptance definition must be an object with a cases array')
   }
-  const candidate = value as Record<string, unknown>
+  const candidate = parsed as Record<string, unknown>
   if (!Array.isArray(candidate.cases) || candidate.cases.length === 0) {
     throw new Error('acceptance definition must be an object with a cases array')
   }
@@ -36,6 +56,15 @@ export function parseAcceptanceDefinition(value: unknown): AcceptanceDefinition 
     throw new Error('acceptance definition defines a case more than once')
   }
   return { cases }
+}
+
+/** Parse one JSON-encoded acceptance definition string; see {@link parseAcceptanceDefinition}. */
+function parseAcceptanceJson(value: string): unknown {
+  try {
+    return JSON.parse(value)
+  } catch (error) {
+    throw new Error(`acceptance definition string is not valid JSON: ${(error as Error).message}`)
+  }
 }
 
 /**
@@ -108,13 +137,13 @@ function parseAssertion(value: unknown): AcceptanceAssertion {
   }
   const fields = ASSERTION_FIELDS[candidate.kind as string]
   if (fields === undefined) {
-    throw new Error(`acceptance assertion kind ${JSON.stringify(candidate.kind ?? null)} is unknown`)
+    throw new Error(`acceptance assertion kind ${JSON.stringify(candidate.kind ?? null)} is unknown; ${ASSERTION_SHAPE_REFERENCE}`)
   }
   for (const field of fields) {
     const expected = candidate[field]
     const valid = field === 'expected' ? typeof expected === 'number' && Number.isInteger(expected) : typeof expected === 'string' && expected !== ''
     if (!valid) {
-      throw new Error(`acceptance assertion of kind ${String(candidate.kind)} needs a valid ${field}`)
+      throw new Error(`acceptance assertion of kind ${String(candidate.kind)} needs a valid ${field}; ${ASSERTION_SHAPE_REFERENCE}`)
     }
   }
   return candidate as unknown as AcceptanceAssertion
