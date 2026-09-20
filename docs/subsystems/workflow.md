@@ -143,7 +143,7 @@ Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnp
 
 ### `ctx.selfDevelopmentChat` — `SelfDevelopmentChat`
 
-Chat-side self-development launcher. Composition declares the hard dependencies through {@linkcode SelfDevelopmentChat.inject}; the optional workspaces, events, and trial services are read with `ctx.get` and every tool degrades gracefully without them.
+Chat-side self-development launcher. Composition declares the hard dependencies through {@linkcode SelfDevelopmentChat.inject}; the optional workspaces, events, trial, and `systemPrompt` services are read with `ctx.get` and every tool degrades gracefully without them. When `systemPrompt` is mounted and `guidance` is not disabled, the service contributes a fixed section (see `guidance.ts`) so the model is actually told to call `self_development_propose` instead of editing the trial branch's workspace itself — a chat-side field test found that a README-only, never-injected snippet was not enough on its own.
 
 Source: [`packages/workflow/workflow-self-development-chat/src/index.ts`](../../packages/workflow/workflow-self-development-chat/src/index.ts)
 

@@ -2995,7 +2995,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/core/system-prompt/src/index.ts:248`](../packages/core/system-prompt/src/index.ts)
+Source: [`packages/core/system-prompt/src/index.ts:249`](../packages/core/system-prompt/src/index.ts)
 
 <a id="deepseek-aidsh-terminal-bash"></a>
 
@@ -3866,6 +3866,12 @@ export interface SelfDevelopmentChatConfig {
   readonly defaultBudget?: ProposeBudget | undefined
   /** Unattended default; defaults to `true`. */
   readonly defaultUnattended?: boolean | undefined
+  /**
+   * Register the self-development guidance `systemPrompt` section; defaults
+   * to `true`. `false` registers nothing, matching a deployment that pastes
+   * or composes its own guidance instead.
+   */
+  readonly guidance?: boolean | undefined
 }
 
 /** Budget terms the proposing agent selects; "unlimited" is the 24-hour time preset. */
