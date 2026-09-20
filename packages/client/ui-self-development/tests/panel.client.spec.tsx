@@ -15,9 +15,10 @@ import { SelfDevelopmentPanel } from '../src/client/SelfDevelopmentPanel.tsx'
 import type { SelfDevelopmentPanelProps } from '../src/client/SelfDevelopmentPanel.tsx'
 import type { SelfDevelopmentAvailability } from '../src/client/face.ts'
 import type { Attempt } from '@deepseek-ai/dsh-workflow-self-development'
-import { detail, event, live, offline, projection, projectionWithout, scriptableApi, summary } from './fixtures.client.ts'
+import { card, detail, event, launchProfile, live, offline, projection, projectionWithout, scriptableApi, summary } from './fixtures.client.ts'
 
 afterEach(cleanup)
+afterEach(() => { localStorage.clear() })
 
 const t = makeTranslate(en)
 
@@ -177,7 +178,7 @@ describe('SelfDevelopmentPanel', () => {
     fireEvent.click(view.getByLabelText('I am at the computer; this run is supervised'))
     expect(view.getByText('Entered: /repo/.experiments/task-1')).toBeDefined()
 
-    fireEvent.click(view.getByRole('button', { name: 'Filled in — go to confirmation' }))
+    fireEvent.click(view.getByRole('button', { name: 'Start one round' }))
     expect(view.getByRole('dialog', { name: 'Start one round' })).toBeDefined()
     fireEvent.click(withinDialogConfirm(view, 'Start one round'))
     await vi.waitFor(() => {
@@ -208,7 +209,7 @@ describe('SelfDevelopmentPanel', () => {
     fireEvent.change(document.getElementById('dsh-self-dev-artifacts')!, { target: { value: 'a.ts' } })
     fireEvent.change(document.getElementById('dsh-self-dev-acceptance')!, { target: { value: '/a.yml' } })
     fireEvent.click(view.getByLabelText('I am at the computer; this run is supervised'))
-    fireEvent.click(view.getByRole('button', { name: 'Filled in — go to confirmation' }))
+    fireEvent.click(view.getByRole('button', { name: 'Start one round' }))
     fireEvent.click(withinDialogConfirm(view, 'Start one round'))
     await vi.waitFor(() => { expect(view.getByText('The explicit presence acknowledgement is missing')).toBeDefined() })
   })
@@ -368,12 +369,14 @@ describe('SelfDevelopmentPanel', () => {
     expect(view.getByRole('list', { name: 'Self-development task list' })).toBeDefined()
   })
 
-  it('renders the phone whitelist view: paths hidden, dataHome disabled, actions kept', async () => {
+  it('renders the phone whitelist view: paths hidden, launch host-only, actions kept', async () => {
     const api = scriptableApi()
     const view = render(<SelfDevelopmentPanel {...props({ remote: api, phone: true })} />)
     await openTask(view)
     expect(view.getByText('A phone does not show experiment or evidence paths; view them on the stable side.')).toBeDefined()
-    expect((document.getElementById('dsh-self-dev-datahome') as HTMLInputElement).disabled).toBe(true)
+    expect(view.getByText('This operation can only be completed at the computer; a phone can view, confirm, and stop only')).toBeDefined()
+    expect(document.getElementById('dsh-self-dev-worktree')).toBeNull()
+    expect(view.queryByRole('button', { name: 'Start one round' })).toBeNull()
     expect(view.getByRole('button', { name: 'Stop' })).toBeDefined()
   })
 
@@ -393,13 +396,256 @@ describe('SelfDevelopmentPanel', () => {
     fireEvent.change(document.getElementById('dsh-self-dev-artifacts')!, { target: { value: 'a.ts' } })
     fireEvent.change(document.getElementById('dsh-self-dev-acceptance')!, { target: { value: '/a.yml' } })
     fireEvent.click(view.getByLabelText('I am at the computer; this run is supervised'))
-    fireEvent.click(view.getByRole('button', { name: 'Filled in — go to confirmation' }))
+    fireEvent.click(view.getByRole('button', { name: 'Start one round' }))
     fireEvent.click(withinDialogConfirm(view, 'Start one round'))
     await vi.waitFor(() => { expect(view.getByText('Experiment path: /experiments/wt-1')).toBeDefined() })
 
     fireEvent.click(view.getByRole('button', { name: 'Copy' }))
     await vi.waitFor(() => { expect(view.getByText('Copied')).toBeDefined() })
     expect(writeText).toHaveBeenCalledWith('/experiments/wt-1')
+  })
+
+  it('launches one click from the stored profile: no advanced inputs, presence gate, exactly the three launch keys', async () => {
+    const api = scriptableApi({
+      getTask: vi.fn(async () => ({ ok: true as const, value: detail({ card: card({ launchProfile: launchProfile() }) }) })),
+    })
+    const view = render(<SelfDevelopmentPanel {...props({ remote: api })} />)
+    await openTask(view)
+    expect(view.getByText('Experiment worktree path: /experiments/wt-1')).toBeDefined()
+    expect(view.getByText('Confirmed by: mima')).toBeDefined()
+    expect(document.getElementById('dsh-self-dev-worktree')).toBeNull()
+
+    const start = view.getByRole('button', { name: 'Start one round' })
+    expect((start as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(start)
+    expect(api.runAttempt).not.toHaveBeenCalled()
+    expect(view.queryByRole('dialog', { name: 'Start one round' })).toBeNull()
+
+    fireEvent.click(view.getByLabelText('I am at the computer; this run is supervised'))
+    fireEvent.click(start)
+    const dialog = view.getByRole('dialog', { name: 'Start one round' })
+    expect(dialog.textContent).toContain('/experiments/wt-1')
+    expect(dialog.textContent).toContain('/repo/acceptance.yml')
+    expect(dialog.textContent).toContain('mima')
+    fireEvent.click(withinDialogConfirm(view, 'Start one round'))
+    await vi.waitFor(() => { expect(api.runAttempt).toHaveBeenCalledTimes(1) })
+    expect(api.runAttempt).toHaveBeenCalledWith({ taskId: 'task-1', expectedRevision: 3, presenceAcknowledged: true })
+  })
+
+  it('carries an advanced worktree override over the stored profile and nothing else', async () => {
+    const api = scriptableApi({
+      getTask: vi.fn(async () => ({ ok: true as const, value: detail({ card: card({ launchProfile: launchProfile() }) }) })),
+    })
+    const view = render(<SelfDevelopmentPanel {...props({ remote: api })} />)
+    await openTask(view)
+    fireEvent.click(view.getByRole('button', { name: 'Advanced (override profile)' }))
+    fireEvent.change(document.getElementById('dsh-self-dev-worktree')!, { target: { value: ' /experiments/other ' } })
+    fireEvent.click(view.getByLabelText('I am at the computer; this run is supervised'))
+    fireEvent.click(view.getByRole('button', { name: 'Start one round' }))
+    fireEvent.click(withinDialogConfirm(view, 'Start one round'))
+    await vi.waitFor(() => {
+      expect(api.runAttempt).toHaveBeenCalledWith({
+        taskId: 'task-1', expectedRevision: 3, worktree: '/experiments/other', presenceAcknowledged: true,
+      })
+    })
+  })
+
+  it('expands the advanced area and offers saving a profile when the task has none', async () => {
+    const api = scriptableApi()
+    const view = render(<SelfDevelopmentPanel {...props({ remote: api })} />)
+    await openTask(view)
+    expect(view.getByText('This task has no launch profile; fill in the fields or set the profile first.')).toBeDefined()
+    expect(document.getElementById('dsh-self-dev-worktree')).toBeDefined()
+
+    // Without both required paths the save button stays disabled.
+    expect((view.getByRole('button', { name: 'Save as profile' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.change(document.getElementById('dsh-self-dev-worktree')!, { target: { value: '/experiments/wt-9' } })
+    expect((view.getByRole('button', { name: 'Save as profile' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.change(document.getElementById('dsh-self-dev-worktree')!, { target: { value: '' } })
+    fireEvent.click(view.getByRole('button', { name: 'Save as profile' }))
+    expect(api.setLaunchProfile).not.toHaveBeenCalled()
+
+    fireEvent.change(document.getElementById('dsh-self-dev-worktree')!, { target: { value: '/experiments/wt-9' } })
+    fireEvent.change(document.getElementById('dsh-self-dev-acceptance')!, { target: { value: '/repo/acceptance.yml' } })
+    fireEvent.change(document.getElementById('dsh-self-dev-datahome')!, { target: { value: '/repo/.experiments/home' } })
+    fireEvent.change(document.getElementById('dsh-self-dev-ports')!, { target: { value: '5173' } })
+    fireEvent.change(document.getElementById('dsh-self-dev-actor')!, { target: { value: 'k3' } })
+    fireEvent.click(view.getByRole('button', { name: 'Save as profile' }))
+    await vi.waitFor(() => {
+      expect(api.setLaunchProfile).toHaveBeenCalledWith('task-1', {
+        worktree: '/experiments/wt-9',
+        acceptancePath: '/repo/acceptance.yml',
+        dataHome: '/repo/.experiments/home',
+        loopbackAllowlist: [5173],
+        confirmedBy: 'k3',
+      })
+    })
+  })
+
+  it('lists the unset launch values in the confirm dialog when no profile exists', async () => {
+    const api = scriptableApi()
+    const view = render(<SelfDevelopmentPanel {...props({ remote: api })} />)
+    await openTask(view)
+    fireEvent.click(view.getByLabelText('I am at the computer; this run is supervised'))
+    fireEvent.click(view.getByRole('button', { name: 'Start one round' }))
+    const dialog = view.getByRole('dialog', { name: 'Start one round' })
+    expect(dialog.textContent).toContain('(not set)')
+    fireEvent.click(withinDialogCancel(view, 'Start one round'))
+    expect(api.runAttempt).not.toHaveBeenCalled()
+  })
+
+  it('shows the operation failure line when creating a task is refused', async () => {
+    const api = scriptableApi({
+      createTask: vi.fn(async () => ({ ok: false as const, error: { code: 'self-development/config-invalid', message: 'digest' } })),
+    })
+    const view = render(<SelfDevelopmentPanel {...props({ remote: api })} />)
+    await vi.waitFor(() => { expect(view.getByRole('button', { name: 'New task' })).toBeDefined() })
+    fireEvent.click(view.getByRole('button', { name: 'New task' }))
+    fireEvent.change(document.getElementById('dsh-self-dev-new-task-id')!, { target: { value: 'task-2' } })
+    fireEvent.change(document.getElementById('dsh-self-dev-new-requirement')!, { target: { value: 'r' } })
+    fireEvent.change(document.getElementById('dsh-self-dev-new-scope')!, { target: { value: 'a/**' } })
+    fireEvent.change(document.getElementById('dsh-self-dev-new-baseline')!, { target: { value: 'a'.repeat(64) } })
+    fireEvent.change(document.getElementById('dsh-self-dev-new-created-by')!, { target: { value: 'mima' } })
+    fireEvent.click(view.getByRole('button', { name: 'Create task' }))
+    await vi.waitFor(() => { expect(view.getByText('The request arguments are invalid')).toBeDefined() })
+  })
+
+  it('shows the host-only failure copy when storing the profile is refused from a phone-class caller', async () => {
+    const api = scriptableApi({
+      setLaunchProfile: vi.fn(async () => ({ ok: false as const, error: { code: 'self-development/host-only-field', message: 'no' } })),
+    })
+    const view = render(<SelfDevelopmentPanel {...props({ remote: api })} />)
+    await openTask(view)
+    fireEvent.change(document.getElementById('dsh-self-dev-worktree')!, { target: { value: '/w' } })
+    fireEvent.change(document.getElementById('dsh-self-dev-acceptance')!, { target: { value: '/a.yml' } })
+    fireEvent.click(view.getByRole('button', { name: 'Save as profile' }))
+    await vi.waitFor(() => {
+      expect(view.getByText('This operation can only be completed at the computer; a phone can view, confirm, and stop only')).toBeDefined()
+    })
+  })
+
+  it('disables recording the trial approval and names the approver once a trial approval exists', async () => {
+    const api = scriptableApi({
+      getTask: vi.fn(async () => ({ ok: true as const, value: detail({
+        projection: projection({
+          status: 'awaiting-trial',
+          verifiedResultDigest: 'f'.repeat(64),
+          trialApproval: { approvedBy: 'mima', resultDigest: 'f'.repeat(64) },
+        }),
+      }) })),
+    })
+    const view = render(<SelfDevelopmentPanel {...props({ remote: api })} />)
+    await openTask(view)
+    expect(view.getByText('Already approved (approved by mima)')).toBeDefined()
+    fireEvent.change(document.getElementById('dsh-self-dev-actor')!, { target: { value: 'mima' } })
+    expect((view.getByRole('button', { name: 'Record trial approval' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(view.getByRole('button', { name: 'Record trial approval' }))
+    expect(api.recordTrialApproval).not.toHaveBeenCalled()
+  })
+
+  it('creates a task from the new-task form without a profile and remembers the creator', async () => {
+    const api = scriptableApi()
+    const view = render(<SelfDevelopmentPanel {...props({ remote: api })} />)
+    await vi.waitFor(() => { expect(view.getByRole('button', { name: 'New task' })).toBeDefined() })
+    fireEvent.click(view.getByRole('button', { name: 'New task' }))
+    expect((view.getByRole('button', { name: 'Create task' }) as HTMLButtonElement).disabled).toBe(true)
+
+    fireEvent.change(document.getElementById('dsh-self-dev-new-task-id')!, { target: { value: 'task-2' } })
+    fireEvent.change(document.getElementById('dsh-self-dev-new-requirement')!, { target: { value: '补充批量导出' } })
+    fireEvent.change(document.getElementById('dsh-self-dev-new-scope')!, { target: { value: 'apps/web/src/**' } })
+    fireEvent.change(document.getElementById('dsh-self-dev-new-baseline')!, { target: { value: 'a'.repeat(64) } })
+    fireEvent.change(document.getElementById('dsh-self-dev-new-created-by')!, { target: { value: 'mima' } })
+    fireEvent.click(view.getByRole('button', { name: 'Create task' }))
+    await vi.waitFor(() => { expect(api.createTask).toHaveBeenCalledTimes(1) })
+    await vi.waitFor(() => { expect(api.listTasks).toHaveBeenCalledTimes(2) })
+    expect(api.createTask).toHaveBeenCalledWith({
+      taskId: 'task-2', version: 1, requirement: '补充批量导出',
+      allowedModificationScope: ['apps/web/src/**'], stableBaselineDigest: 'a'.repeat(64), createdBy: 'mima',
+    }, 0)
+    expect(localStorage.getItem('dsh-self-dev-created-by')).toBe('mima')
+
+    // A fresh form remembers the last creator.
+    cleanup()
+    const reopened = render(<SelfDevelopmentPanel {...props({ remote: api })} />)
+    fireEvent.click(reopened.getByRole('button', { name: 'New task' }))
+    expect((document.getElementById('dsh-self-dev-new-created-by') as HTMLInputElement).value).toBe('mima')
+  })
+
+  it('creates a task with the optional launch profile as the third argument', async () => {
+    const api = scriptableApi()
+    const view = render(<SelfDevelopmentPanel {...props({ remote: api })} />)
+    await vi.waitFor(() => { expect(view.getByRole('button', { name: 'New task' })).toBeDefined() })
+    fireEvent.click(view.getByRole('button', { name: 'New task' }))
+    fireEvent.change(document.getElementById('dsh-self-dev-new-task-id')!, { target: { value: 'task-3' } })
+    fireEvent.change(document.getElementById('dsh-self-dev-new-requirement')!, { target: { value: 'r' } })
+    fireEvent.change(document.getElementById('dsh-self-dev-new-scope')!, { target: { value: 'a/**' } })
+    fireEvent.change(document.getElementById('dsh-self-dev-new-baseline')!, { target: { value: 'b'.repeat(64) } })
+    fireEvent.change(document.getElementById('dsh-self-dev-new-created-by')!, { target: { value: 'k3' } })
+    fireEvent.change(document.getElementById('dsh-self-dev-new-profile-worktree')!, { target: { value: '/experiments/wt-3' } })
+    fireEvent.change(document.getElementById('dsh-self-dev-new-profile-acceptance')!, { target: { value: '/repo/acceptance.yml' } })
+    fireEvent.change(document.getElementById('dsh-self-dev-new-profile-artifacts')!, { target: { value: 'dist/a.js, dist/b.js' } })
+    fireEvent.click(view.getByRole('button', { name: 'Create task' }))
+    await vi.waitFor(() => { expect(api.createTask).toHaveBeenCalledTimes(1) })
+    expect(api.createTask).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: 'task-3' }),
+      0,
+      { worktree: '/experiments/wt-3', acceptancePath: '/repo/acceptance.yml', artifactPaths: ['dist/a.js', 'dist/b.js'] },
+    )
+  })
+
+  it('submits a multi-case plan draft from the planning-authorized form', async () => {
+    const api = scriptableApi({
+      getTask: vi.fn(async () => ({ ok: true as const, value: detail({ projection: projection({ status: 'planning-authorized' }) }) })),
+    })
+    const view = render(<SelfDevelopmentPanel {...props({ remote: api })} />)
+    await openTask(view)
+    expect(view.getByRole('region', { name: 'Submit plan draft' })).toBeDefined()
+    expect((view.getByRole('button', { name: 'Submit plan draft' }) as HTMLButtonElement).disabled).toBe(true)
+
+    fireEvent.change(document.getElementById('dsh-self-dev-case-id-0')!, { target: { value: 'case-1' } })
+    fireEvent.change(document.getElementById('dsh-self-dev-case-requirement-0')!, { target: { value: '导出生成文件' } })
+    fireEvent.change(document.getElementById('dsh-self-dev-case-assertions-0')!, { target: { value: 'assert-1, assert-2' } })
+    fireEvent.click(view.getByRole('button', { name: 'Add case' }))
+    fireEvent.change(document.getElementById('dsh-self-dev-case-id-1')!, { target: { value: 'case-2' } })
+    fireEvent.change(document.getElementById('dsh-self-dev-case-requirement-1')!, { target: { value: '深色模式可读' } })
+    fireEvent.change(document.getElementById('dsh-self-dev-manual-cases')!, { target: { value: '人工核对图标, 人工核对打印' } })
+    fireEvent.click(view.getByRole('button', { name: 'Submit plan draft' }))
+    await vi.waitFor(() => { expect(api.submitPlanDraft).toHaveBeenCalledTimes(1) })
+    expect(api.submitPlanDraft).toHaveBeenCalledWith('task-1', 3, {
+      requiredCases: [
+        { caseId: 'case-1', requirement: '导出生成文件', assertionIds: ['assert-1', 'assert-2'] },
+        { caseId: 'case-2', requirement: '深色模式可读', assertionIds: [] },
+      ],
+      manualCases: ['人工核对图标', '人工核对打印'],
+    })
+  })
+
+  it('removes a drafted case row and keeps the submit enabled for the remaining row', async () => {
+    const api = scriptableApi({
+      getTask: vi.fn(async () => ({ ok: true as const, value: detail({ projection: projection({ status: 'planning-authorized' }) }) })),
+    })
+    const view = render(<SelfDevelopmentPanel {...props({ remote: api })} />)
+    await openTask(view)
+    fireEvent.change(document.getElementById('dsh-self-dev-case-id-0')!, { target: { value: 'case-1' } })
+    fireEvent.change(document.getElementById('dsh-self-dev-case-requirement-0')!, { target: { value: '导出生成文件' } })
+    fireEvent.click(view.getByRole('button', { name: 'Add case' }))
+    const removeSecond = view.getAllByRole('button', { name: 'Remove case' })[1]!
+    fireEvent.click(removeSecond)
+    await vi.waitFor(() => { expect(view.container.querySelector('#dsh-self-dev-case-id-1')).toBeNull() })
+    fireEvent.click(view.getByRole('button', { name: 'Submit plan draft' }))
+    await vi.waitFor(() => { expect(api.submitPlanDraft).toHaveBeenCalledWith('task-1', 3, {
+      requiredCases: [{ caseId: 'case-1', requirement: '导出生成文件', assertionIds: [] }],
+      manualCases: [],
+    }) })
+  })
+
+  it('renders the unset budget line when the card carries no budget terms', async () => {
+    const api = scriptableApi({
+      getTask: vi.fn(async () => ({ ok: true as const, value: detail({ card: card({ budget: {} }) }) })),
+    })
+    const view = render(<SelfDevelopmentPanel {...props({ remote: api })} />)
+    await openTask(view)
+    expect(view.getByText('Budget: (not set)')).toBeDefined()
   })
 
   it('keeps the panel single-column at 480px through the stylesheet media query', () => {

@@ -11,14 +11,16 @@ import type { HostObservable } from '@deepseek-ai/dsh-client-ui-slots'
 import type {
   BudgetApprovalInput,
   ConfirmedPlanInput,
+  PlanDraftInput,
   RecentEvent,
   RemoteOperationResult,
   RemoteRunAttemptOutcome,
-  RemoteRunAttemptRequest,
   TaskDetail,
   TaskSummary,
+  TaskSpecInput,
 } from '@deepseek-ai/dsh-workflow-self-development-remote'
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
+import type { LaunchProfile, LaunchProfileInput, RunAttemptRequest } from './wire.ts'
 
 /**
  * The Remote methods this UI may call, as property-syntax callbacks the slot
@@ -33,6 +35,18 @@ export interface SelfDevelopmentApi {
   readonly getTask: (taskId: string) => Promise<RemoteResult<TaskDetail>>
   /** Read the facade's retained recent notification events, oldest first. */
   readonly recentEvents: () => Promise<RemoteResult<readonly RecentEvent[]>>
+  /** Create a task from the human-written spec, optionally storing a launch profile with it. */
+  readonly createTask: (
+    spec: TaskSpecInput, expectedRevision: number, launchProfile?: LaunchProfileInput,
+  ) => Promise<RemoteResult<RemoteOperationResult>>
+  /** Submit a plan draft for a planning-authorized task. */
+  readonly submitPlanDraft: (
+    taskId: string, expectedRevision: number, draft: PlanDraftInput,
+  ) => Promise<RemoteResult<RemoteOperationResult>>
+  /** Store one task's launch profile; host-only on the wire. */
+  readonly setLaunchProfile: (
+    taskId: string, profile: LaunchProfileInput,
+  ) => Promise<RemoteResult<{ taskId: string; launchProfile: LaunchProfile }>>
   /** Grant the planning authorization for one task. */
   readonly authorizePlanning: (
     taskId: string, expectedRevision: number, authorizedBy: string,
@@ -45,8 +59,12 @@ export interface SelfDevelopmentApi {
   readonly approveBudget: (
     taskId: string, expectedRevision: number, approval: BudgetApprovalInput,
   ) => Promise<RemoteResult<RemoteOperationResult>>
-  /** Launch one supervised attempt. */
-  readonly runAttempt: (request: RemoteRunAttemptRequest) => Promise<RemoteResult<RemoteRunAttemptOutcome>>
+  /**
+   * Launch one supervised attempt. Every profile-derived field is optional:
+   * an omitted value resolves from the stored launch profile, and an explicit
+   * value takes precedence over it.
+   */
+  readonly runAttempt: (request: RunAttemptRequest) => Promise<RemoteResult<RemoteRunAttemptOutcome>>
   /** Stop a task at human request. */
   readonly stop: (taskId: string, expectedRevision: number, reason?: 'cancelled') => Promise<RemoteResult<RemoteOperationResult>>
   /** Record a human trial approval bound to the verified result. */

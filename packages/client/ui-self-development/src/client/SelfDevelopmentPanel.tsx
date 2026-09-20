@@ -1,25 +1,28 @@
 /**
- * The self-development panel: task list, confirmation card, projection
- * summary, per-round evidence timeline, and the explicit authorization
- * actions. Both registered seats (the sidebar tab body and the Settings
- * section) render this one component with the same injected face. Every write
- * goes through its dialog confirmation; the run-attempt dialog's acknowledgement
- * checkbox is the only source of `presenceAcknowledged`, and the panel offers
- * no upgrade action because the facade has none.
+ * The self-development panel: new-task form, task list, confirmation card,
+ * projection summary, per-round evidence timeline, plan-draft form, and the
+ * explicit authorization actions. Both registered seats (the sidebar tab body
+ * and the Settings section) render this one component with the same injected
+ * face. Every write goes through its dialog confirmation; the run-attempt
+ * section derives its fields from the task's launch profile, and the
+ * advanced area only overrides or first-stores that profile.
  */
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { Button, Checkbox, Input, RiskConfirmation, writeClipboard } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { BudgetApproval } from '@deepseek-ai/dsh-workflow-self-development'
 import type {
-  RecentEvent, RemoteRunAttemptOutcome, TaskDetail, TaskSummary,
+  PlanDraftInput, RecentEvent, RemoteRunAttemptOutcome, TaskDetail, TaskSpecInput, TaskSummary,
 } from '@deepseek-ai/dsh-workflow-self-development-remote'
+import { NewTaskForm } from './NewTaskForm.tsx'
+import { PlanDraftForm } from './PlanDraftForm.tsx'
 import { ConfirmationCard } from './ConfirmationCard.tsx'
 import type { SelfDevelopmentAvailability, SelfDevelopmentInjected } from './face.ts'
 import { RoundTimeline } from './RoundTimeline.tsx'
 import {
   actionLabelKey,
   actionsFor,
+  budgetModeKey,
   dialogDetailKey,
   dialogTitleKey,
   handoffReasonKey,
@@ -27,7 +30,18 @@ import {
   stopReasonKey,
 } from './status.ts'
 import type { ActionId } from './status.ts'
-import { buildBudgetApproval, buildConfirmedPlan, buildRunAttemptRequest, failureText } from './wire.ts'
+import {
+  buildBudgetApproval,
+  buildConfirmedPlan,
+  buildLaunchProfileInput,
+  buildRunAttemptRequest,
+  failureText,
+  launchProfileOf,
+  parsePaths,
+  parsePorts,
+  trialApprovalOf,
+} from './wire.ts'
+import type { LaunchProfileInput } from './wire.ts'
 import css from './SelfDevelopmentPanel.module.css'
 
 /** Composed props of the panel: the injected face plus the locale seat. */
@@ -99,6 +113,9 @@ export function SelfDevelopmentPanel(props: SelfDevelopmentPanelProps): ReactNod
   const [budget, setBudget] = useState<BudgetFormState>(EMPTY_BUDGET)
   const [trial, setTrial] = useState<RemoteRunAttemptOutcome | undefined>(undefined)
   const [copied, setCopied] = useState(false)
+  const [newTaskOpen, setNewTaskOpen] = useState(false)
+  /** `undefined` means "follow the profile": collapsed with a profile, expanded without one. */
+  const [advanced, setAdvanced] = useState<boolean | undefined>(undefined)
 
   const refresh = useCallback(async (): Promise<void> => {
     if (api === undefined) return
@@ -133,9 +150,9 @@ export function SelfDevelopmentPanel(props: SelfDevelopmentPanelProps): ReactNod
   const execute = async (
     operation: () => Promise<{ ok: true } | { ok: false; error: { code: string; message: string } }>,
   ): Promise<void> => {
-    // Only the dialog's confirm path calls this, so the open task and its
-    // loaded detail are always in place.
-    /* v8 ignore next 2 -- the dialog confirm path guarantees both operands. */
+    // Only the dialog's confirm path and the profile save call this, so the
+    // open task and its loaded detail are always in place.
+    /* v8 ignore next 2 -- both call paths guarantee every operand. */
     if (selectedId === undefined || detail === undefined) return
     setBusy(true)
     try {
@@ -147,6 +164,26 @@ export function SelfDevelopmentPanel(props: SelfDevelopmentPanelProps): ReactNod
       setOpError(undefined)
       await refresh()
       await openTask(selectedId)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /** Create a task from the new-task form, then resync the list. */
+  const createTask = async (spec: TaskSpecInput, profile: LaunchProfileInput | undefined): Promise<void> => {
+    /* v8 ignore next 2 -- the form renders only with the remote face mounted; the guard covers a stale closure. */
+    if (api === undefined) return
+    setBusy(true)
+    try {
+      const result = profile === undefined
+        ? await api.createTask(spec, 0)
+        : await api.createTask(spec, 0, profile)
+      if (result.ok) {
+        setOpError(undefined)
+        await refresh()
+      } else {
+        setOpError(failureText(t, result.error))
+      }
     } finally {
       setBusy(false)
     }
@@ -189,7 +226,7 @@ export function SelfDevelopmentPanel(props: SelfDevelopmentPanelProps): ReactNod
       // acknowledgement checkbox is checked, so the request built here always
       // carries `presenceAcknowledged: true`; the facade re-refuses anything
       // else at the wire boundary.
-      const request = buildRunAttemptRequest(selectedId, revision, run, phone, acknowledged)
+      const request = buildRunAttemptRequest(selectedId, revision, run, phone, acknowledged, actor)
       closeDialog()
       setBusy(true)
       void (async () => {
@@ -201,6 +238,9 @@ export function SelfDevelopmentPanel(props: SelfDevelopmentPanelProps): ReactNod
           }
           setOpError(undefined)
           setTrial(result.value)
+          // The acknowledgement covers this launch only; the next one is
+          // ticked again by hand.
+          setRun(current => ({ ...current, presence: false }))
           await refresh()
           await openTask(selectedId)
         } finally {
@@ -232,8 +272,40 @@ export function SelfDevelopmentPanel(props: SelfDevelopmentPanelProps): ReactNod
     detail.projection.plan !== undefined,
     detail.projection.verifiedResultDigest !== undefined,
   )
-  const runReady = run.presence && actor !== '' && run.worktree.trim() !== ''
-    && run.acceptancePath.trim() !== '' && run.artifactPaths.trim() !== ''
+  const profile = detail === undefined ? undefined : launchProfileOf(detail.card)
+  const trialApproval = detail === undefined ? undefined : trialApprovalOf(detail.projection)
+  // The launch section owns the run-attempt entry: launching is host-only, so
+  // a phone keeps the action row without it and sees the host-only notice.
+  const runOffered = available.includes('runAttempt')
+  const rowActions = runOffered ? available.filter(action => action !== 'runAttempt') : available
+
+  /** Effective launch values: an advanced override wins over the stored profile. */
+  const effective = {
+    worktree: run.worktree.trim() !== '' ? run.worktree.trim() : profile?.worktree,
+    artifactPaths: parsePaths(run.artifactPaths).length > 0
+      ? parsePaths(run.artifactPaths)
+      : profile?.artifactPaths,
+    acceptancePath: run.acceptancePath.trim() !== '' ? run.acceptancePath.trim() : profile?.acceptancePath,
+    confirmedBy: actor !== '' ? actor : profile?.confirmedBy,
+  }
+  const cardBudget = detail?.card.budget
+  const budgetText = cardBudget === undefined
+    ? t('unset')
+    : [
+      cardBudget.mode === undefined ? undefined : t(budgetModeKey(cardBudget.mode)),
+      cardBudget.maxRounds === undefined ? undefined : `${t('cardBudgetMaxRounds')} ${cardBudget.maxRounds}`,
+      cardBudget.durationMs === undefined ? undefined : `${t('cardBudgetDuration')} ${cardBudget.durationMs}`,
+    ].filter(part => part !== undefined).join(' · ') || t('unset')
+  const unset = t('unset')
+  const dialogDetail = dialog === 'runAttempt'
+    ? t('dialogStartAttemptDetail', {
+      worktree: effective.worktree ?? unset,
+      acceptancePath: effective.acceptancePath ?? unset,
+      artifactPaths: effective.artifactPaths === undefined ? unset : effective.artifactPaths.join(', '),
+      confirmedBy: effective.confirmedBy ?? unset,
+      budget: budgetText,
+    })
+    : dialog === undefined ? '' : t(dialogDetailKey(dialog))
 
   /** Copy one experiment path; a path only exists after a launched attempt reported one. */
   const copyPath = async (path: string | undefined): Promise<void> => {
@@ -241,12 +313,44 @@ export function SelfDevelopmentPanel(props: SelfDevelopmentPanelProps): ReactNod
     setCopied(await writeClipboard(path))
   }
 
+  /** Store the advanced fields as the task's launch profile; both required paths must be filled. */
+  const saveProfile = (): void => {
+    /* v8 ignore next 2 -- the save button renders only inside a loaded task detail. */
+    if (selectedId === undefined) return
+    const input = buildLaunchProfileInput({
+      worktree: run.worktree, acceptancePath: run.acceptancePath, artifactPaths: run.artifactPaths,
+    })
+    /* v8 ignore next 2 -- the save button is disabled until both required paths are filled, so the builder cannot return undefined here. */
+    if (input === undefined) return
+    const ports = parsePorts(run.ports)
+    const dataHome = run.dataHome.trim()
+    const complete: LaunchProfileInput = {
+      ...input,
+      ...(dataHome === '' ? {} : { dataHome }),
+      ...(ports.length === 0 ? {} : { loopbackAllowlist: ports }),
+      ...(actor === '' ? {} : { confirmedBy: actor }),
+    }
+    void execute(() => api.setLaunchProfile(selectedId, complete))
+  }
+
+  const advancedOpen = advanced ?? profile === undefined
+  const submitPlanDraft = async (draft: PlanDraftInput): Promise<void> => {
+    /* v8 ignore next 2 -- the draft form renders only inside a loaded task detail. */
+    if (selectedId === undefined || detail === undefined) return
+    const revision = detail.projection.revision
+    await execute(() => api.submitPlanDraft(selectedId, revision, draft))
+  }
+
   return (
     <div className={css.panel} data-enabled="true" data-phone={phone ? 'true' : undefined}>
       <header className={css.header}>
         <h2 className={css.heading}>{t('title')}</h2>
+        <Button size="sm" onClick={() => { setNewTaskOpen(!newTaskOpen) }}>{t('newTaskTitle')}</Button>
         <Button size="sm" onClick={() => { void refresh() }}>{t('reload')}</Button>
       </header>
+      {newTaskOpen
+        ? <NewTaskForm t={t} busy={busy} onCreate={createTask} />
+        : null}
       <ul className={css.taskList} aria-label={t('listLabel')}>
         {(tasks ?? []).map(task => (
           <li key={task.taskId} className={css.taskRow}>
@@ -268,6 +372,7 @@ export function SelfDevelopmentPanel(props: SelfDevelopmentPanelProps): ReactNod
       {tasks !== undefined && tasks.length === 0 ? <p className={css.statusLine}>{t('listEmpty')}</p> : null}
       {listError !== undefined ? <p className={css.errorLine}>{listError}</p> : null}
       {detailError !== undefined ? <p className={css.errorLine}>{detailError}</p> : null}
+      {opError !== undefined ? <p className={css.errorLine}>{opError}</p> : null}
       {detail === undefined
         ? null
         : (
@@ -303,11 +408,11 @@ export function SelfDevelopmentPanel(props: SelfDevelopmentPanelProps): ReactNod
                       : <p className={css.fieldRow}>{`${t('projectionHandoffDetail')}: ${detail.projection.handoffDetail}`}</p>}
                   </>
                 )}
-              {detail.projection.trialApproval === undefined
+              {trialApproval === undefined
                 ? null
                 : (
                   <p className={css.fieldRow}>
-                    {t('trialApprovedBy', { approvedBy: detail.projection.trialApproval.approvedBy })}
+                    {t('trialApprovedBy', { approvedBy: trialApproval.approvedBy })}
                   </p>
                 )}
             </section>
@@ -321,83 +426,124 @@ export function SelfDevelopmentPanel(props: SelfDevelopmentPanelProps): ReactNod
               />
             </div>
             <div className={css.actions}>
-              {available.map(action => (
+              {rowActions.map(action => (
                 <Button
                   key={action}
                   variant="primary"
                   size="sm"
-                  disabled={busy || (action !== 'stop' && actor === '')}
+                  disabled={busy
+                    || (action !== 'stop' && actor === '')
+                    || (action === 'recordTrialApproval' && trialApproval !== undefined)}
                   onClick={() => { setDialog(action) }}
                 >
                   {t(actionLabelKey(action))}
                 </Button>
               ))}
             </div>
-            {opError !== undefined ? <p className={css.errorLine}>{opError}</p> : null}
-            {available.includes('runAttempt')
+            {trialApproval === undefined
+              ? null
+              : <p className={css.fieldRow}>{t('trialApprovedAlready', { approvedBy: trialApproval.approvedBy })}</p>}
+            {runOffered
               ? (
                 <section className={css.form} aria-label={t('actionStartAttempt')}>
-                  <div className={css.formRow}>
-                    <label className={css.formLabel} htmlFor="dsh-self-dev-worktree">{t('formWorktree')}</label>
-                    <Input
-                      id="dsh-self-dev-worktree"
-                      value={run.worktree}
-                      onChange={(event) => { setRun({ ...run, worktree: event.currentTarget.value }) }}
-                    />
-                    <span className={css.echo}>{t('echo', { value: run.worktree })}</span>
-                  </div>
-                  <div className={css.formRow}>
-                    <label className={css.formLabel} htmlFor="dsh-self-dev-artifacts">{t('formArtifactPaths')}</label>
-                    <Input
-                      id="dsh-self-dev-artifacts"
-                      value={run.artifactPaths}
-                      onChange={(event) => { setRun({ ...run, artifactPaths: event.currentTarget.value }) }}
-                    />
-                  </div>
-                  <div className={css.formRow}>
-                    <label className={css.formLabel} htmlFor="dsh-self-dev-acceptance">{t('formAcceptancePath')}</label>
-                    <Input
-                      id="dsh-self-dev-acceptance"
-                      value={run.acceptancePath}
-                      onChange={(event) => { setRun({ ...run, acceptancePath: event.currentTarget.value }) }}
-                    />
-                  </div>
-                  <div className={css.formRow}>
-                    <label className={css.formLabel} htmlFor="dsh-self-dev-datahome">{t('formDataHome')}</label>
-                    <Input
-                      id="dsh-self-dev-datahome"
-                      value={run.dataHome}
-                      disabled={phone}
-                      onChange={(event) => { setRun({ ...run, dataHome: event.currentTarget.value }) }}
-                    />
-                    <span className={css.echo}>
-                      {t('echo', { value: run.dataHome === '' ? t('unset') : run.dataHome })}
-                    </span>
-                  </div>
-                  <div className={css.formRow}>
-                    <label className={css.formLabel} htmlFor="dsh-self-dev-ports">{t('formPorts')}</label>
-                    <Input
-                      id="dsh-self-dev-ports"
-                      value={run.ports}
-                      onChange={(event) => { setRun({ ...run, ports: event.currentTarget.value }) }}
-                    />
-                  </div>
-                  <Checkbox
-                    checked={run.presence}
-                    label={t('presenceLabel')}
-                    onChange={(next) => { setRun({ ...run, presence: next }) }}
-                  />
-                  {!runReady ? <p className={css.statusLine}>{t('presenceRequired')}</p> : null}
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    disabled={!runReady || busy}
-                    onClick={() => { setDialog('runAttempt') }}
-                  >
-                    {t('submitForm')}
-                  </Button>
+                  {phone
+                    ? <p className={css.statusLine}>{t('errorSelfDevRemoteHostOnly')}</p>
+                    : (
+                      <>
+                        <p className={css.fieldRow}>{`${t('formWorktree')}: ${effective.worktree ?? unset}`}</p>
+                        <p className={css.fieldRow}>
+                          {`${t('formArtifactPaths')}: ${effective.artifactPaths === undefined ? unset : effective.artifactPaths.join(', ')}`}
+                        </p>
+                        <p className={css.fieldRow}>{`${t('formAcceptancePath')}: ${effective.acceptancePath ?? unset}`}</p>
+                        <p className={css.fieldRow}>{`${t('formConfirmedBy')}: ${effective.confirmedBy ?? unset}`}</p>
+                        <p className={css.fieldRow}>{`${t('cardBudget')}: ${budgetText}`}</p>
+                        <Checkbox
+                          checked={run.presence}
+                          label={t('presenceLabel')}
+                          onChange={(next) => { setRun({ ...run, presence: next }) }}
+                        />
+                        {!run.presence ? <p className={css.statusLine}>{t('presenceRequired')}</p> : null}
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          disabled={busy || !run.presence}
+                          onClick={() => { setDialog('runAttempt') }}
+                        >
+                          {t('actionStartAttempt')}
+                        </Button>
+                        <div className={css.actions}>
+                          <Button size="sm" onClick={() => { setAdvanced(!advancedOpen) }}>{t('advancedTitle')}</Button>
+                        </div>
+                        {advancedOpen
+                          ? (
+                            <>
+                              {profile === undefined ? <p className={css.statusLine}>{t('profileMissingHint')}</p> : null}
+                              <div className={css.formRow}>
+                                <label className={css.formLabel} htmlFor="dsh-self-dev-worktree">{t('formWorktree')}</label>
+                                <Input
+                                  id="dsh-self-dev-worktree"
+                                  value={run.worktree}
+                                  onChange={(event) => { setRun({ ...run, worktree: event.currentTarget.value }) }}
+                                />
+                                <span className={css.echo}>{t('echo', { value: run.worktree })}</span>
+                              </div>
+                              <div className={css.formRow}>
+                                <label className={css.formLabel} htmlFor="dsh-self-dev-artifacts">{t('formArtifactPaths')}</label>
+                                <Input
+                                  id="dsh-self-dev-artifacts"
+                                  value={run.artifactPaths}
+                                  onChange={(event) => { setRun({ ...run, artifactPaths: event.currentTarget.value }) }}
+                                />
+                              </div>
+                              <div className={css.formRow}>
+                                <label className={css.formLabel} htmlFor="dsh-self-dev-acceptance">{t('formAcceptancePath')}</label>
+                                <Input
+                                  id="dsh-self-dev-acceptance"
+                                  value={run.acceptancePath}
+                                  onChange={(event) => { setRun({ ...run, acceptancePath: event.currentTarget.value }) }}
+                                />
+                              </div>
+                              <div className={css.formRow}>
+                                <label className={css.formLabel} htmlFor="dsh-self-dev-datahome">{t('formDataHome')}</label>
+                                <Input
+                                  id="dsh-self-dev-datahome"
+                                  value={run.dataHome}
+                                  onChange={(event) => { setRun({ ...run, dataHome: event.currentTarget.value }) }}
+                                />
+                                <span className={css.echo}>
+                                  {t('echo', { value: run.dataHome === '' ? t('unset') : run.dataHome })}
+                                </span>
+                              </div>
+                              <div className={css.formRow}>
+                                <label className={css.formLabel} htmlFor="dsh-self-dev-ports">{t('formPorts')}</label>
+                                <Input
+                                  id="dsh-self-dev-ports"
+                                  value={run.ports}
+                                  onChange={(event) => { setRun({ ...run, ports: event.currentTarget.value }) }}
+                                />
+                              </div>
+                              {profile === undefined
+                                ? (
+                                  <Button
+                                    variant="primary"
+                                    size="sm"
+                                    disabled={busy || run.worktree.trim() === '' || run.acceptancePath.trim() === ''}
+                                    onClick={saveProfile}
+                                  >
+                                    {t('saveProfile')}
+                                  </Button>
+                                )
+                                : null}
+                            </>
+                          )
+                          : null}
+                      </>
+                    )}
                 </section>
               )
+              : null}
+            {detail.projection.status === 'planning-authorized'
+              ? <PlanDraftForm t={t} busy={busy} onSubmit={submitPlanDraft} />
               : null}
             {available.includes('approveBudget')
               ? (
@@ -466,7 +612,7 @@ export function SelfDevelopmentPanel(props: SelfDevelopmentPanelProps): ReactNod
       <RiskConfirmation
         open={dialog !== undefined}
         title={dialog === undefined ? '' : t(dialogTitleKey(dialog))}
-        description={dialog === undefined ? '' : t(dialogDetailKey(dialog))}
+        description={dialogDetail}
         acknowledgeLabel={dialog === 'runAttempt' ? t('presenceLabel') : t('dialogAcknowledge')}
         cancelLabel={t('dialogCancel')}
         closeLabel={t('dialogClose')}

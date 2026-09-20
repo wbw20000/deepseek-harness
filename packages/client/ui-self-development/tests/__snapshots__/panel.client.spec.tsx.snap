@@ -17,6 +17,12 @@ exports[`SelfDevelopmentPanel > keeps the panel single-column at 480px through t
       class="_button_4d2f85 _ghost_4d2f85 _sm_4d2f85"
       type="button"
     >
+      New task
+    </button>
+    <button
+      class="_button_4d2f85 _ghost_4d2f85 _sm_4d2f85"
+      type="button"
+    >
       Reload
     </button>
   </header>

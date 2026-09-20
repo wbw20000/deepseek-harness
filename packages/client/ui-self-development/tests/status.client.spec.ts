@@ -35,6 +35,7 @@ describe('self-development view keys', () => {
     expect(zh[errorKey('self-development/actor-forbidden')]).toBe('当前操作者不在允许名单中')
     expect(zh[errorKey('self-development/presence-unconfirmed')]).toBe('缺少显式在场确认')
     expect(zh[errorKey('self-development/runner-unavailable')]).toBe('运行器插件未加载，无法启动轮次')
+    expect(zh[errorKey('self-development/host-only-field')]).toBe('此操作只能在电脑上完成；手机端只能查看、确认与停止')
     // A core or runner rejection arrives as self-development/core; the generic
     // line carries its message verbatim.
     expect(errorKey('self-development/core')).toBe('errorGeneric')

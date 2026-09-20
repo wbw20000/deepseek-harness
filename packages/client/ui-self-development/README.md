@@ -43,18 +43,27 @@ Every write requires a second confirmation dialog with an acknowledgement checkb
 
 | Button | Status that offers it | Remote method |
 | --- | --- | --- |
+| New task | always (form above the list) | `createTask` |
+| Submit plan draft | planning-authorized (form: case rows plus manual cases) | `submitPlanDraft` |
 | Authorize planning | draft | `authorizePlanning` |
 | Confirm plan | awaiting plan confirmation (shows the automated and manual cases first) | `confirmPlan` |
 | Approve budget | awaiting development approval (explicit form: mode, rounds, time, phase timeout, steps, no-progress limit) | `approveBudget` |
 | Start one round | ready or attempting | `runAttempt` |
 | Stop | any running state | `stop` |
-| Record trial approval | awaiting trial, bound to the verified result | `recordTrialApproval` |
+| Record trial approval | awaiting trial, bound to the verified result; disabled with the approver named once one exists | `recordTrialApproval` |
+| Save as profile | launch section of a task without a profile | `setLaunchProfile` |
 
-**Start one round** stays disabled until the presence checkbox **I am at the computer; this run is supervised** is checked; the request then carries `presenceAcknowledged: true` and never defaults it. The acting person types `confirmedBy` themselves; the worktree, artifact, acceptance, and data-home paths come from the stable-side form and echo back before the dialog. There is no upgrade-approval button.
+### One-click launch and the launch profile
+
+The **Start one round** area derives its fields from the task's stored launch profile (`card.launchProfile`): the default view is four read-only rows (worktree, artifact paths, acceptance definition path, confirmed-by) plus the budget, the presence checkbox, and one button. Checking the presence box is the only input a launch needs; the confirm dialog lists the four effective values and the budget, and the request then carries only `taskId`, `expectedRevision`, and `presenceAcknowledged: true`. The **Advanced (override profile)** area keeps the five free-form inputs for overriding the profile value by value; a filled override is the only extra field the request carries. When the task has no launch profile the advanced area opens by itself with a hint, and **Save as profile** stores the filled fields through `setLaunchProfile`.
+
+### New task and plan draft forms
+
+**New task** opens a form above the list: requirement, allowed modification scope (comma-separated), stable baseline digest (64-digit hex — take the sha256 of the current HEAD), and the creator, who is remembered in this browser and prefilled next time. The optional launch profile (worktree, acceptance definition path, artifact paths) becomes the third `createTask` argument when filled. **Submit plan draft** appears while the task is planning-authorized: case rows (case id, requirement, comma-separated assertion ids) can be added and removed, manual cases are a comma-separated list, and a half-typed row is dropped instead of submitted.
 
 ### Not enabled, and the phone whitelist
 
-When the composition does not load the generated `selfDevelopmentRemote` namespace, the panel renders a not-enabled view instead of failing; ordinary chat compositions never create an authorization. On a phone (a non-loopback Host connection) the whitelist keeps every read and every authorization button, hides the experiment and evidence paths behind one notice, and disables the host-only data-home field; starting a round still requires the presence acknowledgement on the phone.
+When the composition does not load the generated `selfDevelopmentRemote` namespace, the panel renders a not-enabled view instead of failing; ordinary chat compositions never create an authorization. On a phone (a non-loopback Host connection) the whitelist keeps every read and every whitelisted authorization button, hides the experiment and evidence paths behind one notice, replaces the launch section with the host-only notice (`self-development/host-only-field` wording: view, confirm, and stop only), and never renders the profile forms' host-only fields.
 
 ### Per-round evidence
 
