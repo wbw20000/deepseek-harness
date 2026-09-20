@@ -43,8 +43,9 @@ kind: "package-reference"
 | `buildTimeoutMs` | 单次工作区构建允许的最长墙钟时间，超时则本次打开失败；默认 20 分钟。 |
 | `readyTimeoutMs` | 等待 web 进程打印 `dsh web: http://…` 就绪行的最长时间；默认 60 秒。 |
 | `autoOpen` | `campaign-passed` 事件到达时是否自动打开该任务的试验版实例；默认 `true`。 |
+| `pnpmBinary` | 构建时优先尝试的 pnpm 绝对路径。默认不设置；不设置或不存在时依次退回宿主 `PATH` 上的 `pnpm`、工作区自己安装的 pnpm、`nodeBinary` 旁边的 corepack shim。 |
 
-配置在构造时校验：`nodeBinary` 或 `controlDirectory` 不是绝对路径、`portRange` 的某个端口越出 1–65535 或区间不是升序、任一超时不是正整数——这些都会让挂载直接失败，而不是留到后面某次打开时才退化。
+配置在构造时校验：`nodeBinary`、`controlDirectory` 或配置了的 `pnpmBinary` 不是绝对路径、`portRange` 的某个端口越出 1–65535 或区间不是升序、任一超时不是正整数——这些都会让挂载直接失败，而不是留到后面某次打开时才退化。
 
 每个方法都先调用 `assertCallerIsHost`：没有连接服务时，或在任何 `@Remote` 请求之外，调用都记为稳定版宿主——这与 Remote 门面自身在判定"谁能设置隔离字段"时用的是同一套读法。非宿主调用方会被以 `self-development/host-only-field` 拒绝；它仍可以通过门面观察任务进展。
 
@@ -56,7 +57,7 @@ kind: "package-reference"
 `openTrial(taskId)` 通过门面的 `getTask` 读取任务已存储的启动档案。档案没有 `dataHome` 时，退回到受监督 runner 配置的 `dshHome`——通过 `ctx.get('selfDevelopmentRunner')` 结构式读取，这样本部署就不必直接依赖 runner 包；两个来源都没有则以 `self-development/trial-unavailable` 拒绝。一旦工作区与数据目录都确定：
 
 1. **DSH 仓库判定。** 工作区根目录的 `package.json` 必须命名为 `@deepseek-ai/dsh-root`。不满足这一判定的工作区——比如一个普通的 demo 仓库——会返回 `{ url: undefined, reason: 'worktree is not a DSH repository; artifacts at <path>' }` 而不是一个实例；不会有任何构建或启动发生。
-2. **构建。** 在工作区内运行 `pnpm run --silent build`：已安装时用工作区自己的 `node_modules/.bin/pnpm`，否则用 `nodeBinary` 旁边的 corepack shim。找不到 pnpm、以非零码退出、或跑过 `buildTimeoutMs`，都会让本次打开以 `self-development/trial-build-failed` 失败；无论哪种情况，构建的 stdout 与 stderr 都会流入该任务的日志。
+2. **构建。** 在工作区内运行 `pnpm run --silent build`，并透传宿主自己的环境（`PATH`、`HOME` 等），好让解析出的 pnpm 能找到它自己的依赖。用哪个 pnpm 跑，按顺序试：配置的 `pnpmBinary`、宿主 `PATH` 上能找到的 `pnpm`、工作区自己安装的 pnpm、`nodeBinary` 旁边的 corepack shim——每一个不存在的候选都只是跳过，不算失败。所有候选都找不到、以非零码退出、或跑过 `buildTimeoutMs`，才会让本次打开以 `self-development/trial-build-failed` 失败；无论哪种情况，构建的 stdout 与 stderr 都会流入该任务的日志。
 3. **端口分配。** 在 `portRange` 中扫描第一个空闲的回环端口，跳过本进程已经分给存活实例的端口。区间耗尽则以 `self-development/trial-port-exhausted` 拒绝。
 4. **启动。** 在工作区内运行 `node apps/cli/lib/bin.js web --host 127.0.0.1 --port <port> --no-open`，`DSH_HOME` 设为解析出的数据目录，以独立进程组方式后台启动。实例的地址从其输出的第一行 `dsh web: http://…` 中读取；进程退出、或在 `readyTimeoutMs` 之前始终没有打印这一行，都会让打开以 `self-development/trial-start-failed` 失败，并且在抛出失败之前会先把进程组收尾掉。
 
@@ -78,7 +79,7 @@ kind: "package-reference"
 
 当 `autoOpen` 为 `true`（默认值）且能结构式读到一个事件消费方时——通过 `ctx.get('selfDevelopmentEvents')` 读取，这样本包也不必直接依赖 events 包——本服务会订阅其通知，并在 `campaign-passed` 事件点名某任务时自行调用 `openTrial`。本 worktree 的 events 消费方目前还不会发出这种事件种类；在上游把这层映射接上之前，这条订阅会一直处于静默状态，届时这里不需要再做任何改动。
 
-自动打开失败时——构建失败、端口区间耗尽、或任何 `openTrial` 可能拒绝的原因——会被记成一条警告日志，绝不会向外传播：一次通知不应导致拒绝。该任务仍然可以通过显式调用 `openTrial` 来关闭或重新打开。
+自动打开失败时——构建失败、端口区间耗尽、或任何 `openTrial` 可能拒绝的原因——既会记一条服务日志的警告，也会追加进该任务自己的 `trials/<taskId>.log`，这样即使没人盯着宿主的通用日志也能看到失败；无论哪种记法，失败都绝不会向外传播，因为一次通知不应导致拒绝。该任务仍然可以通过显式调用 `openTrial` 来关闭或重新打开。
 
 -----
 

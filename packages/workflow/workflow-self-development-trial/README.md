@@ -43,8 +43,9 @@ See a self-development task's experiment running, not just read about it. Call `
 | `buildTimeoutMs` | Maximum wall time of one worktree build before the open fails; default 20 minutes. |
 | `readyTimeoutMs` | Maximum wait for the web process's `dsh web: http://…` readiness line; default 60 seconds. |
 | `autoOpen` | Whether a `campaign-passed` event automatically opens the task's trial instance; default `true`. |
+| `pnpmBinary` | Absolute path of the pnpm to build with, tried first. Unset by default; falls through to `pnpm` on the host `PATH`, the worktree's own installed pnpm, and the corepack shim next to `nodeBinary`. |
 
-Configuration is validated at construction: a `nodeBinary` or `controlDirectory` that is not an absolute path, a `portRange` bound outside 1–65535 or not ascending, or a non-positive-integer deadline fails the mount instead of degrading a later open.
+Configuration is validated at construction: a `nodeBinary`, `controlDirectory`, or configured `pnpmBinary` that is not an absolute path, a `portRange` bound outside 1–65535 or not ascending, or a non-positive-integer deadline fails the mount instead of degrading a later open.
 
 Every method calls `assertCallerIsHost` first: without a connection service, or outside any `@Remote` request, the call counts as the stable host — the same reading the Remote facade uses for its own isolation-setting operations. A non-host caller is refused with `self-development/host-only-field`; it may still watch a task's progress through the facade.
 
@@ -56,7 +57,7 @@ Every method calls `assertCallerIsHost` first: without a connection service, or 
 `openTrial(taskId)` reads the task's stored launch profile through the facade's `getTask`. A profile without a `dataHome` falls back to the supervised runner's configured `dshHome`, read structurally through `ctx.get('selfDevelopmentRunner')` so this deployment never has to depend on the runner package directly; a profile with neither source refuses with `self-development/trial-unavailable`. Once a worktree and data home are known:
 
 1. **DSH-repository check.** The worktree's root `package.json` must name `@deepseek-ai/dsh-root`. A worktree that fails this check — a plain demo repository, for instance — returns `{ url: undefined, reason: 'worktree is not a DSH repository; artifacts at <path>' }` instead of an instance; nothing is built or spawned.
-2. **Build.** `pnpm run --silent build` runs inside the worktree, using the worktree's own `node_modules/.bin/pnpm` when installed, otherwise the corepack shim next to `nodeBinary`. A missing pnpm, a nonzero exit, or a run past `buildTimeoutMs` fails the open with `self-development/trial-build-failed`; the build's stdout and stderr stream into the task's log either way.
+2. **Build.** `pnpm run --silent build` runs inside the worktree, with the host's own environment (`PATH`, `HOME`, and the rest) passed through so the resolved pnpm can find its own dependencies. The pnpm to run it with is the first of: the configured `pnpmBinary`, `pnpm` found on the host `PATH`, the worktree's own installed pnpm, or the corepack shim next to `nodeBinary` — each candidate that does not exist is skipped, not a hard failure by itself. A missing pnpm everywhere, a nonzero exit, or a run past `buildTimeoutMs` fails the open with `self-development/trial-build-failed`; the build's stdout and stderr stream into the task's log either way.
 3. **Port allocation.** The first free loopback port in `portRange`, skipping ports already handed to this process's own live instances. An exhausted range fails with `self-development/trial-port-exhausted`.
 4. **Spawn.** `node apps/cli/lib/bin.js web --host 127.0.0.1 --port <port> --no-open` runs inside the worktree, `DSH_HOME` set to the resolved data home, detached into its own process group. The instance's URL is read off the first `dsh web: http://…` line in its output; a process that exits or never prints that line before `readyTimeoutMs` fails the open with `self-development/trial-start-failed`, and the group is torn down before the failure is raised.
 
@@ -78,7 +79,7 @@ The build's and web process's combined output streams into `<controlDirectory>/t
 
 When `autoOpen` is `true` (the default) and an events consumer is reachable — read structurally through `ctx.get('selfDevelopmentEvents')`, so this package never has to depend on the events package directly — the service subscribes to its notifications and calls `openTrial` on its own once a `campaign-passed` event names a task. This worktree's events consumer does not emit that kind yet; the subscription stays inert until the mapping lands upstream, at which point no further wiring is needed here.
 
-An automatic open that fails — a build failure, an exhausted port range, anything `openTrial` can reject with — is logged as a warning and never propagates: a notification must not reject. Closing or reopening that task is still available through an explicit `openTrial` call.
+An automatic open that fails — a build failure, an exhausted port range, anything `openTrial` can reject with — is logged as a warning through the service logger and appended to the task's own `trials/<taskId>.log`, so the failure is visible even when the host's general log is not being watched; either way the failure never propagates, since a notification must not reject. Closing or reopening that task is still available through an explicit `openTrial` call.
 
 -----
 

@@ -9,12 +9,12 @@
 import { spawn } from 'node:child_process'
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import process from 'node:process'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 import { spawnWebProcess, redactToken, READY_URL_PATTERN, WEB_ARGV_PREFIX } from '../src/web-process.ts'
-import { runBuild, resolveBuildCommand, statIsFile, worktreePnpmPath, corepackPath, BUILD_ARGV } from '../src/build.ts'
+import { runBuild, resolveBuildCommand, resolveFromPath, statIsFile, worktreePnpmPath, corepackPath, BUILD_ARGV } from '../src/build.ts'
 import { signalGroup, stopProcessGroup, waitForExit, TERM_GRACE_MS, KILL_WAIT_MS } from '../src/process-group.ts'
 import {
   appendTrialLog,
@@ -146,25 +146,94 @@ describe('sidecar storage', () => {
 })
 
 describe('build command resolution', () => {
-  it('prefers the worktree pnpm and falls back to the node-sibling corepack', async () => {
+  it('prefers an explicit pnpmBinary over a worktree pnpm and a PATH pnpm', async () => {
+    const root = await makeBase()
+    const pnpmBinary = join(root, 'configured-pnpm')
+    await writeFile(pnpmBinary, '#!/bin/sh\n')
+    await chmod(pnpmBinary, 0o755)
+    const worktreePnpm = worktreePnpmPath(root)
+    await mkdir(join(root, 'node_modules', '.bin'), { recursive: true })
+    await writeFile(worktreePnpm, '#!/bin/sh\n')
+    await chmod(worktreePnpm, 0o755)
+    const pathDir = join(root, 'path-bin')
+    await mkdir(pathDir, { recursive: true })
+    await writeFile(join(pathDir, 'pnpm'), '#!/bin/sh\n')
+    await chmod(join(pathDir, 'pnpm'), 0o755)
+    expect(await resolveBuildCommand(root, '/bin/node', pnpmBinary, pathDir))
+      .toEqual([pnpmBinary, ...BUILD_ARGV])
+  })
+
+  it('falls through a configured pnpmBinary that does not exist to the next candidate', async () => {
+    const root = await makeBase()
+    const pathDir = join(root, 'path-bin')
+    await mkdir(pathDir, { recursive: true })
+    await writeFile(join(pathDir, 'pnpm'), '#!/bin/sh\n')
+    await chmod(join(pathDir, 'pnpm'), 0o755)
+    expect(await resolveBuildCommand(root, '/bin/node', join(root, 'missing-pnpm'), pathDir))
+      .toEqual([join(pathDir, 'pnpm'), ...BUILD_ARGV])
+  })
+
+  it('resolves a bare pnpm from PATH ahead of the worktree and corepack fallbacks', async () => {
+    const root = await makeBase()
+    const worktreePnpm = worktreePnpmPath(root)
+    await mkdir(join(root, 'node_modules', '.bin'), { recursive: true })
+    await writeFile(worktreePnpm, '#!/bin/sh\n')
+    await chmod(worktreePnpm, 0o755)
+    const empty = join(root, 'path-empty')
+    const withPnpm = join(root, 'path-with-pnpm')
+    await mkdir(empty, { recursive: true })
+    await mkdir(withPnpm, { recursive: true })
+    await writeFile(join(withPnpm, 'pnpm'), '#!/bin/sh\n')
+    await chmod(join(withPnpm, 'pnpm'), 0o755)
+    // The first PATH directory has no pnpm; resolution keeps scanning to the second.
+    const pathEnv = [empty, withPnpm].join(delimiter)
+    expect(await resolveBuildCommand(root, '/bin/node', undefined, pathEnv))
+      .toEqual([join(withPnpm, 'pnpm'), ...BUILD_ARGV])
+  })
+
+  it('prefers the worktree pnpm over corepack when neither pnpmBinary nor PATH resolve', async () => {
     const root = await makeBase()
     const pnpm = worktreePnpmPath(root)
     expect(pnpm).toBe(join(root, 'node_modules', '.bin', 'pnpm'))
     expect(BUILD_ARGV).toEqual(['run', '--silent', 'build'])
-    await expect(resolveBuildCommand(root, '/bin/node', async () => false))
-      .rejects.toMatchObject({ code: 'self-development/trial-build-failed' })
     await mkdir(join(root, 'node_modules', '.bin'), { recursive: true })
     await writeFile(pnpm, '#!/bin/sh\n')
     await chmod(pnpm, 0o755)
-    expect(await resolveBuildCommand(root, '/bin/node')).toEqual([pnpm, ...BUILD_ARGV])
+    expect(await resolveBuildCommand(root, '/bin/node', undefined, undefined)).toEqual([pnpm, ...BUILD_ARGV])
+  })
+
+  it('falls back to the node-sibling corepack when nothing else resolves', async () => {
+    const root = await makeBase()
     const withCorepack = join(root, 'with-corepack')
     await mkdir(withCorepack, { recursive: true })
     const corepack = corepackPath(join(withCorepack, 'node'))
     expect(corepack).toBe(join(withCorepack, 'corepack'))
     await writeFile(corepack, '#!/bin/sh\n')
     await chmod(corepack, 0o755)
-    expect(await resolveBuildCommand(withCorepack, join(withCorepack, 'node'), statIsFile))
+    expect(await resolveBuildCommand(withCorepack, join(withCorepack, 'node'), undefined, undefined, statIsFile))
       .toEqual([corepack, 'pnpm', ...BUILD_ARGV])
+  })
+
+  it('names every checked candidate when none resolve', async () => {
+    const root = await makeBase()
+    const pnpmBinary = join(root, 'configured-pnpm')
+    const error = await resolveBuildCommand(root, '/bin/node', pnpmBinary, '/definitely/not/a/real/path', async () => false)
+      .then(() => { throw new Error('expected resolveBuildCommand to reject') }, (reason: unknown) => reason)
+    expect(error).toMatchObject({ code: 'self-development/trial-build-failed' })
+    const message = (error as Error).message
+    expect(message).toContain(pnpmBinary)
+    expect(message).toContain('/definitely/not/a/real/path')
+    expect(message).toContain(worktreePnpmPath(root))
+    expect(message).toContain(corepackPath('/bin/node'))
+  })
+
+  it('reports an unconfigured pnpmBinary and an unset PATH by name', async () => {
+    const root = await makeBase()
+    const error = await resolveBuildCommand(root, '/bin/node', undefined, undefined, async () => false)
+      .then(() => { throw new Error('expected resolveBuildCommand to reject') }, (reason: unknown) => reason)
+    const message = (error as Error).message
+    expect(message).toContain('not configured')
+    expect(message).toContain('unset')
   })
 
   it('probes file existence fail-closed', async () => {
@@ -174,6 +243,25 @@ describe('build command resolution', () => {
     const file = join(root, 'file')
     await writeFile(file, 'x\n')
     expect(await statIsFile(file)).toBe(true)
+  })
+})
+
+describe('resolveFromPath', () => {
+  it('matches nothing for an unset or empty PATH', async () => {
+    expect(await resolveFromPath('pnpm', undefined)).toBeUndefined()
+    expect(await resolveFromPath('pnpm', '')).toBeUndefined()
+  })
+
+  it('skips empty PATH segments and an entry without the binary', async () => {
+    const root = await makeBase()
+    const withIt = join(root, 'has-pnpm')
+    await mkdir(withIt, { recursive: true })
+    await writeFile(join(withIt, 'pnpm'), '#!/bin/sh\n')
+    await chmod(join(withIt, 'pnpm'), 0o755)
+    const without = join(root, 'no-pnpm')
+    await mkdir(without, { recursive: true })
+    const pathEnv = ['', without, withIt].join(delimiter)
+    expect(await resolveFromPath('pnpm', pathEnv)).toBe(join(withIt, 'pnpm'))
   })
 })
 
