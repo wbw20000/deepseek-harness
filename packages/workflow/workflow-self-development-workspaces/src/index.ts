@@ -34,7 +34,7 @@ export { releaseWorkspace } from './release.ts'
 export { integrate } from './integration.ts'
 export { copyDataHomeTemplate, templateExists } from './template.ts'
 export { validateTaskId, realpathIfInside } from './paths.ts'
-export type { TaskWorkspace, WorkspacesConfig, IntegrationResult, IntegrationRequest } from './types.ts'
+export type { TaskWorkspace, WorkspacesConfig, IntegrationResult, IntegrationRequest, VerifyOutcome } from './types.ts'
 
 /**
  * Cordis service composing workspace allocation, release, and serialized
@@ -121,8 +121,12 @@ export class SelfDevelopmentWorkspaces extends Service {
    * Integrate one allocated task's worktree into a project branch. Calls on
    * one service instance serialize in memory; calls across processes
    * serialize on the experiments root's integration lock. Git failures inside
-   * the integration are reported as a `failed` result, never thrown.
-   * @param req - task id, target branch, and actor.
+   * the integration are reported as a `failed` result, never thrown. When
+   * `req.verify` is supplied, it runs once against the worktree after a
+   * rebase (when one was needed) and before the fast-forward, whether or not
+   * the baseline had moved; a rejection or a thrown error both report
+   * `verification-failed` and leave the target branch untouched.
+   * @param req - task id, target branch, actor, and optional verification gate.
    * @returns the integration outcome.
    * @throws SelfDevelopmentWorkspacesError with `SELF_DEV_WORKSPACE_TASK_UNKNOWN` when the
    *   task has no allocated workspace, and with `SELF_DEV_WORKSPACE_INTEGRATION_BUSY`

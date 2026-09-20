@@ -70,6 +70,17 @@ kind: "package-reference"
 
 `campaign-ended` 的 `<status>` 是战役封闭词表的终局状态（`exhausted`、`stopped` 或 `failed`）——绝不是战役记录的自由文本 `reason`，后者留在 Remote 门面内部。`campaign-passed` 没有 `<status>` 插值：通过永远是同一固定标题，与 `task/passed` 自己的模板形状一致。载荷形状与 `mapCampaignPassedToEvent`/`mapCampaignEndedToEvent` 映射函数见 [`campaign.ts`](src/campaign.ts)；发出它们的战役循环见 Remote 门面自己的 README。
 
+### 合并事件
+
+另外两个原始 Cordis 事件映射进同一套统一词表，声明与折叠方式与战役事件相同，但由驱动"合并到稳定版"流程的聊天工具发出——核心从不发出它们，核心没有 git 集成或稳定侧升级的概念：
+
+| 原始事件 | Kind | 标题 |
+|---|---|---|
+| `self-development/merge-integrated` | `awaiting-trial` | `Task integrated into stable` |
+| `self-development/merge-blocked` | `failed` | `Merge blocked: <status>` |
+
+`merge-blocked` 的 `<status>` 是合并流程自己拥有的封闭词表原因，不属于本包——可能是 `workspaces.integrate` 的结果状态（`conflict`、`verification-failed`、`failed`），也可能是聊天层的拒绝（例如任务不处于 `awaiting-trial`）——绝不是合并流程的自由文本细节（git 失败原因、门禁命令的输出尾部）。`merge-integrated` 没有 `<status>` 插值：合并完成永远是同一固定标题。载荷形状与 `mapMergeIntegratedToEvent`/`mapMergeBlockedToEvent` 映射函数见 [`merge.ts`](src/merge.ts)。
+
 -----
 
 <a id="local-notifications"></a>
@@ -99,6 +110,7 @@ kind: "package-reference"
 - **`turn-finished` 是保留种类，当前不发射**——现有映射不会产生它；在有限循环投影出现之前，消费方不得依赖收到它。
 - **失败原因不进入事件**——runner 的失败原因文本与交接细节只存在于任务日志；通知事件只携带轮数与封闭词表中的原因，需要全文的消费方必须读取任务日志。
 - **重启后被恢复为 `stopped` 的战役不发射事件**——Remote 门面的一次性重启扫描直接把该状态写进战役记录，不发出 `campaign-ended`；消费方必须轮询 `campaign(taskId)` 才能得知崩溃进程留下的战役已被处理。
+- **`merge-integrated` 复用了 `awaiting-trial` 这个 kind**——五值词表里没有专门表示"好消息、无需操作"的 kind，而一次完成的合并实际上并没有留下待处理的试用。消费方应当把它当作纯提示信息看待，而不是"还有试用要处理"的信号；新增专门的 kind 会牵连到所有声明这套词表的其他包（见 [`types.ts`](src/types.ts)），暂缓处理。
 
 <a id="dev-note"></a>
 ### 开发备注

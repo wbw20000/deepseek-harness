@@ -70,6 +70,17 @@ Two further raw Cordis events map into the same unified vocabulary, declared and
 
 `campaign-ended`'s `<status>` is the campaign's closed-vocabulary end status (`exhausted`, `stopped`, or `failed`) — never the campaign record's free-text `reason`, which stays inside the Remote facade. `campaign-passed` has no `<status>` interpolation: a pass is always the same fixed title, matching `task/passed`'s own template shape. See [`campaign.ts`](src/campaign.ts) for the payload shapes and the `mapCampaignPassedToEvent`/`mapCampaignEndedToEvent` mapping functions, and the Remote facade's own README for the campaign loop that emits them.
 
+### Merge events
+
+Two further raw Cordis events map into the same unified vocabulary, declared and folded by this package the same way the campaign events are, but emitted by the chat tool that drives the merge-to-stable flow — never by the core, which has no notion of a git integration or a stable-side upgrade:
+
+| Raw event | Kind | Title |
+|---|---|---|
+| `self-development/merge-integrated` | `awaiting-trial` | `Task integrated into stable` |
+| `self-development/merge-blocked` | `failed` | `Merge blocked: <status>` |
+
+`merge-blocked`'s `<status>` is a closed-vocabulary reason owned by the merge flow, not by this package — a `workspaces.integrate` result status (`conflict`, `verification-failed`, `failed`) or a chat-level refusal (for example a task that is not `awaiting-trial`) — never the merge flow's free-text detail (a git failure reason, a gate command's output tail). `merge-integrated` has no `<status>` interpolation: a completed merge is always the same fixed title. See [`merge.ts`](src/merge.ts) for the payload shapes and the `mapMergeIntegratedToEvent`/`mapMergeBlockedToEvent` mapping functions.
+
 -----
 
 <a id="local-notifications"></a>
@@ -99,6 +110,7 @@ None. The service touches no prompt, session, or request path, so KV-cache reuse
 - **`turn-finished` is reserved, not emitted** — no current mapping produces it, so consumers must not rely on receiving it until the finite-loop projection exists.
 - **Failure reasons are not in events** — the runner's failure reason text and the handoff detail stay in the task journal; a notification event carries only the round number and the closed-vocabulary reason, so a consumer that needs the text must read the journal.
 - **A campaign a restart recovers as `stopped` fires no event** — the Remote facade's one-time restart scan writes that status directly to the campaign record without emitting `campaign-ended`; a consumer must poll `campaign(taskId)` to notice a campaign a crashed process left running.
+- **`merge-integrated` reuses the `awaiting-trial` kind** — the five-value vocabulary has no dedicated "positive, no action needed" kind, and a completed merge leaves no trial actually pending. Consumers should read it as informational, not as a cue to look for a trial; adding a dedicated kind would ripple into every other package that declares this vocabulary (see [`types.ts`](src/types.ts)) and is deferred.
 
 <a id="dev-note"></a>
 ### Dev Note

@@ -37,10 +37,27 @@ export interface TaskWorkspace {
   readonly allocatedAt: number
 }
 
-/** Outcome of one serialized integration of a task's worktree into a target branch. */
+/**
+ * Outcome of one caller-supplied verification gate run against the
+ * post-rebase worktree, immediately before an integration would fast-forward.
+ */
+export type VerifyOutcome =
+  | { ok: true }
+  | { ok: false; reason: string }
+
+/**
+ * Outcome of one serialized integration of a task's worktree into a target
+ * branch. `baseMoved` is true whenever the target tip differed from the
+ * allocation's `baseCommit` and a rebase was attempted, whether or not that
+ * rebase changed any commit id. `verification-failed` is reported only when
+ * `IntegrationRequest.verify` was supplied and it resolved `{ ok: false }` or
+ * threw; the target branch is left untouched and, when a rebase ran, its
+ * result stays in the worktree for a follow-up fix.
+ */
 export type IntegrationResult =
-  | { status: 'integrated'; commit: string }
+  | { status: 'integrated'; commit: string; baseMoved: boolean }
   | { status: 'conflict'; files: readonly string[]; baseMoved: true }
+  | { status: 'verification-failed'; reason: string; baseMoved: boolean }
   | { status: 'failed'; reason: string }
 
 /** Request to integrate one allocated task's worktree into a target branch. */
@@ -51,4 +68,13 @@ export interface IntegrationRequest {
   readonly targetBranch: string
   /** Human-readable actor recorded nowhere but the caller's own log; reserved for audit context. */
   readonly actor: string
+  /**
+   * Optional verification gate run against the worktree after a rebase (when
+   * one was needed) and before the fast-forward, whether or not the baseline
+   * had moved. A rejection or a throw both stop the integration before the
+   * fast-forward: {@link IntegrationResult}'s `verification-failed` reports a
+   * thrown error the same as an `{ ok: false }` resolution, carrying its
+   * string form as `reason`.
+   */
+  readonly verify?: (worktree: string) => Promise<VerifyOutcome>
 }

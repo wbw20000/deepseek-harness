@@ -16,6 +16,8 @@ import { mapCampaignEndedToEvent, mapCampaignPassedToEvent } from './campaign.ts
 import type { CampaignEndedPayload, CampaignPassedPayload } from './campaign.ts'
 import { mapCommittedToEvent } from './mapping.ts'
 import type { CommittedPayload } from './mapping.ts'
+import { mapMergeBlockedToEvent, mapMergeIntegratedToEvent } from './merge.ts'
+import type { MergeBlockedPayload, MergeIntegratedPayload } from './merge.ts'
 import { runNotify } from './notify.ts'
 import type { NotifyOptions } from './notify.ts'
 import type { ResolvedSelfDevelopmentEventsConfig, SelfDevelopmentEvent, SelfDevelopmentEventsConfig } from './types.ts'
@@ -26,6 +28,8 @@ export { mapCampaignEndedToEvent, mapCampaignPassedToEvent } from './campaign.ts
 export type { CampaignEndedPayload, CampaignEndedStatus, CampaignPassedPayload } from './campaign.ts'
 export { mapCommittedToEvent } from './mapping.ts'
 export type { CommittedPayload } from './mapping.ts'
+export { mapMergeBlockedToEvent, mapMergeIntegratedToEvent } from './merge.ts'
+export type { MergeBlockedPayload, MergeIntegratedPayload } from './merge.ts'
 export { NOTIFY_TIMEOUT_MS, runNotify } from './notify.ts'
 export type { NotifyOptions } from './notify.ts'
 
@@ -87,6 +91,8 @@ export class SelfDevelopmentEvents extends Service {
     ctx.on('self-development/committed', (payload) => { this.ingest(payload) })
     ctx.on('self-development/campaign-passed', (payload) => { this.ingestCampaignPassed(payload) })
     ctx.on('self-development/campaign-ended', (payload) => { this.ingestCampaignEnded(payload) })
+    ctx.on('self-development/merge-integrated', (payload) => { this.ingestMergeIntegrated(payload) })
+    ctx.on('self-development/merge-blocked', (payload) => { this.ingestMergeBlocked(payload) })
   }
 
   /**
@@ -137,6 +143,16 @@ export class SelfDevelopmentEvents extends Service {
   /** Fold one campaign-ended payload into the unified event and publish it. */
   private ingestCampaignEnded(payload: CampaignEndedPayload): void {
     this.publish(mapCampaignEndedToEvent(payload, this.now))
+  }
+
+  /** Fold one merge-integrated payload into the unified event and publish it. */
+  private ingestMergeIntegrated(payload: MergeIntegratedPayload): void {
+    this.publish(mapMergeIntegratedToEvent(payload, this.now))
+  }
+
+  /** Fold one merge-blocked payload into the unified event and publish it. */
+  private ingestMergeBlocked(payload: MergeBlockedPayload): void {
+    this.publish(mapMergeBlockedToEvent(payload, this.now))
   }
 
   /**
