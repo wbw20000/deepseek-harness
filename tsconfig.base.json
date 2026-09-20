@@ -503,6 +503,7 @@
       "@deepseek-ai/dsh-workflow/invariant": ["./packages/workflow/workflow/src/invariant.ts"],
       "@deepseek-ai/dsh-workflow-ptc": ["./packages/workflow/workflow-ptc/src"],
       "@deepseek-ai/dsh-workflow-self-development": ["./packages/workflow/workflow-self-development/src"],
+      "@deepseek-ai/dsh-workflow-self-development-chat": ["./packages/workflow/workflow-self-development-chat/src"],
       "@deepseek-ai/dsh-workflow-self-development-events": ["./packages/workflow/workflow-self-development-events/src"],
       "@deepseek-ai/dsh-workflow-self-development-remote": ["./packages/workflow/workflow-self-development-remote/src"],
       "@deepseek-ai/dsh-workflow-self-development-runner": ["./packages/workflow/workflow-self-development-runner/src"],

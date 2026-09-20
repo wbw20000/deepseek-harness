@@ -130,6 +130,7 @@ export const SERVICE_PAGE: Record<string, string> = {
   web: 'web.md',
   workflowEngine: 'workflow.md',
   selfDevelopmentTasks: 'workflow.md',
+  selfDevelopmentChat: 'workflow.md',
   selfDevelopmentRunner: 'workflow.md',
   selfDevelopmentRemote: 'workflow.md',
   selfDevelopmentTrial: 'workflow.md',

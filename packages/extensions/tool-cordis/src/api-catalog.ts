@@ -1699,6 +1699,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'selfDevelopmentChat',
+    summary: 'Chat-side self-development launcher.',
+    description: 'Chat-side self-development launcher. Composition declares the hard dependencies through {@linkcode SelfDevelopmentChat.inject}; the optional workspaces, events, and trial services are read with `ctx.get` and every tool degrades gracefully without them.',
+    methods: [],
+  },
+  {
     key: 'selfDevelopmentEvents',
     summary: 'Unified self-development event projection.',
     description: 'Unified self-development event projection. Subscribing consumers and the recent buffer see every mapped event exactly once, in commit order. Without a configured `localNotificationCommand` the service never spawns.',
