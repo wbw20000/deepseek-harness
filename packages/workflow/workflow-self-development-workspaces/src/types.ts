@@ -71,13 +71,33 @@ export type VerifyOutcome =
  * rebase changed any commit id. `verification-failed` is reported only when
  * `IntegrationRequest.verify` was supplied and it resolved `{ ok: false }` or
  * threw; the target branch is left untouched and, when a rebase ran, its
- * result stays in the worktree for a follow-up fix.
+ * result stays in the worktree for a follow-up fix. `snapshotCommit` is
+ * present on whichever variant is returned once a dirty worktree was
+ * snapshotted, whatever the rest of the integration goes on to decide —
+ * commit or clean the worktree, that step never rolls back on a later step's
+ * own failure.
  */
 export type IntegrationResult =
-  | { status: 'integrated'; commit: string; baseMoved: boolean }
-  | { status: 'conflict'; files: readonly string[]; baseMoved: true }
-  | { status: 'verification-failed'; reason: string; baseMoved: boolean }
-  | { status: 'failed'; reason: string }
+  | { status: 'integrated'; commit: string; baseMoved: boolean; snapshotCommit?: string }
+  | { status: 'conflict'; files: readonly string[]; baseMoved: true; snapshotCommit?: string }
+  | { status: 'verification-failed'; reason: string; baseMoved: boolean; snapshotCommit?: string }
+  | { status: 'failed'; reason: string; snapshotCommit?: string }
+
+/** Commit author identity for a snapshot commit; the same shape git's own `user.name`/`user.email` take. */
+export interface SnapshotAuthor {
+  /** Recorded as the snapshot commit's `user.name`. */
+  readonly name: string
+  /** Recorded as the snapshot commit's `user.email`. */
+  readonly email: string
+}
+
+/** Commit message and author identity to snapshot a dirty worktree with before integration inspects it. */
+export interface SnapshotIdentity {
+  /** Commit message for the snapshot commit. */
+  readonly message: string
+  /** Commit author identity for the snapshot commit. */
+  readonly author: SnapshotAuthor
+}
 
 /** Request to integrate one allocated task's worktree into a target branch. */
 export interface IntegrationRequest {
@@ -96,4 +116,15 @@ export interface IntegrationRequest {
    * string form as `reason`.
    */
   readonly verify?: (worktree: string) => Promise<VerifyOutcome>
+  /**
+   * Optional identity to snapshot the worktree with when it holds
+   * uncommitted changes — tracked or not, excluding anything `.gitignore`
+   * excludes. Checked once the integration lock is held and before any
+   * rebase: a dirty worktree with no `snapshot` fails the integration outright,
+   * touching nothing; a dirty worktree with `snapshot` runs `git add -A` and
+   * commits everything under `snapshot.message` and `snapshot.author`, with no
+   * GPG signature and no hook run — the task repository's own hooks are not
+   * this package's to trust. A clean worktree never runs either command.
+   */
+  readonly snapshot?: SnapshotIdentity
 }

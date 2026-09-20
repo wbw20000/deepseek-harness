@@ -617,12 +617,18 @@ async list(): Promise<readonly TaskWorkspace[]>
  * Integrate one allocated task's worktree into a project branch. Calls on
  * one service instance serialize in memory; calls across processes
  * serialize on the experiments root's integration lock. Git failures inside
- * the integration are reported as a `failed` result, never thrown. When
- * `req.verify` is supplied, it runs once against the worktree after a
- * rebase (when one was needed) and before the fast-forward, whether or not
- * the baseline had moved; a rejection or a thrown error both report
- * `verification-failed` and leave the target branch untouched.
- * @param req - task id, target branch, actor, and optional verification gate.
+ * the integration are reported as a `failed` result, never thrown. Once the
+ * lock is held and before any rebase, a dirty worktree is snapshotted under
+ * `req.snapshot` when supplied — `git add -A` plus one unsigned, hook-free
+ * commit — or, absent one, fails the integration before touching anything;
+ * either way the snapshot commit id, once made, reaches every subsequent
+ * result as `snapshotCommit`. When `req.verify` is supplied, it runs once
+ * against the worktree after a rebase (when one was needed) and before the
+ * fast-forward, whether or not the baseline had moved; a rejection or a
+ * thrown error both report `verification-failed` and leave the target
+ * branch untouched.
+ * @param req - task id, target branch, actor, and the optional verification
+ *   gate and snapshot identity.
  * @returns the integration outcome.
  * @throws SelfDevelopmentWorkspacesError with `SELF_DEV_WORKSPACE_TASK_UNKNOWN` when the
  *   task has no allocated workspace, and with `SELF_DEV_WORKSPACE_INTEGRATION_BUSY`

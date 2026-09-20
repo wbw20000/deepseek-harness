@@ -12,7 +12,10 @@
  * worktree, after the rebase step and before the fast-forward, whether or not
  * the baseline had moved; a rejection or a thrown error both stop the
  * integration short of the fast-forward and leave any rebase result in the
- * worktree for a follow-up fix.
+ * worktree for a follow-up fix. Once the lock is held and before any rebase,
+ * a dirty worktree either gets snapshotted under the request's `snapshot`
+ * identity — `git add -A` plus one unsigned, hook-free commit — or, absent
+ * one, fails the integration before touching anything.
  * @module @deepseek-ai/dsh-workflow-self-development-workspaces/integration
  */
 
@@ -22,17 +25,18 @@ import { isAncestor, revParse, runGit } from './git.ts'
 import { withIntegrationLock } from './integration-lock.ts'
 import { SelfDevelopmentWorkspacesError } from './runtime.ts'
 import { readRegistry } from './registry.ts'
-import type { IntegrationRequest, IntegrationResult, TaskWorkspace, VerifyOutcome, WorkspacesConfig } from './types.ts'
+import type { IntegrationRequest, IntegrationResult, SnapshotIdentity, TaskWorkspace, VerifyOutcome, WorkspacesConfig } from './types.ts'
 
 /**
  * Integrate one allocated task's worktree into a project branch.
  * @param config - the service's deployment configuration.
- * @param req - task id, target branch, actor, and optional verification gate
- *   of the integration.
+ * @param req - task id, target branch, actor, and the optional verification
+ *   gate and snapshot identity of the integration.
  * @returns the integration outcome; git failures and a failed verification
  *   gate are both reported as results — `{ status: 'failed', reason }` and
  *   `{ status: 'verification-failed', reason, baseMoved }` respectively —
- *   never thrown.
+ *   never thrown. A dirty worktree with no `req.snapshot` is also a `failed`
+ *   result, reported before anything is touched.
  * @throws SelfDevelopmentWorkspacesError with `SELF_DEV_WORKSPACE_TASK_UNKNOWN` when the
  *   task has no allocated workspace, and with `SELF_DEV_WORKSPACE_INTEGRATION_BUSY`
  *   when a live lock holder does not release in time.
@@ -65,7 +69,7 @@ export async function integrate(config: WorkspacesConfig, req: IntegrationReques
  * Run one integration's git steps while holding the integration lock.
  * @param entry - the task's allocated workspace.
  * @param req - the integration request, carrying the target branch and the
- *   optional verification gate.
+ *   optional verification gate and snapshot identity.
  * @returns the integration outcome.
  */
 async function integrateLocked(entry: TaskWorkspace, req: IntegrationRequest): Promise<IntegrationResult> {
@@ -79,9 +83,34 @@ async function integrateLocked(entry: TaskWorkspace, req: IntegrationRequest): P
     return { status: 'failed', reason: `worktree ${entry.worktree} has no HEAD commit` }
   }
   const dirty = await runGit(entry.worktree, ['status', '--porcelain'])
+  let snapshotCommit: string | undefined
   if (dirty.stdout.trim().length > 0) {
-    return { status: 'failed', reason: `worktree ${entry.worktree} has uncommitted changes; commit or clean them first` }
+    if (req.snapshot === undefined) {
+      return { status: 'failed', reason: 'worktree has uncommitted changes and no snapshot identity was supplied' }
+    }
+    snapshotCommit = await takeSnapshot(entry.worktree, req.snapshot)
   }
+  const result = await integrateCleanWorktree(entry, targetBranch, targetTip, req)
+  return snapshotCommit === undefined ? result : { ...result, snapshotCommit }
+}
+
+/**
+ * Rebase, verify, and fast-forward a worktree that is already clean — either
+ * it started that way or a snapshot just made it so. Separated from
+ * {@link integrateLocked} so every result this returns can be stamped with
+ * `snapshotCommit` at one call site instead of at each return statement here.
+ * @param entry - the task's allocated workspace.
+ * @param targetBranch - the project branch to fast-forward.
+ * @param targetTip - the target branch's resolved current tip.
+ * @param req - the integration request, carrying the optional verification gate.
+ * @returns the integration outcome, without a `snapshotCommit`.
+ */
+async function integrateCleanWorktree(
+  entry: TaskWorkspace,
+  targetBranch: string,
+  targetTip: string,
+  req: IntegrationRequest,
+): Promise<IntegrationResult> {
   const baseMoved = targetTip !== entry.baseCommit
   if (baseMoved) {
     const rebased = await rebaseOnto(entry.worktree, targetTip)
@@ -106,6 +135,28 @@ async function integrateLocked(entry: TaskWorkspace, req: IntegrationRequest): P
     return { status: 'integrated', commit: integrated, baseMoved }
   }
   return fastForward(entry, targetBranch, integrated, baseMoved)
+}
+
+/**
+ * Snapshot every change in a dirty worktree as one commit: stage everything —
+ * tracked or not, excluding whatever `.gitignore` excludes — and commit it
+ * under the given identity. The commit carries no GPG signature and runs no
+ * hook: the task repository's hooks are its own deployment's concern, not
+ * this package's to trust or wait on.
+ * @param worktree - absolute task worktree path, already known dirty.
+ * @param snapshot - the commit message and author identity to snapshot with.
+ * @returns the new HEAD commit id.
+ * @throws SelfDevelopmentWorkspacesError with `SELF_DEV_WORKSPACE_GIT_FAILED` when staging,
+ *   committing, or resolving the new HEAD fails.
+ */
+async function takeSnapshot(worktree: string, snapshot: SnapshotIdentity): Promise<string> {
+  await runGit(worktree, ['add', '-A'])
+  await runGit(worktree, [
+    '-c', `user.name=${snapshot.author.name}`,
+    '-c', `user.email=${snapshot.author.email}`,
+    'commit', '--no-verify', '--no-gpg-sign', '-q', '-m', snapshot.message,
+  ])
+  return (await runGit(worktree, ['rev-parse', 'HEAD'])).stdout.trim()
 }
 
 /**

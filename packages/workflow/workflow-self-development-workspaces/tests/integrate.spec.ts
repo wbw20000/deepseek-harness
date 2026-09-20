@@ -12,13 +12,13 @@
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { execFile, spawn } from 'node:child_process'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it } from 'vitest'
 import { allocateWorkspace } from '../src/allocate.ts'
 import { integrate, rebaseOnto } from '../src/integration.ts'
 import { integrationLockPath } from '../src/integration-lock.ts'
-import type { IntegrationResult, VerifyOutcome } from '../src/types.ts'
+import type { IntegrationResult, SnapshotIdentity, VerifyOutcome } from '../src/types.ts'
 import { makeSandbox, removeSandbox, commitAll, git, type Sandbox } from './harness.ts'
 
 const execFileAsync = promisify(execFile)
@@ -455,6 +455,96 @@ describe('integration verify gate', () => {
     expect(result.reason).toContain('boom')
     expect(result.baseMoved).toBe(false)
     expect(existsSync(integrationLockPath(sandbox.experimentsRoot))).toBe(false)
+  })
+})
+
+describe('integration snapshot', () => {
+  const snapshotIdentity: SnapshotIdentity = {
+    message: 'snapshot: experiment agent scratch work',
+    author: { name: 'Experiment Agent', email: 'agent@example.invalid' },
+  }
+
+  /**
+   * Install a `pre-commit` hook that would fail any commit that actually runs
+   * it. `--git-path` answers where the shared hooks directory lives, absolute
+   * from a linked worktree like the ones under test here.
+   */
+  async function installBlockingPreCommitHook(worktree: string): Promise<void> {
+    const hookDir = resolve(worktree, (await git(worktree, ['rev-parse', '--git-path', 'hooks'])).trim())
+    const hookPath = join(hookDir, 'pre-commit')
+    await mkdir(hookDir, { recursive: true })
+    await writeFile(hookPath, '#!/bin/sh\necho "pre-commit ran" > hook-ran.marker\nexit 1\n', { mode: 0o755 })
+  }
+
+  it('snapshots a dirty worktree under the given identity, skips hooks and GPG, and carries the commit into the target branch', async () => {
+    sandbox = await makeSandbox()
+    const workspace = await allocate('task-a')
+    await installBlockingPreCommitHook(workspace.worktree)
+    // An untracked file an experiment agent left behind, exactly the shape
+    // that a plain `integrate` would otherwise report as "uncommitted
+    // changes" and lose on rebase or fast-forward.
+    await writeFile(join(workspace.worktree, 'scratch.mjs'), 'console.log("smoke")\n')
+    const result = await integrate(sandbox.config, {
+      taskId: 'task-a', targetBranch: 'main', actor: 'tester', snapshot: snapshotIdentity,
+    })
+    expect(result.status).toBe('integrated')
+    if (result.status !== 'integrated') throw new Error('unreachable')
+    expect(result.snapshotCommit).toBeDefined()
+    const snapshotCommit = result.snapshotCommit!
+    // Nothing else moved the worktree onward from the snapshot: the
+    // integrated commit is the snapshot commit itself.
+    expect(result.commit).toBe(snapshotCommit)
+    expect((await git(workspace.worktree, ['log', '-1', '--format=%an <%ae>', snapshotCommit])).trim())
+      .toBe('Experiment Agent <agent@example.invalid>')
+    expect((await git(workspace.worktree, ['log', '-1', '--format=%s', snapshotCommit])).trim())
+      .toBe('snapshot: experiment agent scratch work')
+    // The blocking hook never ran: git commit succeeded (unsigned, no
+    // verification) despite it, and it never wrote its marker.
+    expect(existsSync(join(workspace.worktree, 'hook-ran.marker'))).toBe(false)
+    // The target branch now contains the snapshot commit and the file it captured.
+    await expect(git(sandbox.projectRoot, ['rev-parse', 'main'])).resolves.toContain(snapshotCommit)
+    await expect(readFile(join(sandbox.projectRoot, 'scratch.mjs'), 'utf8')).resolves.toBe('console.log("smoke")\n')
+  })
+
+  it('produces no commit and no snapshotCommit for a clean worktree even when a snapshot identity is supplied', async () => {
+    sandbox = await makeSandbox()
+    const workspace = await allocate('task-a')
+    const commit = await commitMarker(workspace.worktree, 'task-a done\n', 'task-a work')
+    const result = await integrate(sandbox.config, {
+      taskId: 'task-a', targetBranch: 'main', actor: 'tester', snapshot: snapshotIdentity,
+    })
+    expect(result).toEqual({ status: 'integrated', commit, baseMoved: false })
+    expect(Object.hasOwn(result, 'snapshotCommit')).toBe(false)
+  })
+
+  it('fails without touching the worktree when it is dirty and no snapshot identity was supplied', async () => {
+    sandbox = await makeSandbox()
+    const workspace = await allocate('task-a')
+    await writeFile(join(workspace.worktree, 'scratch.mjs'), 'console.log("smoke")\n')
+    const result = await integrate(sandbox.config, { taskId: 'task-a', targetBranch: 'main', actor: 'tester' })
+    expect(result).toEqual({
+      status: 'failed',
+      reason: 'worktree has uncommitted changes and no snapshot identity was supplied',
+    })
+    // Nothing moved: the worktree is still dirty with the same untracked
+    // file, and main is still at the allocation baseline.
+    expect((await git(workspace.worktree, ['status', '--porcelain'])).trim()).toContain('scratch.mjs')
+    await expect(readFile(join(workspace.worktree, 'scratch.mjs'), 'utf8')).resolves.toBe('console.log("smoke")\n')
+    await expect(git(sandbox.projectRoot, ['rev-parse', 'main'])).resolves.toContain(workspace.baseCommit)
+  })
+
+  it('attaches snapshotCommit to a non-integrated result too', async () => {
+    sandbox = await makeSandbox()
+    const workspace = await allocate('task-a')
+    await writeFile(join(workspace.worktree, 'scratch.mjs'), 'console.log("smoke")\n')
+    const verify = async (): Promise<VerifyOutcome> => ({ ok: false, reason: 'gate failed' })
+    const result = await integrate(sandbox.config, {
+      taskId: 'task-a', targetBranch: 'main', actor: 'tester', snapshot: snapshotIdentity, verify,
+    })
+    expect(result.status).toBe('verification-failed')
+    if (result.status !== 'verification-failed') throw new Error('unreachable')
+    expect(result.snapshotCommit).toBeDefined()
+    expect(result.reason).toBe('gate failed')
   })
 })
 
