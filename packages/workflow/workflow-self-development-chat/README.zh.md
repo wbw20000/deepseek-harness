@@ -68,7 +68,7 @@ kind: "package-reference"
 | `allowedModificationScope` | 开发工作者可修改的仓库路径（允许 glob）。 |
 | `plan.requiredCases` | `{ caseId, requirement, assertionIds }[]`——每轮战役都必须通过的验收用例。 |
 | `plan.manualCases` | 明确留给人工核验的验收项。 |
-| `acceptance` | 起草的验收定义：`{ "cases": [ { "caseId", "command": string[], "cwd"?, "timeoutMs", "assertions": [ { "assertionId", "kind": "exit-code" \| "stdout-includes" \| "file-exists" \| "file-includes", ... } ] } ] }`。`plan.requiredCases` 里每个 `caseId` 与 `assertionIds` 都必须在此定义；审批卡展示前即校验。 |
+| `acceptance` | 起草的验收定义：`{ "cases": [ { "caseId", "command": string[], "cwd"?, "timeoutMs", "assertions": [...] } ] }`，每条断言是以下之一：`{ assertionId, kind: "exit-code", expected }`、`{ assertionId, kind: "stdout-includes", text }`、`{ assertionId, kind: "file-exists", path }`、`{ assertionId, kind: "file-includes", path, text }`——工具参数 schema 显式声明了这个形状（是对象 schema，不是不透明的 JSON blob），对于无法直接生成嵌套对象的工具调用格式，也接受同形状的 JSON 字符串。`plan.requiredCases` 里每个 `caseId` 与 `assertionIds` 都必须在此定义；审批卡展示前即校验。 |
 | `budget` | `{ preset: 'unlimited' }`（时间上限 24 小时）、`{ mode: 'rounds', maxRounds }`，或 `{ mode: 'time', hours }`（`hours` ≤ 24，否则拒绝）。 |
 | `unattended` | 是否一次审批覆盖全部战役轮次。 |
 | `parallel` | `false` 时，若本进程发起的另一战役仍在运行则拒绝本次提案。 |

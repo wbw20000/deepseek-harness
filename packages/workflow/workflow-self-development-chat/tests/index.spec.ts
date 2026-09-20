@@ -422,6 +422,22 @@ describe('self_development_propose tool', () => {
     expect((rendered[0] as { text: string }).text).toContain('campaign started')
   })
 
+  it('accepts the acceptance definition as a JSON-encoded string through the real argument schema, matching the harness behavior a field test found', async () => {
+    // The exact reported bug: the harness delivered a `type: 'json'`
+    // parameter as a JSON string rather than an object, and every one of
+    // four real proposals failed. The declared parameter schema's own
+    // validation (not just the acceptance parser further down) must let a
+    // string through, since `def.execute` validates arguments before
+    // `runPropose` ever sees them.
+    const facade = new FakeFacade()
+    const { tools } = makeService({ facade, approval: new FakeApproval() })
+    const def = tools.find('self_development_propose')
+    const value = await def.execute(proposeArgs({ acceptance: JSON.stringify(ACCEPTANCE) }), fakeExec({ agent: fakeAgent() }))
+    const outcome = value as { ok: boolean; taskId: string }
+    expect(outcome.ok).toBe(true)
+    expect(outcome.taskId).toBeTruthy()
+  })
+
   it('reports failure without registering an agent notice', async () => {
     const approval = new FakeApproval()
     approval.outcome = 'rejected'

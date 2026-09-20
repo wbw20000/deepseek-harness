@@ -110,6 +110,37 @@ describe('parseAcceptanceDefinition', () => {
     const missingInclude = definitionWith(caseWith('c1', { assertions: [{ assertionId: 'a1', kind: 'file-includes', path: 'p' }] }))
     expect(() => parseAcceptanceDefinition(missingInclude)).toThrow('text')
   })
+
+  it('names every assertion kind\'s exact shape in a field-name error, so a model can self-correct in one retry', () => {
+    // A field test found a model guessing `value` instead of `expected` for
+    // exit-code and getting back only that one rule; the error must carry the
+    // full runner shape reference so one retry is enough to fix every kind.
+    const badExitCode = definitionWith(caseWith('c1', { assertions: [{ assertionId: 'a1', kind: 'exit-code', expected: 1.5 }] }))
+    expect(() => parseAcceptanceDefinition(badExitCode)).toThrow('exit-code needs')
+    expect(() => parseAcceptanceDefinition(badExitCode)).toThrow('stdout-includes needs')
+    expect(() => parseAcceptanceDefinition(badExitCode)).toThrow('file-exists needs')
+    expect(() => parseAcceptanceDefinition(badExitCode)).toThrow('file-includes needs')
+    const unknownKind = definitionWith(caseWith('c1', { assertions: [{ assertionId: 'a1', kind: 'stdout-equals' }] }))
+    expect(() => parseAcceptanceDefinition(unknownKind)).toThrow('exit-code needs')
+  })
+
+  it('accepts the same definition as a JSON-encoded string, matching a harness that stringifies a json-typed parameter', () => {
+    // The exact field-test bug this guards: a `type: 'json'` tool parameter
+    // arrived as a JSON string, not an already-parsed object, and every one
+    // of four real proposals failed before this branch existed.
+    const definition = parseAcceptanceDefinition(JSON.stringify(definitionWith()))
+    expect(definition.cases).toHaveLength(2)
+    expect(definition.cases[0]?.caseId).toBe('c1')
+  })
+
+  it('rejects a string that is not valid JSON with a distinct, specific error', () => {
+    expect(() => parseAcceptanceDefinition('{ not json')).toThrow('not valid JSON')
+  })
+
+  it('rejects a JSON string that parses to something other than a cases object', () => {
+    expect(() => parseAcceptanceDefinition('[1,2,3]')).toThrow('must be an object with a cases array')
+    expect(() => parseAcceptanceDefinition('"just a string"')).toThrow('must be an object with a cases array')
+  })
 })
 
 describe('assertPlanCoveredByDefinition', () => {
