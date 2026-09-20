@@ -132,6 +132,7 @@ export const SERVICE_PAGE: Record<string, string> = {
   selfDevelopmentTasks: 'workflow.md',
   selfDevelopmentRunner: 'workflow.md',
   selfDevelopmentRemote: 'workflow.md',
+  selfDevelopmentTrial: 'workflow.md',
   selfDevelopmentEvents: 'workflow.md',
   selfDevelopmentWorkspaces: 'workflow.md',
   webhookRuntime: 'webhook.md',
@@ -894,6 +895,8 @@ export const TYPE_LINK_EXEMPTIONS: Readonly<Record<string, string>> = {
   LaunchProfile: 'stored per-task launch profile is owned by packages/workflow/workflow-self-development-remote/README.md',
   LaunchProfileResult: 'facade launch profile result is owned by packages/workflow/workflow-self-development-remote/README.md',
   RemoteConfig: 'facade deployment config is owned by packages/workflow/workflow-self-development-remote/README.md',
+  OpenTrialResult: 'trial-instance open result is owned by packages/workflow/workflow-self-development-trial/README.md',
+  TrialSummary: 'live trial-instance row is owned by packages/workflow/workflow-self-development-trial/README.md',
 }
 
 /** Repository data policy consumed by the Cordis catalog projector. */
