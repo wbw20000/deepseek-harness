@@ -1002,6 +1002,67 @@ describe('stopCampaign', () => {
     expect(events.recent().filter(event => event.title === 'Campaign ended: stopped')).toHaveLength(1)
   })
 
+  it('keeps the record stopped when the runner\u2019s stop rejects the in-flight round before stopCampaign finalizes, whatever order the two writes settle in', async () => {
+    // The real runner aborts the attempt inside stop(): the round's rejection
+    // reaches the loop while stopCampaign is still awaiting stop(), so the
+    // loop's round update and the finalization race to the record file.
+    // Whichever lands last, the campaign must read stopped afterwards.
+    const { facade, runner, env } = await makeHarness()
+    const hanging = runner!.enqueueHanging()
+    const revision = await readyTaskWithProfile(facade, env)
+    await facade.startCampaign(TASK_ID, revision, options())
+    await vi.waitFor(() => {
+      expect(runner!.requests).toHaveLength(1)
+    })
+    type StopRequest = { taskId: string; expectedRevision: number; operationId: string }
+    type StopResult = { taskId: string; operationId: string; revision: number; replayed: boolean }
+    const stopSpy = vi.spyOn(runner!.service, 'stop') as unknown as { mockImplementationOnce(impl: (request: StopRequest) => Promise<StopResult>): void }
+    stopSpy.mockImplementationOnce(async (request: StopRequest): Promise<StopResult> => {
+      hanging.settleError(new SelfDevelopmentError('cancelled by the trusted runner before completion', 'SELF_DEV_ATTEMPT_CANCELLED'))
+      // Let the loop's rejection handling get ahead of the finalization,
+      // the ordering that used to leave the record reading `running`.
+      await new Promise(resolve => setTimeout(resolve, 15))
+      return { taskId: request.taskId, operationId: request.operationId, revision: request.expectedRevision + 1, replayed: false }
+    })
+    const stopped = await facade.stopCampaign(TASK_ID, 'operator requested a stop')
+    expect(stopped.status).toBe('stopped')
+    await new Promise(resolve => setTimeout(resolve, 40))
+    const state = await facade.campaign(TASK_ID)
+    expect(state?.status).toBe('stopped')
+    expect(await readCampaign(env.controlDirectory, TASK_ID)).toMatchObject({ status: 'stopped' })
+  })
+
+  it('skips a round record update once the campaign is no longer running, and serializes record writes per task', async () => {
+    const { facade, env } = await makeHarness()
+    const internals = facade as unknown as {
+      runningCampaigns: Set<string>
+      recordCampaignRound: (taskId: string, record: CampaignRecord, fields: { lastOutcome: 'cancelled' }) => Promise<CampaignRecord>
+      writeRecordInOrder: <T>(taskId: string, write: () => Promise<T>) => Promise<T>
+    }
+    const now = Date.now()
+    const stoppedRecord: CampaignRecord = {
+      taskId: TASK_ID, status: 'stopped', startedAt: now, updatedAt: now, rounds: 1, reason: 'operator requested a stop',
+      acknowledgement: 'unattended-accepted', unattended: true, acceptedBy: 'tester',
+    }
+    await writeCampaign(env.controlDirectory, TASK_ID, stoppedRecord)
+    // The loop's stale pre-stop view of the record; the campaign is not in runningCampaigns any more.
+    const stale: CampaignRecord = { ...stoppedRecord, status: 'running', rounds: 0 }
+    expect(internals.runningCampaigns.has(TASK_ID)).toBe(false)
+    const returned = await internals.recordCampaignRound(TASK_ID, stale, { lastOutcome: 'cancelled' })
+    expect(returned).toBe(stale)
+    expect(await readCampaign(env.controlDirectory, TASK_ID)).toEqual(stoppedRecord)
+
+    // Writes for one task run one after another, a rejected one included; a later write still runs.
+    const order: string[] = []
+    const first = internals.writeRecordInOrder(TASK_ID, async () => { await new Promise(resolve => setTimeout(resolve, 10)); order.push('first'); return 1 })
+    const failing = internals.writeRecordInOrder(TASK_ID, async () => { order.push('failing'); throw new Error('disk full') })
+    const third = internals.writeRecordInOrder(TASK_ID, async () => { order.push('third'); return 3 })
+    await expect(first).resolves.toBe(1)
+    await expect(failing).rejects.toThrow('disk full')
+    await expect(third).resolves.toBe(3)
+    expect(order).toEqual(['first', 'failing', 'third'])
+  })
+
   it('ends a campaign as stopped when the core cancels the in-flight round independently of stopCampaign', async () => {
     const { facade, runner, env } = await makeHarness()
     const hanging = runner!.enqueueHanging()

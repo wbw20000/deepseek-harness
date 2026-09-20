@@ -186,6 +186,17 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
   private readonly finalizing = new Map<string, Promise<CampaignRecord>>()
 
   /**
+   * Per-task serialization of campaign record writes. A round's record
+   * update and a concurrent `stopCampaign`'s finalization each reach their
+   * write only after their own awaits, so without a shared order the round's
+   * `running` record could land after the finalized `stopped` one and revert
+   * it — a field test left a stopped campaign reading `running` this way.
+   * Every record write goes through this chain, and a round update re-checks
+   * `runningCampaigns` inside it, so a finalization is always the last word.
+   */
+  private readonly recordWrites = new Map<string, Promise<unknown>>()
+
+  /**
    * Serializes `startCampaign`'s check-then-write section (already-running
    * check, `maxConcurrentCampaigns` count, and the initial record write),
    * which otherwise spans several `await` points with no mutual exclusion:
@@ -1269,8 +1280,28 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
       lastOutcome: fields.lastOutcome,
       ...(fields.lastAttemptId === undefined ? {} : { lastAttemptId: fields.lastAttemptId }),
     }
-    await writeCampaign(this.resolved.controlDirectory, taskId, updated)
-    return updated
+    return this.writeRecordInOrder(taskId, async () => {
+      // A concurrent stopCampaign may have finalized this campaign between
+      // the round's settlement and this write; its record is final, and this
+      // round update must not revert it to `running`.
+      if (!this.runningCampaigns.has(taskId)) return record
+      await writeCampaign(this.resolved.controlDirectory, taskId, updated)
+      return updated
+    })
+  }
+
+  /**
+   * Run one campaign record write after every earlier write for the same
+   * task has settled, whatever their outcomes; see {@link recordWrites}.
+   * @param taskId - task identity.
+   * @param write - the write to run once its turn comes.
+   * @returns the write's own result.
+   */
+  private writeRecordInOrder<T>(taskId: string, write: () => Promise<T>): Promise<T> {
+    const previous = this.recordWrites.get(taskId) ?? Promise.resolve()
+    const next = previous.then(write, write)
+    this.recordWrites.set(taskId, next.then(() => undefined, () => undefined))
+    return next
   }
 
   /**
@@ -1312,7 +1343,7 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
         updatedAt: Date.now(),
         ...(fields.reason === undefined ? {} : { reason: fields.reason }),
       }
-      await writeCampaign(this.resolved.controlDirectory, taskId, updated)
+      await this.writeRecordInOrder(taskId, () => writeCampaign(this.resolved.controlDirectory, taskId, updated))
       await this.emitCampaignEvent(taskId, fields.status)
       return updated
     })()

@@ -77,10 +77,32 @@ function tailBytes(text: string, maxBytes: number): string {
   return buffer.subarray(buffer.byteLength - maxBytes).toString('utf8')
 }
 
-/** Build one gate failure's reason: the command, why it failed, and the output's tail. */
+/** Output lines that are build-tool chatter, never the failure itself; they are dropped before the tail is taken. */
+const GATE_NOISE_LINE = /PLUGIN_TIMINGS|^\s*$/
+
+/** Output lines that name a failure; when any exist they are what the tail is taken from. */
+const GATE_FAILURE_LINE = /\berror\b|\bfailed\b|✖|×|\bTS\d{4}\b/i
+
+/**
+ * The part of a gate's combined output worth carrying into a reason: the
+ * lines that name an error when there are any, else every non-noise line,
+ * either way cut to the last {@link GATE_OUTPUT_TAIL_BYTES} bytes. A field
+ * test's `pnpm run typecheck` failure arrived as 2 KB of bundler timing
+ * warnings with the one `error TS2741` line scrolled off above them.
+ * @param output - the gate's combined stdout and stderr.
+ * @returns the excerpt, trimmed.
+ */
+export function gateOutputExcerpt(output: string): string {
+  const lines = output.split('\n').filter(line => !GATE_NOISE_LINE.test(line))
+  const failures = lines.filter(line => GATE_FAILURE_LINE.test(line))
+  const kept = failures.length > 0 ? failures : lines
+  return tailBytes(kept.join('\n'), GATE_OUTPUT_TAIL_BYTES).trim()
+}
+
+/** Build one gate failure's reason: the command, why it failed, and the output excerpt. */
 function gateFailureReason(command: string, result: GateRunResult): string {
   const cause = result.timedOut ? `timed out after ${GATE_TIMEOUT_MS}ms` : `exited with code ${String(result.code)}`
-  return `integration gate "${command}" ${cause}. Output tail:\n${tailBytes(result.output, GATE_OUTPUT_TAIL_BYTES)}`
+  return `integration gate "${command}" ${cause}. Output tail:\n${gateOutputExcerpt(result.output)}`
 }
 
 /**

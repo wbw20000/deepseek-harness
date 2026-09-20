@@ -10,7 +10,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { GATE_TIMEOUT_MS, buildVerify, judgeAcceptanceRun, runShellCommand } from '../src/gates.ts'
+import { GATE_TIMEOUT_MS, buildVerify, gateOutputExcerpt, judgeAcceptanceRun, runShellCommand } from '../src/gates.ts'
 import type { GateRunResult } from '../src/gates.ts'
 import { resolveChatConfig } from '../src/config.ts'
 import type { AcceptanceRunView, RunnerVerifyPort, RunnerVerifyResult } from '../src/types.ts'
@@ -196,6 +196,33 @@ describe('buildVerify', () => {
     // The kept tail itself is bounded to 2 KB, well under the full ~4 KB output.
     const keptOutputLength = outcome.reason.length - outcome.reason.indexOf('Output tail:\n') - 'Output tail:\n'.length
     expect(keptOutputLength).toBeLessThanOrEqual(2048)
+  })
+})
+
+describe('gateOutputExcerpt', () => {
+  it('drops bundler timing chatter and blank lines, and keeps only the lines that name an error when any do', () => {
+    const output = [
+      'src/a.ts(3,5): error TS2741: Property \'origin\' is missing',
+      '',
+      '\u001b[33m[PLUGIN_TIMINGS] \u001b[0mYour build spent significant time in plugin `tsdown:deps`.',
+      'progress: 3/4 packages built',
+      '[PLUGIN_TIMINGS] Your build spent significant time in plugin `dsh-module-proxies`.',
+      '',
+    ].join('\n')
+    expect(gateOutputExcerpt(output)).toBe('src/a.ts(3,5): error TS2741: Property \'origin\' is missing')
+  })
+
+  it('falls back to every non-noise line when no line names an error, and to an empty excerpt for pure noise', () => {
+    expect(gateOutputExcerpt('progress: 1/4\n[PLUGIN_TIMINGS] chatter\nprogress: 2/4\n')).toBe('progress: 1/4\nprogress: 2/4')
+    expect(gateOutputExcerpt('[PLUGIN_TIMINGS] chatter\n\n')).toBe('')
+  })
+
+  it('still bounds the excerpt to the last 2 KB', () => {
+    const errors = Array.from({ length: 200 }, (_, index) => `error ${String(index).padStart(3, '0')} ${'x'.repeat(20)}`).join('\n')
+    const excerpt = gateOutputExcerpt(errors)
+    expect(Buffer.byteLength(excerpt, 'utf8')).toBeLessThanOrEqual(2048)
+    expect(excerpt.endsWith(`error 199 ${'x'.repeat(20)}`)).toBe(true)
+    expect(excerpt).not.toContain('error 000')
   })
 })
 
