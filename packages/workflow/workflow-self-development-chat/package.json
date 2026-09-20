@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-workflow-self-development-chat",
   "description": "Opt-in chat-side self-development launcher: Agent tools that draft a task, ask one user approval, drive the stable-side facade through workspace allocation, acceptance writing, planning, budget, and an unattended campaign, and project campaign results",
-  "version": "0.1.0-alpha.1",
+  "version": "0.1.6-alpha.2",
   "publishConfig": {
     "access": "public"
   },

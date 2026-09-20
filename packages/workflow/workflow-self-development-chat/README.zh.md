@@ -115,6 +115,8 @@ kind: "package-reference"
 -----
 
 <a id="model-experience"></a>
+不发布运行时 invariant 配套模块：本服务没有自己的运行时观察流，它拥有的一切关系——每个提案一次审批请求、八步顺序、每个战役结果一条通知——都由针对替身 seam 的行为测试覆盖。
+
 ## Model Experience
 
 ### System prompt

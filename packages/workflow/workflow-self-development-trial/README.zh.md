@@ -83,6 +83,8 @@ kind: "package-reference"
 -----
 
 <a id="model-experience"></a>
+不发布运行时 invariant 配套模块：本服务没有自己的运行时观察流，它拥有的一切关系——每个任务一个实例、每个实例一个登记的进程组、日志不含启动 token——都由针对真实子进程的行为测试覆盖。
+
 ## Model Experience
 
 无：本服务不注册任何面向模型的工具、提示或事件，且每个方法都会拒绝非宿主调用方。手机侧的模型或 UI 从不直接调用 `openTrial`/`closeTrial`/`trials`；它通过 Remote 门面观察任务进展，未来若有聊天侧的入口，也会从那个入口获知试验版地址，而不是直接依赖本包。
