@@ -42,10 +42,26 @@ export interface RegisteredSession {
   readonly certificateSerial: string | undefined
 }
 
+/** One session in the persisted snapshot; keys whose value is unset are omitted so every value survives JSON. */
+export interface StoredSession {
+  /** Opaque random id carried in the signed cookie payload. */
+  readonly sessionId: string
+  /** Human-readable label assigned when the session was issued. */
+  readonly deviceLabel: string
+  /** Absolute Unix-millisecond issue time. */
+  readonly issuedAt: number
+  /** Absolute Unix-millisecond expiry; expired records are dropped. */
+  readonly expiresAt: number
+  /** Revocation time; omitted while the session is still valid. */
+  readonly revokedAt?: number | undefined
+  /** Bound certificate serial; omitted when the session is not certificate-bound. */
+  readonly certificateSerial?: string | undefined
+}
+
 /** JSON snapshot of the registry, persisted beside the browser-session signing secret. */
 export interface StoredSessionRegistry {
   readonly version: typeof STORED_REGISTRY_VERSION
-  readonly sessions: readonly RegisteredSession[]
+  readonly sessions: readonly StoredSession[]
 }
 
 /** Durable home of the registry snapshot. */
@@ -102,6 +118,23 @@ function isRegisteredSession(value: unknown): value is RegisteredSession {
     && Number.isSafeInteger(value.expiresAt)
     && (value.revokedAt === undefined || Number.isSafeInteger(value.revokedAt))
     && isValidCertificateSerial(value.certificateSerial)
+}
+
+/**
+ * Restore the in-memory registration from its stored form: fields the stored
+ * form omitted are `undefined` again.
+ * @param stored - the session as persisted in the snapshot.
+ * @returns the equivalent in-memory registration.
+ */
+function registeredSession(stored: StoredSession): RegisteredSession {
+  return {
+    sessionId: stored.sessionId,
+    deviceLabel: stored.deviceLabel,
+    issuedAt: stored.issuedAt,
+    expiresAt: stored.expiresAt,
+    revokedAt: stored.revokedAt,
+    certificateSerial: stored.certificateSerial,
+  }
 }
 
 /**
@@ -320,8 +353,8 @@ export class SessionRegistry {
       corrupt = true
     }
     const now = Date.now()
-    for (const session of stored?.sessions ?? []) {
-      if (session.expiresAt > now) this.sessions.set(session.sessionId, session)
+    for (const entry of stored?.sessions ?? []) {
+      if (entry.expiresAt > now) this.sessions.set(entry.sessionId, registeredSession(entry))
     }
     if (corrupt) {
       // Fail closed: an untrustworthy snapshot is discarded and rewritten
@@ -338,8 +371,24 @@ export class SessionRegistry {
     }
   }
 
+  /**
+   * Durable form of the registry: unset optional fields are omitted rather
+   * than written as `undefined`, which is not a value JSON can represent (the
+   * credentials document rejects it). Reading back, a missing key is
+   * `undefined`, which {@link isRegisteredSession} already admits.
+   */
   private snapshot(): StoredSessionRegistry {
-    return { version: STORED_REGISTRY_VERSION, sessions: [...this.sessions.values()] }
+    return {
+      version: STORED_REGISTRY_VERSION,
+      sessions: [...this.sessions.values()].map(session => ({
+        sessionId: session.sessionId,
+        deviceLabel: session.deviceLabel,
+        issuedAt: session.issuedAt,
+        expiresAt: session.expiresAt,
+        ...(session.revokedAt === undefined ? {} : { revokedAt: session.revokedAt }),
+        ...(session.certificateSerial === undefined ? {} : { certificateSerial: session.certificateSerial }),
+      })),
+    }
   }
 
   /** Queue one snapshot write after all earlier writes; earlier failures do not cancel later ones. */

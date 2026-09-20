@@ -1,9 +1,23 @@
 /** Session registry semantics: issue, lookup, revoke, durability, and fail-closed persistence. */
 
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { Context } from '@deepseek-ai/cordis'
+import LocalCredentialProvider from '@deepseek-ai/dsh-credentials-local'
 import type { CredentialProvider } from '@deepseek-ai/dsh-credentials'
-import { SessionRegistry, type SessionRegistryStore, type StoredSessionRegistry } from '../src/session-registry.ts'
+import {
+  SESSION_REGISTRY_RECORD_KEY,
+  SessionRegistry,
+  credentialSessionRegistryStore,
+  type SessionRegistryStore,
+  type StoredSessionRegistry,
+} from '../src/session-registry.ts'
 import { RecordCredentials } from './browser-credentials.ts'
+
+/** Temporary credentials homes to remove after the run. */
+const dirs: string[] = []
 
 /** Store double with controllable load/save behavior. */
 class MemoryStore implements SessionRegistryStore {
@@ -28,8 +42,9 @@ class MemoryStore implements SessionRegistryStore {
   }
 }
 
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers()
+  await Promise.all(dirs.splice(0).map(dir => rm(dir, { recursive: true, force: true })))
 })
 
 describe('SessionRegistry', () => {
@@ -230,4 +245,50 @@ describe('SessionRegistry', () => {
     // The in-memory revocation stands even though the durable write failed.
     expect((await reloaded.get(issued.sessionId))?.revokedAt).toBeDefined()
   })
+
+  it('persists snapshots the real local credentials document accepts, unset fields omitted', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-session-registry-'))
+    dirs.push(dir)
+    const ctx = new Context()
+    await ctx.plugin(LocalCredentialProvider, { path: join(dir, '.credentials.yaml'), watch: false })
+
+    const registry = new SessionRegistry(credentialSessionRegistryStore(ctx.credentials))
+    await registry.loaded
+
+    // Two unbound issues in a row, as two browser logins do: neither may latch
+    // a write failure for the next login to trip over.
+    const first = await registry.issue('phone', Date.now() + 60_000)
+    await registry.issue('desktop', Date.now() + 60_000)
+    await registry.flush()
+
+    const payload = grantPayload(await ctx.credentials.readRecord(SESSION_REGISTRY_RECORD_KEY))
+    expect(payload.sessions.map(session => (session as { deviceLabel: string }).deviceLabel))
+      .toEqual(['phone', 'desktop'])
+    // Unset fields are absent, not `undefined`; reading back, a missing key is
+    // `undefined`, so the stored form round-trips through JSON unchanged.
+    const storedFirst = payload.sessions[0] as Record<string, unknown> | undefined
+    expect(storedFirst?.revokedAt).toBeUndefined()
+    expect(storedFirst?.certificateSerial).toBeUndefined()
+    expect(JSON.parse(JSON.stringify(payload))).toEqual(payload)
+    expect(await readFile(join(dir, '.credentials.yaml'), 'utf8')).toContain('browser-sessions')
+
+    // A revocation adds a numeric revokedAt and the snapshot stays writable.
+    expect(await registry.revoke(first.sessionId)).toBe(true)
+    await registry.flush()
+    const revokedPayload = grantPayload(await ctx.credentials.readRecord(SESSION_REGISTRY_RECORD_KEY))
+    const revokedSessions = revokedPayload.sessions as Array<Record<string, unknown> | undefined>
+    expect(typeof revokedSessions[0]?.revokedAt).toBe('number')
+    expect(revokedSessions[0]?.certificateSerial).toBeUndefined()
+    expect(JSON.parse(JSON.stringify(revokedPayload))).toEqual(revokedPayload)
+    await expect(registry.issue('third', Date.now() + 60_000)).resolves.toBeDefined()
+    await registry.flush()
+  })
 })
+
+/** The grant payload behind the browser-sessions record, or a failure naming the defect. */
+function grantPayload(record: { kind?: string; payload?: unknown } | undefined): { sessions: unknown[] } {
+  if (record?.kind !== 'grant' || typeof record.payload !== 'object' || record.payload === null) {
+    throw new Error('browser-sessions credential record is not a grant object')
+  }
+  return record.payload as { sessions: unknown[] }
+}
