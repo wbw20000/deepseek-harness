@@ -2,7 +2,8 @@
 import { vi } from 'vitest'
 import { SelfDevTaskId, TaskSpecVersion, TestPlanDigest, TestPlanVersion } from '@deepseek-ai/dsh-workflow-self-development'
 import type { SelfDevelopmentApi, SelfDevelopmentAvailability } from '../src/client/face.ts'
-import type { ConfirmationCard, RecentEvent, RemoteTaskProjection, TaskDetail, TaskSummary } from '@deepseek-ai/dsh-workflow-self-development-remote'
+import type { ConfirmationCardView } from '../src/client/wire.ts'
+import type { RecentEvent, RemoteTaskProjection, TaskDetail, TaskSummary } from '@deepseek-ai/dsh-workflow-self-development-remote'
 
 /** One task row. */
 export function summary(overrides: Partial<TaskSummary> = {}): TaskSummary {
@@ -14,8 +15,8 @@ export function requiredCase(caseId = 'case-1'): { caseId: string; requirement: 
   return { caseId, requirement: '导出按钮点击后生成文件', assertionIds: ['assert-1'] }
 }
 
-/** One card view in the shape the facade builds. */
-export function card(overrides: Partial<ConfirmationCard> = {}): ConfirmationCard {
+/** One card view in the shape the facade builds, optionally carrying the launch profile. */
+export function card(overrides: Partial<ConfirmationCardView> = {}): ConfirmationCardView {
   return {
     taskId: 'task-1',
     taskAndGoal: '为导出菜单补充一个批量导出入口',
@@ -55,7 +56,7 @@ export function projection(overrides: Partial<RemoteTaskProjection> = {}): Remot
 }
 
 /** One task detail: projection plus its card. */
-export function detail(overrides: { projection?: Partial<RemoteTaskProjection>; card?: Partial<ConfirmationCard> } = {}): TaskDetail {
+export function detail(overrides: { projection?: Partial<RemoteTaskProjection>; card?: Partial<ConfirmationCardView> } = {}): TaskDetail {
   return { projection: projection(overrides.projection), card: card(overrides.card) }
 }
 
@@ -80,6 +81,18 @@ export function event(overrides: Partial<RecentEvent> = {}): RecentEvent {
   return { taskId: 'task-1', kind: 'turn-finished', title: '第 1 轮结束', occurredAt: 1_700_000_000_000, revision: 2, ...overrides }
 }
 
+/** One stored launch profile, as `card.launchProfile` carries it. */
+export function launchProfile(): NonNullable<ConfirmationCardView['launchProfile']> {
+  return {
+    worktree: '/experiments/wt-1',
+    acceptancePath: '/repo/acceptance.yml',
+    artifactPaths: ['apps/web/dist/**'],
+    loopbackAllowlist: [],
+    confirmedBy: 'mima',
+    updatedAt: 1_700_000_000_000,
+  }
+}
+
 /** A scripted Remote face: every method records its call and answers with the given result. */
 export function scriptableApi(handlers: Partial<Record<keyof SelfDevelopmentApi, unknown>> = {}): SelfDevelopmentApi {
   const ok = (value: object) => ({ ok: true as const, value })
@@ -87,6 +100,9 @@ export function scriptableApi(handlers: Partial<Record<keyof SelfDevelopmentApi,
     listTasks: vi.fn(async () => ok([summary()])),
     getTask: vi.fn(async () => ok(detail())),
     recentEvents: vi.fn(async () => ok([])),
+    createTask: vi.fn(async () => ok({ taskId: 'task-2', operationId: 'op-0', revision: 1, replayed: false })),
+    submitPlanDraft: vi.fn(async () => ok({ taskId: 'task-1', operationId: 'op-7', revision: 4, replayed: false })),
+    setLaunchProfile: vi.fn(async () => ok({ taskId: 'task-1', launchProfile: launchProfile() })),
     authorizePlanning: vi.fn(async () => ok({ taskId: 'task-1', operationId: 'op-1', revision: 4, replayed: false })),
     confirmPlan: vi.fn(async () => ok({ taskId: 'task-1', operationId: 'op-2', revision: 4, replayed: false })),
     approveBudget: vi.fn(async () => ok({ taskId: 'task-1', operationId: 'op-3', revision: 4, replayed: false })),

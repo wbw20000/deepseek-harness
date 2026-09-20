@@ -122,6 +122,7 @@ const ERROR_KEYS: Readonly<Record<string, SelfDevelopmentKey>> = {
   'self-development/actor-forbidden': 'errorSelfDevRemoteActorForbidden',
   'self-development/presence-unconfirmed': 'errorSelfDevRemotePresenceUnconfirmed',
   'self-development/runner-unavailable': 'errorSelfDevRemoteRunnerUnavailable',
+  'self-development/host-only-field': 'errorSelfDevRemoteHostOnly',
 }
 
 /**
