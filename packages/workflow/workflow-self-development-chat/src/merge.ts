@@ -21,6 +21,7 @@ import type { UpgradeDeps } from './upgrade.ts'
 import type {
   AcceptanceDefinition,
   ApprovalPort,
+  FacadeOperationResult,
   IntegrationResult,
   MergeBlockedEventPayload,
   MergeInput,
@@ -188,23 +189,28 @@ async function startRepairCampaign(deps: MergeDeps, blockedTaskId: string, resul
  * Emit the merge-result Cordis event, when an emitter is configured. Names
  * `self-development-chat/merge-integrated` and
  * `self-development-chat/merge-blocked`, declared by this package's own
- * `declare module '@deepseek-ai/cordis'` augmentation (`index.ts`) — the
- * DI frozen interface asks for `merge-integrated`/`merge-blocked` events
- * "per the events package's convention" without fixing an exact payload, so
- * this package owns a concrete, documented shape for the events package (or
- * any other listener) to key off, rather than guessing at an unshared one.
+ * `declare module '@deepseek-ai/cordis'` augmentation (`index.ts`) — `index.ts`
+ * also fans each payload out to the upstream `self-development/merge-integrated`/
+ * `self-development/merge-blocked` events `@deepseek-ai/dsh-workflow-self-development-events`
+ * actually subscribes to, which is why `revision` (the task projection
+ * revision `recordTrialApproval` observed) rides along on every payload here
+ * even though this package's own event names do not otherwise need it.
+ * @param deps - the merge run's deps, for the two optional emit hooks.
+ * @param taskId - the merged (or blocked) task id.
+ * @param result - the settled `workspaces.integrate` outcome.
+ * @param revision - the task projection revision `recordTrialApproval` returned.
  */
-function emitMergeEvent(deps: MergeDeps, taskId: string, result: IntegrationResult): void {
+function emitMergeEvent(deps: MergeDeps, taskId: string, result: IntegrationResult, revision: number): void {
   const occurredAt = Date.now()
   if (result.status === 'integrated') {
-    deps.emitIntegrated?.({ taskId, commit: result.commit, baseMoved: result.baseMoved, occurredAt })
+    deps.emitIntegrated?.({ taskId, commit: result.commit, baseMoved: result.baseMoved, occurredAt, revision })
     return
   }
   if (result.status === 'conflict') {
-    deps.emitBlocked?.({ taskId, status: result.status, files: result.files, occurredAt })
+    deps.emitBlocked?.({ taskId, status: result.status, files: result.files, occurredAt, revision })
     return
   }
-  deps.emitBlocked?.({ taskId, status: result.status, reason: result.reason, occurredAt })
+  deps.emitBlocked?.({ taskId, status: result.status, reason: result.reason, occurredAt, revision })
 }
 
 /**
@@ -255,8 +261,9 @@ export async function runMerge(deps: MergeDeps, input: MergeInput): Promise<Merg
   }
   steps.push({ step: 'approval', detail: `allowed-once by ${config.actor}` })
 
+  let recordResult: FacadeOperationResult
   try {
-    await deps.facade.recordTrialApproval(taskId, detail.projection.revision, config.actor)
+    recordResult = await deps.facade.recordTrialApproval(taskId, detail.projection.revision, config.actor)
     steps.push({ step: 'recordTrialApproval', detail: `approved by ${config.actor}` })
   } catch (error: unknown) {
     return { ok: false, taskId, steps, reason: 'recordTrialApproval failed', error: errorOf(error) }
@@ -271,7 +278,7 @@ export async function runMerge(deps: MergeDeps, input: MergeInput): Promise<Merg
     return { ok: false, taskId, steps, reason: 'integrate failed', error: errorOf(error) }
   }
 
-  emitMergeEvent(deps, taskId, result)
+  emitMergeEvent(deps, taskId, result, recordResult.revision)
 
   if (result.status === 'integrated') {
     if (config.upgrade.kind === 'none') {

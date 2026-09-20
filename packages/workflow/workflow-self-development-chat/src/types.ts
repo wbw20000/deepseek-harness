@@ -428,23 +428,31 @@ export type MergeOutcome = MergeSuccess | MergeFailure
 /**
  * Payload of the `self-development-chat/merge-integrated` Cordis event this
  * package emits (see `index.ts`'s `declare module '@deepseek-ai/cordis'`).
- * The DI frozen interface names `merge-integrated`/`merge-blocked` as events
- * "per the events package's convention" without fixing a payload; this
- * package owns a concrete, documented shape for the events package (or any
- * other listener) to key off.
+ * `index.ts` also fans this out to `self-development/merge-integrated`
+ * (`{ taskId, revision }`), the name and shape
+ * `@deepseek-ai/dsh-workflow-self-development-events` actually subscribes to
+ * (`packages/workflow/workflow-self-development-events/src/merge.ts`) —
+ * `revision` here is the `FacadeOperationResult` `recordTrialApproval`
+ * returned, threaded through so both destinations can be built from one payload.
  */
 export interface MergeIntegratedEventPayload {
   readonly taskId: string
   readonly commit: string
   readonly baseMoved: boolean
   readonly occurredAt: number
+  readonly revision: number
 }
 
-/** Payload of the `self-development-chat/merge-blocked` Cordis event this package emits; see {@link MergeIntegratedEventPayload}. */
+/**
+ * Payload of the `self-development-chat/merge-blocked` Cordis event this
+ * package emits; see {@link MergeIntegratedEventPayload} — `index.ts` fans
+ * this out to `self-development/merge-blocked` (`{ taskId, status, revision }`) too.
+ */
 export interface MergeBlockedEventPayload {
   readonly taskId: string
   readonly status: 'conflict' | 'verification-failed' | 'failed'
   readonly occurredAt: number
+  readonly revision: number
   readonly files?: readonly string[]
   readonly reason?: string
 }

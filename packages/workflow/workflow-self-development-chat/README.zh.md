@@ -161,6 +161,8 @@ Host-only：这个工具会重建并重启它所在的这个稳定版，所以�
 | `verification-failed` | rebase 后（或基线未动时）`verify` 失败；rebase 结果（如有）留在工作区上。 | 与 `conflict` 相同的修复战役反应。 |
 | `failed` | 门面本身未能完成这次操作。 | 发出 `merge-blocked`；只报告，不起修复战役——这不是一个能靠改代码修的失败。 |
 
+上面每处"发出"实际是两个 Cordis 事件，不是一个：本包自己的 `self-development-chat/merge-integrated`/`self-development-chat/merge-blocked`（`{ taskId, commit, baseMoved, occurredAt, revision }` / `{ taskId, status, occurredAt, revision, files?, reason? }`，声明在 `src/index.ts`），以及 `self-development/merge-integrated`/`self-development/merge-blocked`（`{ taskId, revision }` / `{ taskId, status, revision }`，`revision` 取自 `recordTrialApproval` 的返回结果）——后者是 `@deepseek-ai/dsh-workflow-self-development-events` 真正订阅的名字与形状，会折进它统一的通知事件（`Task integrated into stable` / `Merge blocked: <status>`）。
+
 **修复战役**：对 `conflict`/`verification-failed`，本包直接调用自己的提案编排——无人值守、`{ preset: 'unlimited' }` 预算、`allowedModificationScope: ['**']`（修复的是同一处改动，不是一个新划定范围的改动）、被拒任务已写好的**同一份**验收定义（原样读回并转发）、以及直接从该定义自身的用例推出的计划，因此天然满足计划覆盖校验。需求文案点名目标分支与冲突文件，或验证失败的原因。关键是**跳过第二张审批卡**：合并卡上已经写明冲突或验证失败会自动起修复战役，再问一次就是多余的。修复战役是一个全新任务（有自己的 id），不是被拒任务的延续。
 
 -----

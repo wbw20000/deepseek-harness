@@ -17,6 +17,7 @@ import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type {} from '@deepseek-ai/dsh-system-prompt'
+import type {} from '@deepseek-ai/dsh-workflow-self-development-events'
 import { ASSERTION_SHAPE_REFERENCE, controlDirectoryPlacementViolation } from './acceptance.ts'
 import { resolveChatConfig } from './config.ts'
 import type { ResolvedChatConfig, SelfDevelopmentChatConfig, UpgradeConfig } from './config.ts'
@@ -77,7 +78,10 @@ function contextPorts(ctx: Context): ChatPorts {
     facade: ctx.get('selfDevelopmentRemote') as SelfDevelopmentRemoteFacade,
     approval: ctx.get('approval'),
     workspaces: ctx.get('selfDevelopmentWorkspaces') as WorkspacesPort | undefined,
-    events: ctx.get('selfDevelopmentEvents') as CampaignEventSource | undefined,
+    // No cast needed here (unlike workspaces/trial/runner): importing the
+    // events package's own types below now loads its real `declare module`
+    // augmentation, so `ctx.get('selfDevelopmentEvents')` is already typed.
+    events: ctx.get('selfDevelopmentEvents'),
     trial: ctx.get('selfDevelopmentTrial') as TrialPort | undefined,
     systemPrompt: ctx.get('systemPrompt'),
     runner: ctx.get('selfDevelopmentRunner') as RunnerVerifyPort | undefined,
@@ -441,8 +445,16 @@ export class SelfDevelopmentChat extends Service {
       ...(exec?.callId === undefined ? {} : { callId: exec.callId }),
       ...(exec?.signal === undefined ? {} : { signal: exec.signal }),
       knownTaskIds: [...this.startedTaskIds],
-      emitIntegrated: (payload: MergeIntegratedEventPayload) => { this.ctx.emit('self-development-chat/merge-integrated', payload) },
-      emitBlocked: (payload: MergeBlockedEventPayload) => { this.ctx.emit('self-development-chat/merge-blocked', payload) },
+      emitIntegrated: (payload: MergeIntegratedEventPayload) => {
+        this.ctx.emit('self-development-chat/merge-integrated', payload)
+        // The name and shape @deepseek-ai/dsh-workflow-self-development-events
+        // actually subscribes to (packages/workflow/workflow-self-development-events/src/merge.ts:50-59).
+        this.ctx.emit('self-development/merge-integrated', { taskId: payload.taskId, revision: payload.revision })
+      },
+      emitBlocked: (payload: MergeBlockedEventPayload) => {
+        this.ctx.emit('self-development-chat/merge-blocked', payload)
+        this.ctx.emit('self-development/merge-blocked', { taskId: payload.taskId, status: payload.status, revision: payload.revision })
+      },
     }
     const outcome = await runMerge(deps, input)
     if (outcome.ok) {

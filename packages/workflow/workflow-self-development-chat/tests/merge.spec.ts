@@ -405,7 +405,9 @@ describe('runMerge: integrate outcomes', () => {
     if (!outcome.ok) return
     expect(outcome.result).toEqual({ status: 'integrated', commit: 'f'.repeat(40), baseMoved: true })
     expect(outcome.upgrade).toBeUndefined()
-    expect(integratedPayload).toMatchObject({ taskId: 'task-1', commit: 'f'.repeat(40), baseMoved: true })
+    // revision: 1 — the FakeFacade's recordTrialApproval is the only
+    // revision-bumping call before the event fires (see its own class doc).
+    expect(integratedPayload).toMatchObject({ taskId: 'task-1', commit: 'f'.repeat(40), baseMoved: true, revision: 1 })
   })
 
   it('on integrated: runs the configured upgrade and reports its outcome', async () => {
@@ -448,7 +450,7 @@ describe('runMerge: integrate outcomes', () => {
     expect(outcome.result.status).toBe('conflict')
     expect(outcome.repair?.ok).toBe(true)
     expect(approval.requests).toHaveLength(1) // the merge card only — no second card for the repair
-    expect(blockedPayload).toMatchObject({ taskId: 'task-1', status: 'conflict', files: ['src/a.ts', 'src/b.ts'] })
+    expect(blockedPayload).toMatchObject({ taskId: 'task-1', status: 'conflict', files: ['src/a.ts', 'src/b.ts'], revision: 1 })
     if (outcome.repair?.ok !== true) return
     expect(outcome.repair.taskId).not.toBe('task-1')
   })
@@ -479,7 +481,7 @@ describe('runMerge: integrate outcomes', () => {
     if (!outcome.ok) return
     expect(outcome.result.status).toBe('verification-failed')
     expect(outcome.repair?.ok).toBe(true)
-    expect(blockedPayload).toMatchObject({ taskId: 'task-1', status: 'verification-failed', reason: 'gate "pnpm test" exited with code 1' })
+    expect(blockedPayload).toMatchObject({ taskId: 'task-1', status: 'verification-failed', reason: 'gate "pnpm test" exited with code 1', revision: 1 })
     const facade = deps.facade as FakeFacade
     const createTaskCall = facade.calls.find(call => call.name === 'createTask')
     const spec = createTaskCall?.args[0] as { requirement: string } | undefined
@@ -535,7 +537,7 @@ describe('runMerge: integrate outcomes', () => {
     if (!outcome.ok) return
     expect(outcome.result.status).toBe('failed')
     expect(outcome.repair).toBeUndefined()
-    expect(blockedPayload).toMatchObject({ taskId: 'task-1', status: 'failed', reason: 'stable branch was force-pushed mid-merge' })
+    expect(blockedPayload).toMatchObject({ taskId: 'task-1', status: 'failed', reason: 'stable branch was force-pushed mid-merge', revision: 1 })
     expect(approval.requests).toHaveLength(1)
   })
 })

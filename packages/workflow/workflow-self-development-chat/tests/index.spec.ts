@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { ToolDefinition, ToolRunContext } from '@deepseek-ai/dsh-tools'
+import type {} from '@deepseek-ai/dsh-workflow-self-development-events'
 
 vi.mock('../src/baseline.ts', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/baseline.ts')>()
@@ -545,6 +546,45 @@ describe('self_development_merge tool', () => {
     expect(workspaces.integrateCalls[0]?.targetBranch).toBe('stable')
     const rendered = def.output.render({}, value as never)
     expect((rendered[0] as { text: string }).text).toContain('merged')
+  })
+
+  it('emits both this package\'s own merge-integrated event and the upstream self-development/merge-integrated event the events package subscribes to', async () => {
+    const facade = new FakeFacade()
+    facade.getTaskDetail = {
+      ...facade.getTaskDetail,
+      projection: { ...facade.getTaskDetail.projection, status: 'awaiting-trial' },
+    }
+    const { tools, ctx } = makeService({ facade, approval: new FakeApproval(), workspaces: new FakeWorkspaces(), runner: new FakeRunner() })
+    const localEvents: unknown[] = []
+    const upstreamEvents: unknown[] = []
+    ctx.on('self-development-chat/merge-integrated', (payload: unknown) => { localEvents.push(payload) })
+    ctx.on('self-development/merge-integrated', (payload: unknown) => { upstreamEvents.push(payload) })
+    const def = tools.find('self_development_merge')
+    const value = await def.execute({ taskId: 'task-1' }, fakeExec({ agent: fakeAgent() }))
+    expect((value as { ok: boolean }).ok).toBe(true)
+    // recordTrialApproval is FakeFacade's first revision-bumping call, so the observed revision is 1.
+    expect(localEvents).toEqual([expect.objectContaining({ taskId: 'task-1', commit: 'c'.repeat(40), baseMoved: false, revision: 1 })])
+    expect(upstreamEvents).toEqual([{ taskId: 'task-1', revision: 1 }])
+  })
+
+  it('emits both this package\'s own merge-blocked event and the upstream self-development/merge-blocked event on a blocked merge', async () => {
+    const facade = new FakeFacade()
+    facade.getTaskDetail = {
+      ...facade.getTaskDetail,
+      projection: { ...facade.getTaskDetail.projection, status: 'awaiting-trial' },
+    }
+    const workspaces = new FakeWorkspaces()
+    workspaces.integrateResult = { status: 'failed', reason: 'stable branch was force-pushed mid-merge' }
+    const { tools, ctx } = makeService({ facade, approval: new FakeApproval(), workspaces, runner: new FakeRunner() })
+    const localEvents: unknown[] = []
+    const upstreamEvents: unknown[] = []
+    ctx.on('self-development-chat/merge-blocked', (payload: unknown) => { localEvents.push(payload) })
+    ctx.on('self-development/merge-blocked', (payload: unknown) => { upstreamEvents.push(payload) })
+    const def = tools.find('self_development_merge')
+    const value = await def.execute({ taskId: 'task-1' }, fakeExec({ agent: fakeAgent() }))
+    expect((value as { ok: boolean }).ok).toBe(true)
+    expect(localEvents).toEqual([expect.objectContaining({ taskId: 'task-1', status: 'failed', reason: 'stable branch was force-pushed mid-merge', revision: 1 })])
+    expect(upstreamEvents).toEqual([{ taskId: 'task-1', status: 'failed', revision: 1 }])
   })
 
   it('omits agent, callId, and signal from the merge deps when the exec carries none of them', async () => {
