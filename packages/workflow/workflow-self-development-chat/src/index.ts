@@ -16,9 +16,11 @@ import z from '@deepseek-ai/schemastery'
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
+import type {} from '@deepseek-ai/dsh-system-prompt'
 import { resolveChatConfig } from './config.ts'
 import type { ResolvedChatConfig, SelfDevelopmentChatConfig } from './config.ts'
 import { budgetViolation } from './budget.ts'
+import { GUIDANCE_SECTION_NAME, GUIDANCE_SECTION_ORDER_NAME, GUIDANCE_TEXT } from './guidance.ts'
 import { deliverCampaignNotice } from './notify.ts'
 import type { NotifiableAgent } from './notify.ts'
 import { runPropose } from './propose.ts'
@@ -35,6 +37,7 @@ import type {
   SelfDevelopmentRemoteFacade,
   StatusReport,
   StopOutcome,
+  SystemPromptPort,
   TrialPort,
   WorkspacesPort,
 } from './types.ts'
@@ -51,6 +54,8 @@ export interface ChatPorts {
   readonly events: CampaignEventSource | undefined
   /** The optional trial service (DH-c), read for the status tool's trial URL. */
   readonly trial: TrialPort | undefined
+  /** The optional `systemPrompt` service; without one, the guidance section is skipped (logged at debug). */
+  readonly systemPrompt: SystemPromptPort | undefined
 }
 
 /** Read the service ports from the mounted services. */
@@ -63,14 +68,20 @@ function contextPorts(ctx: Context): ChatPorts {
     workspaces: ctx.get('selfDevelopmentWorkspaces') as WorkspacesPort | undefined,
     events: ctx.get('selfDevelopmentEvents') as CampaignEventSource | undefined,
     trial: ctx.get('selfDevelopmentTrial') as TrialPort | undefined,
+    systemPrompt: ctx.get('systemPrompt'),
   }
 }
 
 /**
  * Chat-side self-development launcher. Composition declares the hard
  * dependencies through {@linkcode SelfDevelopmentChat.inject}; the optional
- * workspaces, events, and trial services are read with `ctx.get` and every
- * tool degrades gracefully without them.
+ * workspaces, events, trial, and `systemPrompt` services are read with
+ * `ctx.get` and every tool degrades gracefully without them. When
+ * `systemPrompt` is mounted and `guidance` is not disabled, the service
+ * contributes a fixed section (see `guidance.ts`) so the model is actually
+ * told to call `self_development_propose` instead of editing the trial
+ * branch's workspace itself — a chat-side field test found that a
+ * README-only, never-injected snippet was not enough on its own.
  */
 export class SelfDevelopmentChat extends Service {
   static inject = ['tools', 'selfDevelopmentRemote', 'approval']
@@ -84,6 +95,7 @@ export class SelfDevelopmentChat extends Service {
     cardLocale: z.union(['zh', 'en'] as const).default('zh'),
     defaultUnattended: z.boolean().default(true),
     defaultBudget: z.any<ProposeBudget>().default({ preset: 'unlimited' }),
+    guidance: z.boolean().default(true),
   }) as unknown as z<SelfDevelopmentChatConfig>
 
   /** Validated deployment configuration the service runs under. */
@@ -140,6 +152,18 @@ export class SelfDevelopmentChat extends Service {
     this.workspaces = ports.workspaces
     this.trial = ports.trial
     this.approval = ports.approval
+
+    if (this.resolved.guidance) {
+      if (ports.systemPrompt === undefined) {
+        ctx.logger.debug('self-development-chat: ctx.systemPrompt is not mounted; the self-development guidance section is not registered.')
+      } else {
+        this.disposers.push(ports.systemPrompt.section({
+          name: GUIDANCE_SECTION_NAME,
+          order: ports.systemPrompt.getSectionOrder(GUIDANCE_SECTION_ORDER_NAME),
+          text: GUIDANCE_TEXT,
+        }))
+      }
+    }
 
     this.disposers.push(ctx.tools.register(defineTool({
       name: 'self_development_propose',

@@ -188,6 +188,24 @@ class FakeTools {
 }
 
 /** Minimal `ctx.get('selfDevelopmentEvents')` fake. */
+/** Minimal `ctx.get('systemPrompt')` fake, recording every registered section and its disposal. */
+class FakeSystemPrompt {
+  sections: { name: string; order: number; text: string }[] = []
+  disposedNames: string[] = []
+
+  section(section: { readonly name: string; readonly order: number; readonly text: string }): () => void {
+    this.sections.push({ ...section })
+    return () => {
+      this.disposedNames.push(section.name)
+      this.sections = this.sections.filter(entry => entry.name !== section.name)
+    }
+  }
+
+  getSectionOrder(name: string): number {
+    return name === 'SELF_DEVELOPMENT_CHAT' ? 1650 : 0
+  }
+}
+
 class FakeEvents {
   listeners: ((event: CampaignEvent) => void)[] = []
   unsubscribed = false
@@ -278,6 +296,7 @@ function makeService(ports: Partial<ChatPorts> & { facade: SelfDevelopmentRemote
     workspaces: new FakeWorkspaces(),
     events: undefined,
     trial: undefined,
+    systemPrompt: undefined,
     ...ports,
   }
   const service = new SelfDevelopmentChat(context, config as never, fullPorts)
@@ -337,6 +356,54 @@ describe('construction', () => {
     } as unknown as ToolRunContext
     const value = await def.execute(proposeArgs(), bareExec)
     expect((value as { ok: boolean }).ok).toBe(true)
+  })
+})
+
+describe('self-development guidance section', () => {
+  it('registers the guidance section at the centrally allocated order, naming every tool', () => {
+    const systemPrompt = new FakeSystemPrompt()
+    makeService({ facade: new FakeFacade(), systemPrompt })
+    expect(systemPrompt.sections).toHaveLength(1)
+    const section = systemPrompt.sections[0]!
+    expect(section.name).toBe('tool:self-development')
+    expect(section.order).toBe(1650)
+    expect(section.text).toContain('self_development_propose')
+    expect(section.text).toContain('self_development_status')
+    expect(section.text).toContain('self_development_stop')
+    expect(section.text).toContain('do NOT edit files in')
+    expect(section.text).toContain('do NOT run the tests yourself')
+  })
+
+  it('unregisters the guidance section on disposal', async () => {
+    const systemPrompt = new FakeSystemPrompt()
+    const { ctx } = makeService({ facade: new FakeFacade(), systemPrompt })
+    expect(systemPrompt.sections).toHaveLength(1)
+    await ctx.fiber.dispose()
+    expect(systemPrompt.sections).toHaveLength(0)
+    expect(systemPrompt.disposedNames).toEqual(['tool:self-development'])
+  })
+
+  it('does not register when guidance is disabled, even with systemPrompt mounted', () => {
+    const systemPrompt = new FakeSystemPrompt()
+    makeService({ facade: new FakeFacade(), systemPrompt }, { ...VALID_CONFIG, guidance: false })
+    expect(systemPrompt.sections).toEqual([])
+  })
+
+  it('skips and logs at debug when no systemPrompt service is mounted', () => {
+    const ctx = new Context()
+    context = ctx
+    const tools = new FakeTools()
+    ctx.provide('tools', tools as never)
+    const debug = vi.spyOn(ctx.logger, 'debug').mockImplementation(() => {})
+    expect(() => new SelfDevelopmentChat(ctx, VALID_CONFIG, {
+      facade: new FakeFacade(),
+      approval: undefined,
+      workspaces: undefined,
+      events: undefined,
+      trial: undefined,
+      systemPrompt: undefined,
+    })).not.toThrow()
+    expect(debug).toHaveBeenCalledWith(expect.stringContaining('systemPrompt is not mounted'))
   })
 })
 

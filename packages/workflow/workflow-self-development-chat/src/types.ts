@@ -217,6 +217,17 @@ export interface ApprovalPort {
   }): Promise<ApprovalOutcome>
 }
 
+/**
+ * Structural view of the optional `systemPrompt` service (`ctx.get('systemPrompt')`),
+ * covering only the two members this package calls.
+ */
+export interface SystemPromptPort {
+  /** Register one section; returns its disposer. */
+  section(section: { readonly name: string; readonly order: number; readonly text: string }): () => void
+  /** The centrally allocated order for a named position (see `@deepseek-ai/dsh-system-prompt`'s `SECTION_ORDERS`). */
+  getSectionOrder(name: string): number
+}
+
 /** One allocated task workspace (workspaces service projection). */
 export interface TaskWorkspaceView {
   readonly taskId: string

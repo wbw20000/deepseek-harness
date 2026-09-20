@@ -19,6 +19,7 @@ kind: "package-reference"
 - [八步顺序](#the-eight-step-sequence)
 - [任务 id 与基线摘要](#task-id-and-baseline-digest)
 - [战役结果通知](#campaign-result-notices)
+- [自迭代模式](#self-iterate-mode)
 - [Model Experience](#model-experience)
 - [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
 - [Dev Note](#dev-note)
@@ -39,6 +40,7 @@ kind: "package-reference"
 | `cardLocale` | `'zh'`（默认）或 `'en'`：审批卡文案与战役结果聊天通知使用的语言。 |
 | `defaultBudget` | 提案省略预算时使用的默认值；默认为 `{ preset: 'unlimited' }`。构造时校验——显式给出的非法值会让加载失败。 |
 | `defaultUnattended` | 提案省略无人值守选择时的默认值；默认 `true`。 |
+| `guidance` | 是否注册自开发引导 `systemPrompt` 片段（见 [Model Experience](#model-experience)）；默认 `true`。 |
 
 从上下文读取的端口（除 `approval` 外均可选）：
 
@@ -48,6 +50,7 @@ kind: "package-reference"
 | 审批 | `approval` | 硬依赖注入：插件无法加载。 |
 | 工作区 | `selfDevelopmentWorkspaces` | `self_development_propose` 回退为要求 `<experimentsRoot>/<taskId>` 已存在，不存在则拒绝。 |
 | 事件 | `selfDevelopmentEvents` | 永远不会投递战役结果聊天通知；`self_development_status` 的 `latestEvent` 字段永远为空。 |
+| 系统提示 | `systemPrompt` | 不会注册自开发引导片段（记一条 `debug` 日志）；模型看不到"优先用 self_development_propose、而不是直接改试验版"的内置指令。 |
 | 试用（DH-c） | `selfDevelopmentTrial` | `self_development_status` 的 `trialUrl` 字段永远为空。 |
 
 -----
@@ -114,6 +117,19 @@ kind: "package-reference"
 
 -----
 
+<a id="self-iterate-mode"></a>
+## 自迭代模式
+
+本包 `presets/self-iterate/` 下的一个 opt-in [agent preset](../../preset/agent-presets/README.zh.md)，**不在** `@deepseek-ai/dsh-agent-presets` 自带的预设集合里——部署方必须先把这个目录加成一个 root，预设选择器才会展示它。
+
+**怎么启用**：把 `agent-presets` 配置的 `roots` 指向这个目录（`packages/workflow/workflow-self-development-chat/presets`，`trust: 'system'`）；`packages/bundle/web-app/overlays/self-development.overlay.yml` 里已经有一份可以直接改的 patch。`self_development_*` 三个工具不需要在预设里再挂一行——它们来自组合里任何已经挂载了 `selfDevelopmentChat` 的地方（挂载后就注册进所有预设共用的工具表）。
+
+**包含什么**：`@deepseek-ai/dsh-persona` 一行负责给这个模式定调（`complete: false`，所以本包自己的[引导片段](#model-experience)与其它所有已注册的提示片段依然会拼进去；`includeRuntimeContext: true`，与内置的 `minimal` 预设不同，因为起草验收用例得看到仓库当前状态）；`@deepseek-ai/dsh-agent-instructions` 提供项目级指令；`@deepseek-ai/dsh-tool-fs-search` 作为只读检索，让 Agent 能一边看代码一边起草验收用例。
+
+**不包含什么**：没有文件编辑工具（`tool-fs`、`tool-str-replace-editor`），没有 Shell 或终端工具（`tool-bash`、`tool-pwsh`，及它们的持久/终端形态）——对工作区的任何改动都只能走 `self_development_propose` 与它启动的战役，这个会话本身碰不到工作区。
+
+-----
+
 <a id="model-experience"></a>
 ## Model Experience
 
@@ -121,7 +137,7 @@ kind: "package-reference"
 
 #### What the model sees
 
-本包不注册任何 `systemPrompt` 片段：下方是一段可粘贴文本，由部署方加进稳定侧聊天 Agent 自己的指令里（见该 Agent 的组合配置），并非 `selfDevelopmentChat` 自动贡献的内容。一旦粘贴，该 Agent 作用域内的每次请求都会带上它。
+`selfDevelopmentChat` 挂载、且挂载了 `systemPrompt` 服务、`guidance` 又不是 `false`（默认 `true`）时，本包会注册一段固定文本的 `systemPrompt` 片段（`tool:self-development`，见 `src/guidance.ts`）。没有挂载 `systemPrompt` 服务时跳过并记一条 `debug` 日志；`guidance: false` 时跳过且不记日志，留给部署方自行组合引导。一次聊天侧现场实测显示：这段引导原来只是 README 里的文字、从未被注入任何地方时，模型会直接拿起自己的改文件与 Shell 工具，而不是发起提案——以下是实际注册的文本：
 
 ##### Self-development guidance
 
@@ -149,15 +165,19 @@ yourself:
 Never call these tools without the user having asked for a change on the
 trial branch, and never fill in placeholder or guessed acceptance commands
 just to get past validation.
+
+When the user asks for a change on the trial branch, do NOT edit files in
+this workspace yourself and do NOT run the tests yourself; propose it with
+self_development_propose and stop after the tool result.
 ```
 
 #### Token effect
 
-本包自身不产生这项开销——它不贡献 `systemPrompt` 片段。一旦部署方把上面这段指引粘进另一个插件的片段里，该片段自己固定的每请求开销才会在那里生效。
+片段注册期间，每次请求都有一份小额固定输入开销。
 
 #### KV Cache effect
 
-本包自身没有这项效应；缓存效应属于部署方粘贴目标——那个 `systemPrompt` 片段。
+片段保持注册、文本不变时前缀稳定；挂载、卸载插件或切换 `guidance` 都会让复用从这个片段处失效。
 
 ### Tool calls
 

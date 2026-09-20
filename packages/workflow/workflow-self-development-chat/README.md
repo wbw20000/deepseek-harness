@@ -19,6 +19,7 @@ Lets a user launch a self-development campaign from an ordinary chat message. `s
 - [The eight-step sequence](#the-eight-step-sequence)
 - [Task id and baseline digest](#task-id-and-baseline-digest)
 - [Campaign result notices](#campaign-result-notices)
+- [Self-iterate mode](#self-iterate-mode)
 - [Model Experience](#model-experience)
 - [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
 - [Dev Note](#dev-note)
@@ -39,6 +40,7 @@ Lets a user launch a self-development campaign from an ordinary chat message. `s
 | `cardLocale` | `'zh'` (default) or `'en'`: the language of the approval-card copy and the campaign-result chat notice. |
 | `defaultBudget` | Budget used when a proposal omits one; defaults to `{ preset: 'unlimited' }`. Validated at construction — an invalid explicit value fails the mount. |
 | `defaultUnattended` | Unattended default when a proposal omits it; defaults to `true`. |
+| `guidance` | Register the self-development guidance `systemPrompt` section (see [Model Experience](#model-experience)); defaults to `true`. |
 
 Ports read from the context (all but `approval` optional):
 
@@ -48,6 +50,7 @@ Ports read from the context (all but `approval` optional):
 | Approval | `approval` | Hard injection: the plugin fails to load. |
 | Workspaces | `selfDevelopmentWorkspaces` | `self_development_propose` falls back to an already-existing `<experimentsRoot>/<taskId>` directory and refuses a missing one. |
 | Events | `selfDevelopmentEvents` | No campaign-result chat notice is ever delivered; `self_development_status`'s `latestEvent` field is never populated. |
+| System prompt | `systemPrompt` | The self-development guidance section is not registered (logged at `debug`); the model sees no built-in instruction to prefer `self_development_propose` over editing the trial branch itself. |
 | Trial (DH-c) | `selfDevelopmentTrial` | `self_development_status`'s `trialUrl` field is never populated. |
 
 -----
@@ -114,6 +117,19 @@ When the optional events service is mounted, this package subscribes to it and k
 
 -----
 
+<a id="self-iterate-mode"></a>
+## Self-iterate mode
+
+An opt-in [agent preset](../../preset/agent-presets/README.md) at `presets/self-iterate/` in this package, **not** bundled inside `@deepseek-ai/dsh-agent-presets`'s own shipped set — a deployment must add this directory as a root before the preset picker offers it.
+
+**Enable it**: point an `agent-presets` config's `roots` at this directory (`packages/workflow/workflow-self-development-chat/presets`, `trust: 'system'`); `packages/bundle/web-app/overlays/self-development.overlay.yml` carries a ready-to-adjust patch. The three `self_development_*` tools do not need a row of their own in the preset — they come from wherever the composition already mounts `selfDevelopmentChat` (they register on the shared tools registry every preset reads from).
+
+**Includes**: the `@deepseek-ai/dsh-persona` row frames the mode (`complete: false`, so this package's own [guidance section](#model-experience) and every other registered prompt section still assemble too; `includeRuntimeContext: true`, unlike the shipped `minimal` preset, because drafting a correct acceptance case benefits from seeing current repository state); `@deepseek-ai/dsh-agent-instructions` for project-level instructions; `@deepseek-ai/dsh-tool-fs-search` as read-only repository search, so the agent can read code while drafting acceptance cases.
+
+**Excludes**: no file-editing tool (`tool-fs`, `tool-str-replace-editor`) and no shell or terminal tool (`tool-bash`, `tool-pwsh`, and their persistent/terminal forms) — every workspace change goes through `self_development_propose` and the campaign it starts, never through this session directly.
+
+-----
+
 <a id="model-experience"></a>
 ## Model Experience
 
@@ -121,7 +137,7 @@ When the optional events service is mounted, this package subscribes to it and k
 
 #### What the model sees
 
-This package registers no `systemPrompt` section of its own: the guidance below is a pasteable snippet a deployment adds to the stable-side chat agent's own instructions (see that agent's composition), not something `selfDevelopmentChat` contributes automatically. Once pasted, every request in that agent's scope contains it.
+This package registers a fixed `systemPrompt` section (`tool:self-development`, `src/guidance.ts`) whenever `selfDevelopmentChat` is mounted with a `systemPrompt` service present and `guidance` is not `false` (`guidance` defaults to `true`). Without a mounted `systemPrompt` service the section is skipped and logged at `debug`; setting `guidance: false` skips it without logging, for a deployment that composes its own guidance instead. A chat-side field test showed a model reach for its own file-editing and shell tools instead of proposing when this guidance was only README prose that nothing ever injected — the exact registered text:
 
 ##### Self-development guidance
 
@@ -149,15 +165,19 @@ yourself:
 Never call these tools without the user having asked for a change on the
 trial branch, and never fill in placeholder or guessed acceptance commands
 just to get past validation.
+
+When the user asks for a change on the trial branch, do NOT edit files in
+this workspace yourself and do NOT run the tests yourself; propose it with
+self_development_propose and stop after the tool result.
 ```
 
 #### Token effect
 
-None from this package directly — it contributes no `systemPrompt` section. Once a deployment pastes the guidance above into another plugin's section, that section's own fixed per-request cost applies there.
+Small fixed input cost per request while the section is registered.
 
 #### KV Cache effect
 
-None from this package; cache effects belong to whichever `systemPrompt` section the deployment pastes the guidance into.
+Prefix-stable while the section is registered and its text is unchanged. Mounting, unmounting, or toggling `guidance` invalidates reuse from this prompt section.
 
 ### Tool calls
 

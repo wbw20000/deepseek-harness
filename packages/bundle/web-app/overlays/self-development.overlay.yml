@@ -48,3 +48,25 @@
     # Browser panel row: one right-Sidebar tab plus one Settings section.
     - id: ui-self-development
       name: '@deepseek-ai/dsh-client-ui-self-development'
+
+# Patch (not insert): `agent-presets` already has a row in the base bundle
+# (packages/bundle/web-app/cordis.patch.yml), and a patch replaces the
+# targeted row's whole config — so `default` is restated here even though
+# this overlay does not change it, or the base's `default: standard` would be
+# lost. This adds the opt-in "自迭代模式" (self-iterate) preset — read-only
+# repository search plus `self_development_propose`/`_status`/`_stop`, no
+# file-editing or shell tool — as a `system`-trust root alongside the shipped
+# roster (see `PresetRoot` in packages/preset/agent-presets/src/preset.ts).
+# The preset itself mounts none of those three tools with a row of its own:
+# once ANY row in this composition mounts
+# `@deepseek-ai/dsh-workflow-self-development-chat` on the shared tools
+# registry — not yet done by this overlay; see the package's own README for
+# its config — every preset, this one included, already sees them, because
+# tools register into one process-wide registry regardless of which preset's
+# session is asking.
+- id: agent-presets
+  config:
+    default: standard
+    roots:
+      - path: /absolute/path/to/deepseekharness/packages/workflow/workflow-self-development-chat/presets
+        trust: system
