@@ -7,7 +7,7 @@
  * @module trial.spec
  */
 
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -67,6 +67,9 @@ async function makeService(options: {
   readonly runnerDshHome?: string
   readonly callerLoopback?: boolean
   readonly facadeGetTask?: (taskId: string) => Promise<unknown>
+  /** `PATH` the build step searches for a bare `pnpm`; defaults to empty so the fixture worktree's
+   * own pnpm (not whatever the test-running host happens to have on PATH) is what gets used. */
+  readonly pathEnv?: string
 } = {}): Promise<ServiceHandle> {
   environment = options.environment ?? await makeEnvironment()
   context = new Context()
@@ -104,6 +107,7 @@ async function makeService(options: {
   const service = new SelfDevelopmentTrial(context, trialConfig(environment, config), {
     ...(options.facadeGetTask === undefined ? { getTask: async () => taskDetail(worktree, dataHome) } : {}),
     events,
+    pathEnv: options.pathEnv ?? '',
   })
   return {
     service,
@@ -229,6 +233,38 @@ describe('openTrial', () => {
     const { service } = await makeService({ environment, worktree: bare.root })
     await expect(service.openTrial('task-no-pnpm'))
       .rejects.toThrow(/no pnpm found for the build/)
+  })
+
+  it('falls through to process.env.PATH when no pathEnv override is configured', async () => {
+    // Every other test pins pathEnv to '' through makeService so the fixture
+    // worktree's own pnpm is what gets used; this is the one test for the
+    // production default (internals.pathEnv omitted), driven through a
+    // stubbed process.env.PATH rather than the real host PATH.
+    environment = await makeEnvironment()
+    const bare = await makeWorktree(environment.base, 'no-worktree-pnpm', { pnpm: 'none' })
+    const pathDir = join(environment.base, 'stubbed-path')
+    await mkdir(pathDir, { recursive: true })
+    const fakePnpm = join(pathDir, 'pnpm')
+    // A plain shell script, not a `#!/usr/bin/env node` one: stubbing PATH to
+    // just this directory (below) would otherwise also hide the `node` the
+    // shebang needs to resolve.
+    await writeFile(fakePnpm, '#!/bin/sh\necho building\n')
+    await chmod(fakePnpm, 0o755)
+    vi.stubEnv('PATH', pathDir)
+    try {
+      context = new Context()
+      const dataHome = join(environment.base, 'path-fallback-home')
+      const service = new SelfDevelopmentTrial(context, trialConfig(environment), {
+        getTask: async () => ({ card: { launchProfile: { worktree: bare.root, dataHome } } }),
+        events: { subscribe: () => () => {} },
+        // No pathEnv here: falls through to process.env.PATH, stubbed above.
+      })
+      expectOpened(await service.openTrial('task-path-fallback'))
+      const log = await readFile(trialLogPath(environment.controlDirectory, 'task-path-fallback'), 'utf8')
+      expect(log).toContain('building')
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 
   it('fails the open when every port in the range is occupied', async () => {
@@ -380,13 +416,26 @@ describe('campaign-passed auto open', () => {
     expect(subscriberCount()).toBe(1)
   })
 
-  it('logs an automatic-open failure without rejecting', async () => {
+  it('logs an automatic-open failure without rejecting, both to the logger and the task log', async () => {
     const { emit, warn } = await makeService({
       facadeGetTask: () => Promise.reject(Object.assign(new Error('no such task'), { code: 'self-development/task-unknown' })),
     })
     emit({ taskId: 'task-broken', kind: 'campaign-passed', title: 'passed', occurredAt: 1 })
     await until(() => warn.mock.calls.some(call => String(call[0]).includes('automatic open')))
     expect(warn).toHaveBeenCalled()
+    // The host's general log is not always watched; the failure also has to
+    // show up in the task's own trial log, without the launch token (there
+    // is none here, but the write still goes through the same redacting path).
+    await until(async () => {
+      try {
+        return (await readFile(trialLogPath(environment!.controlDirectory, 'task-broken'), 'utf8')).includes('automatic open failed')
+      } catch {
+        return false
+      }
+    })
+    const log = await readFile(trialLogPath(environment!.controlDirectory, 'task-broken'), 'utf8')
+    expect(log).toContain('automatic open failed')
+    expect(log).toContain('no such task')
   })
 
   it('keeps no subscription when autoOpen is false', async () => {
@@ -413,6 +462,8 @@ describe('config validation', () => {
     ['empty nodeBinary', { nodeBinary: '' }, /nodeBinary .*absolute path/],
     ['relative controlDirectory', { controlDirectory: 'relative/control' }, /controlDirectory .*absolute path/],
     ['empty controlDirectory', { controlDirectory: '' }, /controlDirectory .*absolute path/],
+    ['relative pnpmBinary', { pnpmBinary: 'pnpm' }, /pnpmBinary .*absolute path/],
+    ['empty pnpmBinary', { pnpmBinary: '' }, /pnpmBinary .*absolute path/],
     ['non-integer port', { portRange: [3000.5, 3010] as [number, number] }, /between 1 and 65535/],
     ['port below the range', { portRange: [0, 10] as [number, number] }, /between 1 and 65535/],
     ['port above the range', { portRange: [3000, 65536] as [number, number] }, /between 1 and 65535/],

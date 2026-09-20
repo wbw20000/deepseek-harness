@@ -21,6 +21,13 @@ export interface TrialConfig {
   readonly readyTimeoutMs: number
   /** Whether a `campaign-passed` event automatically opens the task's trial instance. */
   readonly autoOpen: boolean
+  /**
+   * Explicit pnpm binary to try first when resolving the build command;
+   * absolute path. Falls through to `pnpm` on the host `PATH`, the
+   * worktree's own installed pnpm, and the corepack shim next to
+   * `nodeBinary` when unset or when the configured path does not exist.
+   */
+  readonly pnpmBinary?: string
 }
 
 /**

@@ -54,6 +54,12 @@ export interface SelfDevelopmentTrialInternals {
   readonly events?: TrialEventSource
   /** Host clock used for `startedAt`; defaults to `Date.now`. */
   readonly now?: () => number
+  /**
+   * `PATH` value the build step searches for a bare `pnpm`; defaults to
+   * `process.env.PATH`. Overridable so a direct unit test can pin the
+   * build's pnpm resolution independently of the host running the test.
+   */
+  readonly pathEnv?: string
 }
 
 /** One live trial instance this service owns. */
@@ -82,6 +88,7 @@ export class SelfDevelopmentTrial extends TypertRemoteService {
     buildTimeoutMs: z.number().step(1).default(DEFAULT_BUILD_TIMEOUT_MS),
     readyTimeoutMs: z.number().step(1).default(DEFAULT_READY_TIMEOUT_MS),
     autoOpen: z.boolean().default(true),
+    pnpmBinary: z.string(),
   }) as unknown as z<TrialConfig>
 
   /** Validated deployment configuration. */
@@ -293,7 +300,8 @@ export class SelfDevelopmentTrial extends TypertRemoteService {
    *   fails, times out, or has no pnpm to run.
    */
   private async build(taskId: string, worktree: string): Promise<void> {
-    const command = await resolveBuildCommand(worktree, this.resolved.nodeBinary)
+    const pathEnv = this.internals.pathEnv ?? process.env.PATH
+    const command = await resolveBuildCommand(worktree, this.resolved.nodeBinary, this.resolved.pnpmBinary, pathEnv)
     try {
       await runBuild(worktree, command, this.resolved.nodeBinary, this.resolved.buildTimeoutMs, (chunk) => {
         void this.log(taskId, chunk)
@@ -365,7 +373,9 @@ export class SelfDevelopmentTrial extends TypertRemoteService {
    * the consumer is mounted. The events kind arrives once DH-a's mapping
    * lands; this worktree's consumer emits no such kind yet, so the
    * subscription stays inert until then. An automatic open that fails is
-   * logged and never propagates: a notification must not reject.
+   * logged to both the service logger and the task's own trial log — a
+   * notification must still never propagate — so the failure is visible
+   * even when the host's general log stream is not being watched.
    */
   private subscribeEvents(): void {
     const source: TrialEventSource | undefined = this.internals.events
@@ -380,11 +390,13 @@ export class SelfDevelopmentTrial extends TypertRemoteService {
       // oxlint-disable-next-line typescript/no-unnecessary-condition
       if (event.kind !== 'campaign-passed') return
       void this.openTrial(event.taskId).catch((error: unknown) => {
+        const message = errorText(error)
         this.ctx.logger.warn(
           'self-development-trial: automatic open for task "%s" failed: %s',
           event.taskId,
-          errorText(error),
+          message,
         )
+        void this.log(event.taskId, `automatic open failed: ${message}`)
       })
     })
   }
@@ -451,6 +463,9 @@ function validateConfig(config: TrialConfig): TrialConfig {
   }
   if (config.controlDirectory.length === 0 || !isAbsolute(config.controlDirectory)) {
     throw invalid(`controlDirectory ${JSON.stringify(config.controlDirectory)} must be an absolute path`)
+  }
+  if (config.pnpmBinary !== undefined && (config.pnpmBinary.length === 0 || !isAbsolute(config.pnpmBinary))) {
+    throw invalid(`pnpmBinary ${JSON.stringify(config.pnpmBinary)} must be an absolute path`)
   }
   const [from, to] = config.portRange
   for (const bound of config.portRange) {

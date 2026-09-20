@@ -202,6 +202,11 @@ describe('openTrial teardown bookkeeping', () => {
       autoOpen: false,
     }, {
       getTask: async () => ({ card: { launchProfile: { worktree, dataHome: join(base!, 'home') } } }),
+      // Empty, not the real host PATH: these tests exercise buildableWorktree's
+      // own fake node_modules/.bin/pnpm, which the new PATH-first resolution
+      // order would otherwise shadow if the test host happens to have a real
+      // pnpm on PATH.
+      pathEnv: '',
     })
     return { service, control }
   }
