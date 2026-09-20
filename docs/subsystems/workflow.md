@@ -757,6 +757,46 @@ One task's worktree was integrated into the stable branch and the stable side is
 
 Source: [`packages/workflow/workflow-self-development-events/src/merge.ts`](../../packages/workflow/workflow-self-development-events/src/merge.ts)
 
+<a id="self-development-chat-events"></a>
+
+### `self-development-chat/*` events
+
+<a id="self-development-chatmerge-blocked--emit"></a>
+
+#### `self-development-chat/merge-blocked` — emit
+
+Emitted when `self_development_merge` settles on `conflict`, `verification-failed`, or `failed`; see MergeBlockedEventPayload.
+
+```ts cordis-catalog
+/**
+ * Emitted when `self_development_merge` settles on `conflict`,
+ * `verification-failed`, or `failed`; see {@link MergeBlockedEventPayload}.
+ * @param payload - the task id, the block status, the conflicting files or reason, the revision, and the time.
+ * @mode emit
+ */
+'self-development-chat/merge-blocked'(payload: MergeBlockedEventPayload): void
+```
+
+Source: [`packages/workflow/workflow-self-development-chat/src/index.ts`](../../packages/workflow/workflow-self-development-chat/src/index.ts)
+
+<a id="self-development-chatmerge-integrated--emit"></a>
+
+#### `self-development-chat/merge-integrated` — emit
+
+Emitted after a successful `self_development_merge` fast-forward; see MergeIntegratedEventPayload.
+
+```ts cordis-catalog
+/**
+ * Emitted after a successful `self_development_merge` fast-forward; see
+ * {@link MergeIntegratedEventPayload}.
+ * @param payload - the task id, the fast-forwarded commit, whether the target moved, the revision, and the time.
+ * @mode emit
+ */
+'self-development-chat/merge-integrated'(payload: MergeIntegratedEventPayload): void
+```
+
+Source: [`packages/workflow/workflow-self-development-chat/src/index.ts`](../../packages/workflow/workflow-self-development-chat/src/index.ts)
+
 <a id="workflow-events"></a>
 
 ### `workflow/*` events

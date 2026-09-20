@@ -238,6 +238,7 @@ export const EVENT_SCOPE_PAGE: Record<string, string> = {
   'webserver': 'web-server.md',
   'workflow': 'workflow.md',
   'self-development': 'workflow.md',
+  'self-development-chat': 'workflow.md',
 }
 
 /**
@@ -898,6 +899,8 @@ export const TYPE_LINK_EXEMPTIONS: Readonly<Record<string, string>> = {
   LaunchProfile: 'stored per-task launch profile is owned by packages/workflow/workflow-self-development-remote/README.md',
   LaunchProfileResult: 'facade launch profile result is owned by packages/workflow/workflow-self-development-remote/README.md',
   RemoteConfig: 'facade deployment config is owned by packages/workflow/workflow-self-development-remote/README.md',
+  MergeIntegratedEventPayload: 'chat merge event payload is owned by packages/workflow/workflow-self-development-chat/README.md',
+  MergeBlockedEventPayload: 'chat merge event payload is owned by packages/workflow/workflow-self-development-chat/README.md',
   OpenTrialResult: 'trial-instance open result is owned by packages/workflow/workflow-self-development-trial/README.md',
   TrialSummary: 'live trial-instance row is owned by packages/workflow/workflow-self-development-trial/README.md',
 }

@@ -551,11 +551,18 @@ declare module '@deepseek-ai/cordis' {
     selfDevelopmentChat: SelfDevelopmentChat
   }
   interface Events {
-    /** Emitted after a successful `self_development_merge` fast-forward (DI-b wave); see {@link MergeIntegratedEventPayload}. */
+    /**
+     * Emitted after a successful `self_development_merge` fast-forward; see
+     * {@link MergeIntegratedEventPayload}.
+     * @param payload - the task id, the fast-forwarded commit, whether the target moved, the revision, and the time.
+     * @mode emit
+     */
     'self-development-chat/merge-integrated'(payload: MergeIntegratedEventPayload): void
     /**
      * Emitted when `self_development_merge` settles on `conflict`,
      * `verification-failed`, or `failed`; see {@link MergeBlockedEventPayload}.
+     * @param payload - the task id, the block status, the conflicting files or reason, the revision, and the time.
+     * @mode emit
      */
     'self-development-chat/merge-blocked'(payload: MergeBlockedEventPayload): void
   }

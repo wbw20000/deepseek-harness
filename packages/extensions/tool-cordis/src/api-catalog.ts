@@ -4070,6 +4070,22 @@ export const EVENT_API: readonly EventApiEntry[] = [
     parameters: [{ name: 'progress', description: 'the installation\'s request id and phase.' }],
   },
   {
+    name: 'self-development-chat/merge-blocked',
+    mode: 'emit',
+    signature: '\'self-development-chat/merge-blocked\'(payload: MergeBlockedEventPayload): void',
+    summary: 'Emitted when `self_development_merge` settles on `conflict`, `verification-failed`, or `failed`; see MergeBlockedEventPayload.',
+    description: 'Emitted when `self_development_merge` settles on `conflict`, `verification-failed`, or `failed`; see MergeBlockedEventPayload.',
+    parameters: [{ name: 'payload', description: 'the task id, the block status, the conflicting files or reason, the revision, and the time.' }],
+  },
+  {
+    name: 'self-development-chat/merge-integrated',
+    mode: 'emit',
+    signature: '\'self-development-chat/merge-integrated\'(payload: MergeIntegratedEventPayload): void',
+    summary: 'Emitted after a successful `self_development_merge` fast-forward; see MergeIntegratedEventPayload.',
+    description: 'Emitted after a successful `self_development_merge` fast-forward; see MergeIntegratedEventPayload.',
+    parameters: [{ name: 'payload', description: 'the task id, the fast-forwarded commit, whether the target moved, the revision, and the time.' }],
+  },
+  {
     name: 'self-development/campaign-ended',
     mode: 'emit',
     signature: '\'self-development/campaign-ended\'(payload: CampaignEndedPayload): void',
@@ -5318,14 +5334,6 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type InstallSpecKind = \'registry\' | \'path\' | \'git\' | \'tarball\';',
   },
   {
-    name: 'IntegrationRequest',
-    declaration: 'export interface IntegrationRequest {\n    readonly taskId: string;\n    readonly targetBranch: string;\n    readonly actor: string;\n    readonly verify?: (worktree: string) => Promise<VerifyOutcome>;\n}',
-  },
-  {
-    name: 'IntegrationResult',
-    declaration: 'export type IntegrationResult = {\n    status: \'integrated\';\n    commit: string;\n    baseMoved: boolean;\n} | {\n    status: \'conflict\';\n    files: readonly string[];\n    baseMoved: true;\n} | {\n    status: \'verification-failed\';\n    reason: string;\n    baseMoved: boolean;\n} | {\n    status: \'failed\';\n    reason: string;\n};',
-  },
-  {
     name: 'InvariantFailure',
     declaration: 'export type InvariantFailure = (message: string) => never;',
   },
@@ -5574,8 +5582,16 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type McpResourceRequest = {\n    method: \'resources/list\' | \'resources/templates/list\';\n    cursor?: string;\n} | {\n    method: \'resources/read\';\n    uri: string;\n};',
   },
   {
+    name: 'MergeBlockedEventPayload',
+    declaration: 'export interface MergeBlockedEventPayload {\n    readonly taskId: string;\n    readonly status: \'conflict\' | \'verification-failed\' | \'failed\';\n    readonly occurredAt: number;\n    readonly revision: number;\n    readonly files?: readonly string[];\n    readonly reason?: string;\n}',
+  },
+  {
     name: 'MergeBlockedPayload',
     declaration: 'export interface MergeBlockedPayload {\n    readonly taskId: string;\n    readonly status: string;\n    readonly revision: number;\n}',
+  },
+  {
+    name: 'MergeIntegratedEventPayload',
+    declaration: 'export interface MergeIntegratedEventPayload {\n    readonly taskId: string;\n    readonly commit: string;\n    readonly baseMoved: boolean;\n    readonly occurredAt: number;\n    readonly revision: number;\n}',
   },
   {
     name: 'MergeIntegratedPayload',
@@ -7584,10 +7600,6 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'VerifiedWebhookDelivery',
     declaration: 'export interface VerifiedWebhookDelivery<K extends string = string> {\n    readonly kind: K;\n    readonly source: WebhookSourceId;\n    readonly deliveryId: WebhookDeliveryId;\n    readonly event: WebhookEventOf<K>;\n    readonly receivedAt: number;\n}',
-  },
-  {
-    name: 'VerifyOutcome',
-    declaration: 'export type VerifyOutcome = {\n    ok: true;\n} | {\n    ok: false;\n    reason: string;\n};',
   },
   {
     name: 'WebBootBatch',

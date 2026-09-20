@@ -3862,6 +3862,15 @@ export interface SelfDevelopmentChatConfig {
   readonly experimentsRoot: string
   /** Actor recorded as creator, plan confirmer, budget approver, and campaign acceptor. */
   readonly actor: string
+  /** Branch `self_development_merge` merges a passed task's worktree into. */
+  readonly targetBranch: string
+  /**
+   * Commands run with `sh -c` inside the merged worktree during `verify`, in
+   * order; a non-zero exit or a 20-minute timeout fails the merge. Defaults to `[]`.
+   */
+  readonly integrationGates?: readonly string[] | undefined
+  /** How `self_development_merge` rebuilds and restarts the stable version after an `integrated` result; defaults to `{ kind: 'none' }`. */
+  readonly upgrade?: UpgradeConfig | undefined
   /** Language of the approval-card copy; defaults to `zh`. */
   readonly cardLocale?: 'zh' | 'en' | undefined
   /** Budget used when the tool call omits one; defaults to the `unlimited` preset. */
@@ -3875,6 +3884,9 @@ export interface SelfDevelopmentChatConfig {
    */
   readonly guidance?: boolean | undefined
 }
+
+/** Post-integration upgrade strategy; see {@link UpgradeSourceConfig}. */
+export type UpgradeConfig = UpgradeSourceConfig | UpgradeLauncherConfig | UpgradeNoneConfig
 
 /** Budget terms the proposing agent selects; "unlimited" is the 24-hour time preset. */
 export type ProposeBudget =
@@ -3894,9 +3906,42 @@ export type ProposeBudget =
     /** Time budget in hours; must be positive and at most `MAX_BUDGET_HOURS` (24). */
     readonly hours: number
   }
+
+/**
+ * Rebuild the stable version from source after a fast-forward merge:
+ * `git merge --ff-only <targetBranch>` in `projectRoot` (a no-op, still
+ * exit-0, when `integrate` already fast-forwarded that same worktree),
+ * `pnpm install --offline --frozen-lockfile` only when merging changed
+ * `pnpm-lock.yaml`, `pnpm run --silent build`, then a detached
+ * `restartCommand`, then this process exits.
+ */
+export interface UpgradeSourceConfig {
+  /** Selects the source-tree rebuild-and-restart form. */
+  readonly kind: 'source'
+  /** Absolute path of the stable version's own worktree (the running deployment, not the task's worktree). */
+  readonly projectRoot: string
+  /** Argv of the detached restart script, e.g. `['d3/restart-d3.sh']`. */
+  readonly restartCommand: readonly string[]
+  /** Whether a changed `pnpm-lock.yaml` triggers `pnpm install`; defaults to `true`. `false` never installs. */
+  readonly installIfLockfileChanged?: boolean | undefined
+}
+
+/** Hand the upgrade off to the packaged launcher; interface and docs only this wave, not field-tested. */
+export interface UpgradeLauncherConfig {
+  /** Selects the packaged-launcher handoff form. */
+  readonly kind: 'launcher'
+  /** Absolute path (or resolvable command name) of the `dsh-upgrade`-style launcher binary. */
+  readonly dshUpgradeBin: string
+}
+
+/** No upgrade/restart step at all — the right choice for a demo repository whose "stable version" is not this deployment. */
+export interface UpgradeNoneConfig {
+  /** Selects "do nothing after an integrated merge". */
+  readonly kind: 'none'
+}
 ```
 
-来源：[`packages/workflow/workflow-self-development-chat/src/config.ts:24`](../packages/workflow/workflow-self-development-chat/src/config.ts)
+来源：[`packages/workflow/workflow-self-development-chat/src/config.ts:60`](../packages/workflow/workflow-self-development-chat/src/config.ts)
 
 <a id="deepseek-aidsh-workflow-self-development-events"></a>
 

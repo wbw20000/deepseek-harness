@@ -178,6 +178,8 @@ After an `integrated` result, `self_development_merge` runs the deployment's con
 
 -----
 
+No runtime invariant companion is published: the service exposes no runtime observation stream of its own, and the relationships it owns — one approval request per proposal or merge, the eight-step order, and one notice per campaign or merge result — are covered by focused behavior tests against stand-in seams.
+
 <a id="model-experience"></a>
 ## Model Experience
 
