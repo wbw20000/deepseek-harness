@@ -292,6 +292,43 @@ describe('connection session routes', () => {
     } finally { await dispose() }
   })
 
+  it('mints pairing URLs from the configured publicOrigin instead of the request origin', async () => {
+    const { routes, connection, dispose } = await mounted({
+      cookieSecure: true,
+      trustedHosts: ['dsh.example:8443'],
+      publicOrigin: 'https://dsh.example:8443',
+    })
+    try {
+      const headers = { host: 'localhost', cookie: browserCookie(connection, 'localhost') }
+      const minted = await serve(routes, fakePost(headers, PAIRING_MINT_ROUTE_PATH, { deviceLabel: 'phone' }))
+      const url = new URL((JSON.parse(minted.body as string) as { authenticatedUrl: string }).authenticatedUrl)
+      expect(url.origin).toBe('https://dsh.example:8443')
+      expect(url.searchParams.get('token')).toMatch(/^[A-Za-z0-9_-]{43}$/u)
+      // The minted token still exchanges through the public authority.
+      const exchanged = fakeResponse()
+      connection.authorizeIndex(fakeRequest({ host: 'dsh.example:8443' }, `${url.pathname}${url.search}`), exchanged.response)
+      expect(exchanged.state.headers?.['set-cookie']).toMatch(/; Secure$/u)
+    } finally { await dispose() }
+  })
+
+  it('refuses a publicOrigin that a phone could not actually use', async () => {
+    const cases: Array<[ConnectionConfig, RegExp]> = [
+      [{ publicOrigin: 'not a url' }, /not an absolute URL/u],
+      [{ publicOrigin: 'ftp://dsh.example' }, /must use http or https/u],
+      [{ publicOrigin: 'https://dsh.example/app' }, /bare origin/u],
+      [{ publicOrigin: 'https://dsh.example/?x=1' }, /bare origin/u],
+      [{ publicOrigin: 'https://user:pw@dsh.example' }, /bare origin/u],
+      [{ cookieSecure: true, trustedHosts: ['dsh.example'], publicOrigin: 'http://dsh.example' }, /must use https while cookieSecure/u],
+      [{ trustedHosts: ['other.example'], publicOrigin: 'https://dsh.example:8443' }, /not listed in trustedHosts/u],
+    ]
+    for (const [config, expected] of cases) {
+      await expect(mounted(config)).rejects.toThrow(expected)
+    }
+    // A port-less trusted entry admits any port of that host, as the fence does.
+    const { dispose } = await mounted({ trustedHosts: ['dsh.example'], publicOrigin: 'http://dsh.example:8080' })
+    await dispose()
+  })
+
   it('rejects a mint request without a usable Host header', async () => {
     const { connection, dispose } = await mounted()
     try {

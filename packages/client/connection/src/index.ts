@@ -141,6 +141,17 @@ export interface ConnectionConfig {
   /** Maximum buffered JSON body for every `/api` request. Default: 300 MiB. */
   maxRequestBodyBytes?: number
   /**
+   * The origin a paired device reaches this deployment through — scheme and
+   * authority only, such as `https://dsh.example:8443` — used as the base of
+   * every minted pairing URL instead of the minting request's own origin.
+   * Default: unset, and a pairing URL takes the origin the desktop browser
+   * used, which behind a relay is the loopback address no phone can open.
+   * Must carry `https` when `cookieSecure` is on, no path, query, or
+   * fragment, and an authority listed in `trustedHosts`; anything else
+   * fails plugin load.
+   */
+  publicOrigin?: string
+  /**
    * HTTP header carrying the client certificate's serial number, as forwarded
    * by the mTLS-terminating reverse proxy (Caddy:
    * `header_up X-DSH-Client-Serial {http.request.tls.client.serial}`). Default:
@@ -168,6 +179,8 @@ export const Config: z<ConnectionConfig> = z.object({
   cookieMaxAgeDays: z.natural().min(1).default(30),
   cookieSecure: z.boolean().default(false),
   maxRequestBodyBytes: z.natural().min(1).default(DEFAULT_MAX_REQUEST_BODY_BYTES),
+  // publicOrigin stays a runtime-only declared field for the same reason as
+  // mtlsClientSerialHeader below: unset must stay distinguishable from empty.
   // mtlsClientSerialHeader stays a runtime-only declared field: the vendored
   // schema language has no optional-string node, and an unset header (the
   // default) must stay distinguishable from an empty one. resolve-apply reads
@@ -193,6 +206,7 @@ export async function apply(ctx: Context, config?: ConnectionConfig): Promise<vo
   // Config boundary: a malformed entry fails the load loudly here rather than
   // silently authorizing its hostname prefix at request time.
   for (const entry of trustedHosts) assertTrustedAuthority(entry)
+  const publicOrigin = resolvePublicOrigin(config?.publicOrigin, cookieSecure, trustedHosts)
   // Config boundary: a malformed serial-header policy fails the load loudly
   // instead of trusting a header from the wrong peer or trusting nothing.
   const mtlsPolicy: MtlsClientCertificatePolicy = resolveMtlsClientCertificatePolicy(config ?? {})
@@ -222,7 +236,7 @@ export async function apply(ctx: Context, config?: ConnectionConfig): Promise<vo
       },
     }
     webCtx.effect(() => webCtx.webServer.register(route), 'client-connection: /api route')
-    registerConnectionRoutes(webCtx, connection, cookieSecure)
+    registerConnectionRoutes(webCtx, connection, cookieSecure, publicOrigin)
   })
   ctx.inject(['attachments'], (attachmentCtx) => {
     assertImageBodyCapacity(attachmentCtx, maxRequestBodyBytes)
@@ -256,17 +270,65 @@ function requestOrigin(request: Request, cookieSecure: boolean): string | undefi
 }
 
 /**
+ * Validate the configured public origin at load: an absolute `http`/`https`
+ * URL with nothing beyond its authority, `https` whenever cookies are
+ * `Secure` (a phone could not store the cookie otherwise), and an authority
+ * the trust fence admits — port-exact or port-less, as `trustedHosts`
+ * entries are matched — so every pairing URL minted from it leads to a page
+ * that actually loads.
+ * @param configured - the raw `publicOrigin` config value, or undefined.
+ * @param cookieSecure - the deployment's cookie `Secure` setting.
+ * @param trustedHosts - the deployment's trusted authorities.
+ * @returns the normalized origin (no trailing slash), or undefined when unset.
+ * @throws Error naming the offending value when it is not usable.
+ */
+export function resolvePublicOrigin(
+  configured: string | undefined,
+  cookieSecure: boolean,
+  trustedHosts: readonly string[],
+): string | undefined {
+  if (configured === undefined) return undefined
+  let url: URL
+  try {
+    url = new URL(configured)
+  } catch {
+    throw new Error(`client-connection: publicOrigin ${JSON.stringify(configured)} is not an absolute URL`)
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error(`client-connection: publicOrigin ${JSON.stringify(configured)} must use http or https`)
+  }
+  if (url.pathname !== '/' || url.search !== '' || url.hash !== '' || url.username !== '' || url.password !== '') {
+    throw new Error(`client-connection: publicOrigin ${JSON.stringify(configured)} must be a bare origin (scheme and authority only)`)
+  }
+  if (cookieSecure && url.protocol !== 'https:') {
+    throw new Error(`client-connection: publicOrigin ${JSON.stringify(configured)} must use https while cookieSecure is on`)
+  }
+  const authority = url.host.toLowerCase()
+  const hostname = url.hostname.toLowerCase()
+  const trusted = trustedHosts.some((entry) => {
+    const normalized = entry.toLowerCase()
+    return normalized === authority || normalized === hostname
+  })
+  if (!trusted) {
+    throw new Error(`client-connection: publicOrigin authority ${JSON.stringify(url.host)} is not listed in trustedHosts, so its pages would be refused`)
+  }
+  return url.origin
+}
+
+/**
  * Register the session-lifecycle Fetch routes Connection owns itself. Every
  * route runs after the `/api` trust fence and browser authentication, so all
  * of them are authenticated operations.
  * @param owner - context owning the route effects.
  * @param connection - Host Connection service carrying the session registry.
  * @param cookieSecure - cookie `Secure` setting; also selects the pairing URL scheme.
+ * @param publicOrigin - the configured origin paired devices use, which every pairing URL is minted from when set.
  */
 function registerConnectionRoutes(
   owner: Context,
   connection: HostConnectionService,
   cookieSecure: boolean,
+  publicOrigin: string | undefined,
 ): void {
   owner.effect(() => connection.fetch.register({
     path: SESSIONS_ROUTE_PATH,
@@ -298,7 +360,9 @@ function registerConnectionRoutes(
     methods: ['POST'],
     requestBody: 'buffered',
     fetch: async (request) => {
-      const origin = requestOrigin(request, cookieSecure)
+      // The configured public origin wins: behind a relay the desktop's own
+      // origin is a loopback address no phone can open.
+      const origin = publicOrigin ?? requestOrigin(request, cookieSecure)
       if (origin === undefined) return plainResponse(400, 'connection: request carries no Host header')
       const body = (await readJsonObject(request)) ?? {}
       const ttlMs = body.ttlMs === undefined ? DEFAULT_PAIRING_TTL_MS : body.ttlMs

@@ -439,6 +439,17 @@ export interface ConnectionConfig {
   /** Maximum buffered JSON body for every `/api` request. Default: 300 MiB. */
   maxRequestBodyBytes?: number
   /**
+   * The origin a paired device reaches this deployment through — scheme and
+   * authority only, such as `https://dsh.example:8443` — used as the base of
+   * every minted pairing URL instead of the minting request's own origin.
+   * Default: unset, and a pairing URL takes the origin the desktop browser
+   * used, which behind a relay is the loopback address no phone can open.
+   * Must carry `https` when `cookieSecure` is on, no path, query, or
+   * fragment, and an authority listed in `trustedHosts`; anything else
+   * fails plugin load.
+   */
+  publicOrigin?: string
+  /**
    * HTTP header carrying the client certificate's serial number, as forwarded
    * by the mTLS-terminating reverse proxy (Caddy:
    * `header_up X-DSH-Client-Serial {http.request.tls.client.serial}`). Default:
@@ -478,7 +489,7 @@ export interface ConnectionRecoveryConfig {
 }
 ```
 
-来源： [`packages/client/connection/src/index.ts:116`](../packages/client/connection/src/index.ts)
+来源： [`packages/client/connection/src/index.ts:120`](../packages/client/connection/src/index.ts)
 
 <a id="deepseek-aidsh-client-hmr"></a>
 
