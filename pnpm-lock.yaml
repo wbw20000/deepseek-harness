@@ -2304,6 +2304,9 @@ importers:
       '@deepseek-ai/dsh-workflow-self-development':
         specifier: workspace:^
         version: link:../../workflow/workflow-self-development
+      '@deepseek-ai/dsh-workflow-self-development-chat':
+        specifier: workspace:^
+        version: link:../../workflow/workflow-self-development-chat
       '@deepseek-ai/dsh-workflow-self-development-events':
         specifier: workspace:^
         version: link:../../workflow/workflow-self-development-events
@@ -2313,6 +2316,12 @@ importers:
       '@deepseek-ai/dsh-workflow-self-development-runner':
         specifier: workspace:^
         version: link:../../workflow/workflow-self-development-runner
+      '@deepseek-ai/dsh-workflow-self-development-trial':
+        specifier: workspace:^
+        version: link:../../workflow/workflow-self-development-trial
+      '@deepseek-ai/dsh-workflow-self-development-workspaces':
+        specifier: workspace:^
+        version: link:../../workflow/workflow-self-development-workspaces
       '@deepseek-ai/dsh-workspace':
         specifier: workspace:^
         version: link:../../workspace/workspace
