@@ -52,6 +52,10 @@ class FakeFacade implements SelfDevelopmentRemoteFacade {
     throw new Error('not a status test concern')
   }
 
+  async recordTrialApproval(): Promise<never> {
+    throw new Error('not a status test concern')
+  }
+
   async campaign(taskId: string): Promise<CampaignState | undefined> {
     if (this.campaignError !== undefined) throw this.campaignError
     return taskId === 'task-1' ? CAMPAIGN : undefined

@@ -1,0 +1,126 @@
+/**
+ * The `verify(worktree)` function passed to `workspaces.integrate`: the
+ * runner's independent acceptance verification, then every configured
+ * integration gate command in order. Neither step trusts the model — the
+ * runner check is a separate process, and the gates run in a real shell.
+ */
+
+import { exec } from 'node:child_process'
+import { promisify } from 'node:util'
+import { acceptancePath } from './acceptance.ts'
+import type { ResolvedChatConfig } from './config.ts'
+import type { RunnerVerifyPort, VerifyOutcome } from './types.ts'
+
+const execAsync = promisify(exec)
+
+/** Wall-clock timeout for one integration gate command. */
+export const GATE_TIMEOUT_MS = 20 * 60_000
+
+/** Bytes of combined stdout+stderr kept in a gate failure's reason. */
+export const GATE_OUTPUT_TAIL_BYTES = 2048
+
+/** Outcome of one `sh -c` gate command run. */
+export interface GateRunResult {
+  /** Process exit code; `null` when the run was killed by the timeout. */
+  readonly code: number | null
+  /** Whether the timeout (not the command itself) ended the run. */
+  readonly timedOut: boolean
+  /** Combined stdout and stderr, in emission order. */
+  readonly output: string
+}
+
+/** Injectable shell runner for {@link buildVerify}, replaceable by direct unit tests. */
+export interface GateDeps {
+  readonly runShell?: (command: string, cwd: string, timeoutMs: number) => Promise<GateRunResult>
+}
+
+/**
+ * Run one gate command with `sh -c`, killing it after `timeoutMs`. Exported
+ * (distinct from the fixed {@link GATE_TIMEOUT_MS} `buildVerify` uses by
+ * default) so direct unit tests can verify the real exit-code and timeout
+ * detection against a short, test-friendly deadline instead of waiting out
+ * the real 20-minute gate budget.
+ * @param command - the shell command line to run.
+ * @param cwd - the worktree to run it in.
+ * @param timeoutMs - wall-clock deadline; the child is killed past it.
+ * @returns the exit code, whether the timeout fired, and the combined output.
+ */
+export async function runShellCommand(command: string, cwd: string, timeoutMs: number): Promise<GateRunResult> {
+  try {
+    const { stdout, stderr } = await execAsync(command, { cwd, timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 })
+    return { code: 0, timedOut: false, output: stdout + stderr }
+  } catch (error: unknown) {
+    const candidate = error as { readonly code?: unknown; readonly killed?: unknown; readonly stdout?: unknown; readonly stderr?: unknown }
+    // `child_process.exec`'s own rejection always carries `stdout`/`stderr`
+    // as strings (empty ones for a spawn-time failure such as a missing
+    // cwd, confirmed against a real ENOENT) — the fallback is defensive
+    // against a shape Node does not actually produce here.
+    /* v8 ignore next -- see above; not reachable through a real exec rejection. */
+    const stdout = typeof candidate.stdout === 'string' ? candidate.stdout : ''
+    /* v8 ignore next -- see above; not reachable through a real exec rejection. */
+    const stderr = typeof candidate.stderr === 'string' ? candidate.stderr : ''
+    return {
+      code: typeof candidate.code === 'number' ? candidate.code : null,
+      // `child_process.exec`'s own timeout option sets `killed: true` only
+      // when ITS timer fired the kill; any other non-zero exit leaves it
+      // `false` (or absent), so this reliably distinguishes the two causes.
+      timedOut: candidate.killed === true,
+      output: stdout + stderr,
+    }
+  }
+}
+
+/** The last `maxBytes` bytes of `text`, decoded safely so the cut never crashes on a multi-byte boundary. */
+function tailBytes(text: string, maxBytes: number): string {
+  const buffer = Buffer.from(text, 'utf8')
+  if (buffer.byteLength <= maxBytes) return text
+  return buffer.subarray(buffer.byteLength - maxBytes).toString('utf8')
+}
+
+/** Build one gate failure's reason: the command, why it failed, and the output's tail. */
+function gateFailureReason(command: string, result: GateRunResult): string {
+  const cause = result.timedOut ? `timed out after ${GATE_TIMEOUT_MS}ms` : `exited with code ${String(result.code)}`
+  return `integration gate "${command}" ${cause}. Output tail:\n${tailBytes(result.output, GATE_OUTPUT_TAIL_BYTES)}`
+}
+
+/**
+ * Build the `verify(worktree)` function `self_development_merge` passes to
+ * `workspaces.integrate`: first the runner's own acceptance verification
+ * (independent of the model, per the DI frozen interface), then every
+ * configured `integrationGates` command in order with `sh -c`. The first
+ * failure of either stops the sequence.
+ * @param runner - the runner verification port; the caller checks this is
+ *   mounted before building `verify` at all — merging to stable without an
+ *   independent acceptance check is not a degrade this function offers.
+ * @param config - resolved deployment config, for the acceptance path, the
+ *   experiments root, and the configured integration gates.
+ * @param taskId - the task whose acceptance definition is being verified.
+ * @param deps - injectable shell runner, replaceable by direct unit tests.
+ * @returns the `verify` function.
+ */
+export function buildVerify(
+  runner: RunnerVerifyPort,
+  config: ResolvedChatConfig,
+  taskId: string,
+  deps: GateDeps = {},
+): (worktree: string) => Promise<VerifyOutcome> {
+  const runShell = deps.runShell ?? runShellCommand
+  return async (worktree: string): Promise<VerifyOutcome> => {
+    let acceptanceOutcome: VerifyOutcome
+    try {
+      acceptanceOutcome = await runner.verifyAcceptance(worktree, acceptancePath(config.controlDirectory, taskId), {
+        experimentsRoot: config.experimentsRoot,
+      })
+    } catch (error: unknown) {
+      acceptanceOutcome = { ok: false, reason: `runner acceptance verification threw: ${(error as Error).message}` }
+    }
+    if (!acceptanceOutcome.ok) return acceptanceOutcome
+    for (const command of config.integrationGates) {
+      const result = await runShell(command, worktree, GATE_TIMEOUT_MS)
+      if (result.timedOut || result.code !== 0) {
+        return { ok: false, reason: gateFailureReason(command, result) }
+      }
+    }
+    return { ok: true }
+  }
+}

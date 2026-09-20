@@ -65,6 +65,14 @@ export interface ProposeDeps {
   readonly knownTaskIds: readonly string[]
   /** Task id suffix override for deterministic tests; defaults to random. */
   readonly taskIdSuffix?: string
+  /**
+   * When set, skip the approval request entirely and record this detail as
+   * the `approval` step instead — an earlier approval already covered this
+   * campaign (see `merge.ts`'s auto-started repair campaigns, whose merge
+   * approval card names the repair up front so a second card would be
+   * redundant). Absent for every direct `self_development_propose` call.
+   */
+  readonly skipApprovalDetail?: string
 }
 
 /**
@@ -141,25 +149,29 @@ export async function runPropose(deps: ProposeDeps, rawInput: ProposeInput): Pro
     }
   }
 
-  if (deps.approval === undefined) {
-    return { ok: false, steps, reason: 'approval service is not mounted; the proposal fails closed' }
+  if (deps.skipApprovalDetail !== undefined) {
+    steps.push({ step: 'approval', detail: deps.skipApprovalDetail })
+  } else {
+    if (deps.approval === undefined) {
+      return { ok: false, steps, reason: 'approval service is not mounted; the proposal fails closed' }
+    }
+    const reason = approvalReason(input, {
+      taskId,
+      experimentsRoot: config.experimentsRoot,
+      acceptancePath: acceptancePath(config.controlDirectory, taskId),
+    }, config.cardLocale)
+    const outcome = await deps.approval.request({
+      agent: deps.agent,
+      toolName: 'self_development_propose',
+      reason,
+      ...(deps.callId === undefined ? {} : { callId: deps.callId }),
+      ...(deps.signal === undefined ? {} : { signal: deps.signal }),
+    })
+    if (outcome !== 'allowed-once') {
+      return { ok: false, steps, reason: `approval outcome was ${outcome}; nothing was started` }
+    }
+    steps.push({ step: 'approval', detail: `allowed-once by ${config.actor}` })
   }
-  const reason = approvalReason(input, {
-    taskId,
-    experimentsRoot: config.experimentsRoot,
-    acceptancePath: acceptancePath(config.controlDirectory, taskId),
-  }, config.cardLocale)
-  const outcome = await deps.approval.request({
-    agent: deps.agent,
-    toolName: 'self_development_propose',
-    reason,
-    ...(deps.callId === undefined ? {} : { callId: deps.callId }),
-    ...(deps.signal === undefined ? {} : { signal: deps.signal }),
-  })
-  if (outcome !== 'allowed-once') {
-    return { ok: false, steps, reason: `approval outcome was ${outcome}; nothing was started` }
-  }
-  steps.push({ step: 'approval', detail: `allowed-once by ${config.actor}` })
 
   const workspace = await allocateWorkspace(deps, taskId, steps)
   if (!workspace.ok) {

@@ -10,7 +10,7 @@ English | [中文](README.zh.md)
 <a id="summary"></a>
 ## Summary
 
-Lets a user launch a self-development campaign from an ordinary chat message. `self_development_propose` drafts the requirement, acceptance cases, and budget, shows one approval card naming everything it covers, and on `allowed-once` drives the stable-side facade from workspace allocation through task creation, planning, and budget approval to the campaign start. `self_development_status` reports progress; `self_development_stop` ends a running campaign. On settlement, this package best-effort-delivers the result as a chat message to the proposing agent. It implements no isolation and never approves on the user's behalf — see [Known Limitations](#known-limitations-and-deferred-work).
+Lets a user launch a self-development campaign from an ordinary chat message, then merge it to stable once it passes. `self_development_propose` drafts the requirement and acceptance, shows one approval card, and on approval drives the stable-side facade through the campaign start. `self_development_status` reports progress; `self_development_stop` ends a campaign. `self_development_merge` integrates a passed task into the target branch, independently re-verifies it, and rebuilds and restarts the stable version; a conflict or verification failure instead starts an unattended repair campaign under the same approval. It implements no isolation and never approves on the user's behalf — see [Known Limitations](#known-limitations-and-deferred-work).
 
 ## Table of Contents
 
@@ -20,6 +20,8 @@ Lets a user launch a self-development campaign from an ordinary chat message. `s
 - [Task id and baseline digest](#task-id-and-baseline-digest)
 - [Campaign result notices](#campaign-result-notices)
 - [Self-iterate mode](#self-iterate-mode)
+- [Merge to stable](#merge-to-stable)
+- [Upgrade](#upgrade)
 - [Model Experience](#model-experience)
 - [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
 - [Dev Note](#dev-note)
@@ -29,14 +31,17 @@ Lets a user launch a self-development campaign from an ordinary chat message. `s
 <a id="service"></a>
 ## Service
 
-`SelfDevelopmentChat` (default export, Cordis service `selfDevelopmentChat`) declares `tools` and `approval` as hard injections — the plugin does not load without a tool registry and an approval answerer. The stable-side facade, the workspaces service, the events service, and the trial service are all read structurally with `ctx.get(...)` rather than declared as typed injections, because this package is developed against the DH-a/DH-c frozen interfaces before their packages exist in every worktree; at integration the real services satisfy the same structural shapes.
+`SelfDevelopmentChat` (default export, Cordis service `selfDevelopmentChat`) declares `tools` and `approval` as hard injections — the plugin does not load without a tool registry and an approval answerer. The stable-side facade, the workspaces service, the events service, the trial service, and the runner verification service are all read structurally with `ctx.get(...)` rather than declared as typed injections, because this package is developed against the DH-a/DH-c/DI-a frozen interfaces before their packages exist in every worktree; at integration the real services satisfy the same structural shapes.
 
 | Config field | Meaning |
 |---|---|
 | `stableRepo` | Absolute path of the repository whose stable-branch `HEAD` seeds `stableBaselineDigest`. |
 | `controlDirectory` | Absolute directory this package writes acceptance definitions into (`<controlDirectory>/acceptance/<taskId>.json`, mode 0600 inside a 0700 directory); also the base of the derived `<controlDirectory>/campaigns/<taskId>.json` path reported by `self_development_status`. Must resolve outside `experimentsRoot` — the runner refuses to judge an acceptance definition placed inside the experiments root, so a nested `controlDirectory` fails every campaign round closed; checked (via `realpath`) at plugin construction and again before every proposal. |
 | `experimentsRoot` | Absolute experiments root used to resolve a task's workspace when no workspaces service is mounted: the fallback requires `<experimentsRoot>/<taskId>` to already exist. |
-| `actor` | Human actor recorded as the task creator, plan confirmer, budget approver, and unattended-campaign acceptor. |
+| `actor` | Human actor recorded as the task creator, plan confirmer, budget approver, unattended-campaign acceptor, and trial approver. |
+| `targetBranch` | Branch `self_development_merge` merges a passed task's worktree into. Required, non-empty — validated at construction. |
+| `integrationGates` | Commands run with `sh -c` inside the merged worktree during `self_development_merge`'s `verify`, in order; a non-zero exit or a 20-minute-per-command timeout fails the merge closed. Defaults to `[]`. |
+| `upgrade` | How `self_development_merge` rebuilds and restarts the stable version after an `integrated` result — see [Upgrade](#upgrade). Defaults to `{ kind: 'none' }`. Validated at construction — an invalid explicit value fails the mount. |
 | `cardLocale` | `'zh'` (default) or `'en'`: the language of the approval-card copy and the campaign-result chat notice. |
 | `defaultBudget` | Budget used when a proposal omits one; defaults to `{ preset: 'unlimited' }`. Validated at construction — an invalid explicit value fails the mount. |
 | `defaultUnattended` | Unattended default when a proposal omits it; defaults to `true`. |
@@ -48,10 +53,11 @@ Ports read from the context (all but `approval` optional):
 |---|---|---|
 | Remote facade | `selfDevelopmentRemote` | Every tool call fails with `facade` errors; in practice the plugin should not be composed without it. |
 | Approval | `approval` | Hard injection: the plugin fails to load. |
-| Workspaces | `selfDevelopmentWorkspaces` | `self_development_propose` falls back to an already-existing `<experimentsRoot>/<taskId>` directory and refuses a missing one. |
+| Workspaces | `selfDevelopmentWorkspaces` | `self_development_propose` falls back to an already-existing `<experimentsRoot>/<taskId>` directory and refuses a missing one; `self_development_merge` fails closed (its `integrate` method has no fallback). |
 | Events | `selfDevelopmentEvents` | No campaign-result chat notice is ever delivered; `self_development_status`'s `latestEvent` field is never populated. |
 | System prompt | `systemPrompt` | The self-development guidance section is not registered (logged at `debug`); the model sees no built-in instruction to prefer `self_development_propose` over editing the trial branch itself. |
 | Trial (DH-c) | `selfDevelopmentTrial` | `self_development_status`'s `trialUrl` field is never populated. |
+| Runner verification | `selfDevelopmentRunner` | `self_development_merge` fails closed — merging to stable without the runner's independent acceptance verification is not offered. |
 
 -----
 
@@ -82,6 +88,14 @@ Parameters: `{ taskId }`. Returns the task's control-state summary (status, revi
 ### `self_development_stop`
 
 Parameters: `{ taskId, reason }`. Forwards to the facade's `stopCampaign(taskId, reason)` and returns the resulting campaign state, or `{ ok: false, reason, error }` on refusal.
+
+### `self_development_merge`
+
+Host-only: this tool rebuilds and restarts the stable version it runs alongside, so it is only meaningful when the acting process is that same deployment (see [Known Limitations](#known-limitations-and-deferred-work) — there is no runtime caller-identity check enforcing this).
+
+Parameters: `{ taskId? }` — the task to merge; omitted takes the most recently proposed task that is `awaiting-trial` (searched newest first among the tasks this process itself proposed). An explicit `taskId` that is not `awaiting-trial`, or omitted with none found, is refused before any approval is requested.
+
+Behavior: shows **one** approval card naming the task, the target branch, that the merge rebuilds and restarts the stable version, and that a conflict or verification failure automatically starts a repair campaign — so that case never asks a second card. Only `allowed-once` proceeds. On approval: `recordTrialApproval(taskId, revision, actor)`, then `workspaces.integrate({ taskId, targetBranch, actor, verify })` — see [Merge to stable](#merge-to-stable) for `verify` and the four outcomes. Nothing already completed (the recorded trial approval, a rebase left on the worktree, a started repair campaign) is rolled back on a later failure.
 
 -----
 
@@ -130,7 +144,37 @@ An opt-in [agent preset](../../preset/agent-presets/README.md) at `presets/self-
 
 -----
 
-No runtime invariant companion is published: the service exposes no runtime observation stream of its own, and the relationships it owns — one approval request per proposal, the eight-step order, and one notice per campaign result — are covered by focused behavior tests against stand-in seams.
+<a id="merge-to-stable"></a>
+## Merge to stable
+
+`self_development_merge` drives the workspaces service's `integrate({ taskId, targetBranch, actor, verify })` (DI-a frozen interface), passing a `verify(worktree)` this package builds from two steps, run in order, either of which stops the sequence:
+
+1. **Runner acceptance verification** — `selfDevelopmentRunner`'s `verifyAcceptance(worktree, acceptancePath, { experimentsRoot })`: the same acceptance definition re-checked by an independent process, not the model, on the (possibly rebased) merged worktree.
+2. **Integration gates** — every command in the configured `integrationGates`, in order, each run with `sh -c` inside the worktree, killed after 20 minutes; a non-zero exit or the timeout fails closed with a reason naming the command and the last 2 KB of its combined stdout/stderr.
+
+`integrate` calls `verify` after a rebase (if the target branch moved) and before the fast-forward, whether or not the base moved. It settles on one of four outcomes:
+
+| Status | Meaning | This package's reaction |
+|---|---|---|
+| `integrated` | Fast-forwarded; `commit` and `baseMoved` reported. | Emits `merge-integrated`; runs the configured [upgrade](#upgrade) unless `upgrade.kind` is `none`. |
+| `conflict` | The rebase could not apply cleanly; `files` names the conflicts. | Emits `merge-blocked`; auto-starts an unattended repair campaign (below). Nothing is fast-forwarded. |
+| `verification-failed` | `verify` failed after a rebase (or on an unmoved base); the rebase result, if any, stays on the worktree. | Same repair-campaign reaction as `conflict`. |
+| `failed` | The facade itself could not complete the operation. | Emits `merge-blocked`; reported, no repair campaign — this is not a code-fixable failure. |
+
+**Repair campaign**: for `conflict`/`verification-failed`, this package calls its own proposal orchestration directly — unattended, `{ preset: 'unlimited' }` budget, `allowedModificationScope: ['**']` (the repair fixes the same change, not a newly bounded one), the *same* acceptance definition already written for the blocked task (read back and forwarded verbatim), and a plan derived straight from that definition's own cases so it trivially satisfies plan coverage. The requirement text names the target branch and the conflicted files, or the verification failure reason. Critically, it **skips a second approval card**: the merge card already disclosed that a conflict or verification failure starts a repair campaign, so asking again would be redundant. The repair is a brand-new task (its own id), not a continuation of the blocked one.
+
+-----
+
+<a id="upgrade"></a>
+## Upgrade
+
+After an `integrated` result, `self_development_merge` runs the deployment's configured `upgrade` strategy:
+
+- **`{ kind: 'none' }`** (default) — no command runs at all. The right choice when the tasks merged here are not this deployment's own source (for example, a demo repository whose "stable version" is unrelated to the process running this chat).
+- **`{ kind: 'source', projectRoot, restartCommand, installIfLockfileChanged? }`** — for a stable version that runs from source, which is this deployment's own case: `git merge --ff-only <targetBranch>` in `projectRoot` (a no-op, still exit 0, when `integrate` already fast-forwarded that same worktree); `pnpm install --offline --frozen-lockfile` only when the merge changed `projectRoot`'s `pnpm-lock.yaml` (`installIfLockfileChanged: false` never installs, regardless); `pnpm run --silent build`; then `restartCommand` detached (`spawn(..., { detached: true, stdio: 'ignore' })`, `unref()`) so it outlives this process. Two seconds after that — long enough for the tool result to reach the chat — this process exits. A failure at any step (merge, install, or build) is reported and stops before the restart; nothing already done is undone.
+- **`{ kind: 'launcher', dshUpgradeBin }`** — spawns `dshUpgradeBin upgrade --task <taskId>` detached, for the packaged (Swift-shell) deployment's own upgrade tool. Interface and documentation only this wave; not field-tested — see [Known Limitations](#known-limitations-and-deferred-work).
+
+-----
 
 <a id="model-experience"></a>
 ## Model Experience
@@ -163,6 +207,11 @@ yourself:
    result.
 4. Use self_development_status to check progress or report evidence paths,
    and self_development_stop only when the user asks to stop.
+5. When the user says the change should go live, or asks to merge it to
+   stable, call self_development_merge (it defaults to the most recently
+   proposed task when none is named). This shows one more approval card,
+   which also covers the automatic repair campaign a conflict or
+   verification failure would start — do not expect or wait for a second one.
 
 Never call these tools without the user having asked for a change on the
 trial branch, and never fill in placeholder or guessed acceptance commands
@@ -185,11 +234,11 @@ Prefix-stable while the section is registered and its text is unchanged. Mountin
 
 #### What the model sees
 
-The `self_development_propose`, `self_development_status`, and `self_development_stop` tool definitions registered in `src/index.ts` (`ctx.tools.register(defineTool({...}))`) while `selfDevelopmentChat` is mounted, with the parameter and result shapes documented earlier in this page.
+The `self_development_propose`, `self_development_status`, `self_development_stop`, and `self_development_merge` tool definitions registered in `src/index.ts` (`ctx.tools.register(defineTool({...}))`) while `selfDevelopmentChat` is mounted, with the parameter and result shapes documented earlier in this page.
 
 #### Token effect
 
-Fixed schema cost on each request where the three tools are visible; `self_development_propose`'s schema is the largest, since it carries the full acceptance-definition shape.
+Fixed schema cost on each request where the four tools are visible; `self_development_propose`'s schema is the largest, since it carries the full acceptance-definition shape.
 
 #### KV Cache effect
 
@@ -199,7 +248,7 @@ Prefix-stable while tool definitions and visibility are unchanged. Mounting or u
 
 #### What the model sees
 
-`self_development_propose` returns `{ ok: true, taskId, workspace, baselineDigest, steps, campaign }` on success or `{ ok: false, steps, reason, error? }` on failure. `self_development_status` returns the task and campaign summary; `self_development_stop` returns `{ ok: true, campaign }` or `{ ok: false, reason, error? }`. When a campaign settles, the proposing agent receives a one-line bilingual notice pointing back at `self_development_status` — a follow-up turn if it is idle, an injected context if it is busy.
+`self_development_propose` returns `{ ok: true, taskId, workspace, baselineDigest, steps, campaign }` on success or `{ ok: false, steps, reason, error? }` on failure. `self_development_status` returns the task and campaign summary; `self_development_stop` returns `{ ok: true, campaign }` or `{ ok: false, reason, error? }`. `self_development_merge` returns `{ ok: true, taskId, steps, result, repair?, upgrade? }` — `result` is the facade's `integrated`/`conflict`/`verification-failed`/`failed` outcome, `repair` is the auto-started campaign's own outcome when present, and `upgrade` is the post-integration upgrade's outcome when one ran — or `{ ok: false, steps, reason, error? }` before any of that was reached. When a campaign settles, the proposing agent receives a one-line bilingual notice pointing back at `self_development_status` — a follow-up turn if it is idle, an injected context if it is busy.
 
 #### Token effect
 
@@ -219,6 +268,12 @@ Append-only; newly visible results and notices follow the reusable request prefi
 - **No trial-URL access without DH-c** — `self_development_status`'s `trialUrl` field stays empty until a `selfDevelopmentTrial` service is mounted and reports a running instance.
 - **`parallel: false` is a courtesy pre-check, not the enforcement boundary** — it reads each known task's `campaign()` state before asking for approval, but a failed status read is treated as "not running" (fails open) rather than blocking the proposal; the authoritative limit is DH-a's own `maxConcurrentCampaigns` rejection on `startCampaign`.
 - **Only the campaign's operator surface, not the trial version experience** — DH-c's trial-instance URL is read, not opened; nothing in this package serves or proxies the trial version itself.
+- **`self_development_merge` is host-only by convention, not by enforcement** — this repository has no runtime signal that distinguishes "the acting process is the deployment being upgraded" from any other caller; there is no `ctx.get`-able caller-identity port to gate on (the codebase's only host-vs-phone distinction lives in the Remote facade's own field-level `assertCallerIsHost` check, which does not extend to Agent tool calls). The approval card's wording is the only safeguard today.
+- **Source-tree upgrade only makes sense for this deployment's own repository** — `upgrade.kind: 'source'` runs `git`/`pnpm`/the restart command against `upgrade.projectRoot`; a deployment whose tasks fork from a different repository than the one it runs from (for example, a demo repository used only to exercise campaigns) should configure `{ kind: 'none' }`, or the "upgrade" would rebuild and restart the wrong tree.
+- **A browser session does not auto-reconnect after the restart** — the chat result names an estimated wait, but nothing here pushes a reload; the user (or the client shell) still has to refresh once the stable version is back.
+- **The repair campaign's modification scope is intentionally broad** — `allowedModificationScope: ['**']`, since a rebase conflict or a post-rebase verification failure can touch any file the original change touched and this package does not have the original task's own scope on hand to narrow it.
+- **`upgrade.kind: 'launcher'` is interface and documentation only this wave** — it spawns `dshUpgradeBin upgrade --task <taskId>` detached and reports success once spawned, but the packaged launcher side of this handoff has not been field-tested.
+- **Nothing is rolled back** — a merge, a repair-campaign start, or an upgrade step that fails after earlier steps succeeded (recorded trial approval, a rebase left on the worktree, an install or build already run) leaves all of that in place for triage, the same convention `self_development_propose` already uses.
 
 <a id="dev-note"></a>
 ### Dev Note

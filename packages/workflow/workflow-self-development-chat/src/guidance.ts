@@ -39,6 +39,11 @@ yourself:
    result.
 4. Use self_development_status to check progress or report evidence paths,
    and self_development_stop only when the user asks to stop.
+5. When the user says the change should go live, or asks to merge it to
+   stable, call self_development_merge (it defaults to the most recently
+   proposed task when none is named). This shows one more approval card,
+   which also covers the automatic repair campaign a conflict or
+   verification failure would start — do not expect or wait for a second one.
 
 Never call these tools without the user having asked for a change on the
 trial branch, and never fill in placeholder or guessed acceptance commands

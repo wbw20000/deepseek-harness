@@ -8,7 +8,7 @@
  * @module index.spec
  */
 
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -32,9 +32,13 @@ import type {
   CampaignEvent,
   CampaignState,
   FacadeOperationResult,
+  IntegrationRequest,
+  IntegrationResult,
   LaunchProfileWire,
+  RunnerVerifyPort,
   SelfDevelopmentRemoteFacade,
   TaskDetailView,
+  VerifyOutcome,
 } from '../src/types.ts'
 
 /** Standard campaign state a fake `startCampaign`/`stopCampaign` returns. */
@@ -131,6 +135,10 @@ class FakeFacade implements SelfDevelopmentRemoteFacade {
     this.calls.push({ name: 'getTask', args: [taskId] })
     return this.getTaskDetail
   }
+
+  async recordTrialApproval(taskId: string, expectedRevision: number, approvedBy: string): Promise<FacadeOperationResult> {
+    return this.step('recordTrialApproval', [taskId, expectedRevision, approvedBy])
+  }
 }
 
 /** Approval fake; `outcome` controls every `request()` reply. */
@@ -146,6 +154,10 @@ class FakeApproval {
 
 /** Always-succeeding workspaces fake, so a proposal never depends on a real pre-allocated directory. */
 class FakeWorkspaces {
+  /** `integrate` result for the next call; a test overrides this before exercising `self_development_merge`. */
+  integrateResult: IntegrationResult = { status: 'integrated', commit: 'c'.repeat(40), baseMoved: false }
+  integrateCalls: IntegrationRequest[] = []
+
   async allocate(request: { taskId: string; projectRoot: string }): Promise<{
     taskId: string
     projectRoot: string
@@ -164,6 +176,22 @@ class FakeWorkspaces {
       dataHome: `/exp/${request.taskId}/.data`,
       allocatedAt: 1,
     }
+  }
+
+  async integrate(request: IntegrationRequest): Promise<IntegrationResult> {
+    this.integrateCalls.push(request)
+    return this.integrateResult
+  }
+}
+
+/** Always-succeeding runner verification fake. */
+class FakeRunner implements RunnerVerifyPort {
+  calls: { worktree: string; acceptancePath: string }[] = []
+  outcome: VerifyOutcome = { ok: true }
+
+  async verifyAcceptance(worktree: string, acceptancePath: string): Promise<VerifyOutcome> {
+    this.calls.push({ worktree, acceptancePath })
+    return this.outcome
   }
 }
 
@@ -260,7 +288,7 @@ function fakeExec(overrides: { agent?: unknown; callId?: unknown; signal?: Abort
 // is not a port), so every test needs a real, writable temp directory there
 // even though the facade, approval, and workspaces ports are fakes.
 let root: string | undefined
-let VALID_CONFIG: { stableRepo: string; controlDirectory: string; experimentsRoot: string; actor: string }
+let VALID_CONFIG: { stableRepo: string; controlDirectory: string; experimentsRoot: string; actor: string; targetBranch: string }
 
 let context: Context | undefined
 
@@ -271,6 +299,7 @@ beforeEach(async () => {
     controlDirectory: join(root, 'control'),
     experimentsRoot: join(root, 'exp'),
     actor: 'user',
+    targetBranch: 'stable',
   }
 })
 
@@ -297,6 +326,7 @@ function makeService(ports: Partial<ChatPorts> & { facade: SelfDevelopmentRemote
     events: undefined,
     trial: undefined,
     systemPrompt: undefined,
+    runner: undefined,
     ...ports,
   }
   const service = new SelfDevelopmentChat(context, config as never, fullPorts)
@@ -304,10 +334,10 @@ function makeService(ports: Partial<ChatPorts> & { facade: SelfDevelopmentRemote
 }
 
 describe('construction', () => {
-  it('registers the three tools and validates the deployment config', () => {
+  it('registers the four tools and validates the deployment config', () => {
     const { tools } = makeService({ facade: new FakeFacade() })
     expect(tools.registered.map(t => t.name)).toEqual([
-      'self_development_propose', 'self_development_status', 'self_development_stop',
+      'self_development_propose', 'self_development_status', 'self_development_stop', 'self_development_merge',
     ])
   })
 
@@ -316,6 +346,20 @@ describe('construction', () => {
       { facade: new FakeFacade() },
       { ...VALID_CONFIG, defaultBudget: { mode: 'time', hours: 99 } },
     )).toThrow('defaultBudget')
+  })
+
+  it('rejects an invalid upgrade config at construction', () => {
+    expect(() => makeService(
+      { facade: new FakeFacade() },
+      { ...VALID_CONFIG, upgrade: { kind: 'source', projectRoot: 'relative', restartCommand: ['x'] } },
+    )).toThrow('projectRoot')
+  })
+
+  it('accepts a valid upgrade config at construction', () => {
+    expect(() => makeService(
+      { facade: new FakeFacade() },
+      { ...VALID_CONFIG, upgrade: { kind: 'none' } },
+    )).not.toThrow()
   })
 
   it('rejects a controlDirectory that resolves inside experimentsRoot at construction, before any campaign round can burn', async () => {
@@ -337,7 +381,9 @@ describe('construction', () => {
     const { ctx, tools } = makeService({ facade: new FakeFacade(), events })
     expect(events.listeners).toHaveLength(1)
     await ctx.fiber.dispose()
-    expect(tools.disposed.sort()).toEqual(['self_development_propose', 'self_development_status', 'self_development_stop'])
+    expect(tools.disposed.sort()).toEqual([
+      'self_development_merge', 'self_development_propose', 'self_development_status', 'self_development_stop',
+    ])
     expect(events.unsubscribed).toBe(true)
   })
 
@@ -384,6 +430,7 @@ describe('self-development guidance section', () => {
     expect(section.text).toContain('self_development_propose')
     expect(section.text).toContain('self_development_status')
     expect(section.text).toContain('self_development_stop')
+    expect(section.text).toContain('self_development_merge')
     expect(section.text).toContain('do NOT edit files in')
     expect(section.text).toContain('do NOT run the tests yourself')
   })
@@ -416,6 +463,7 @@ describe('self-development guidance section', () => {
       events: undefined,
       trial: undefined,
       systemPrompt: undefined,
+      runner: undefined,
     })).not.toThrow()
     expect(debug).toHaveBeenCalledWith(expect.stringContaining('systemPrompt is not mounted'))
   })
@@ -472,6 +520,181 @@ describe('self_development_propose tool', () => {
     const value = await def.execute(proposeArgs(), fakeExec())
     const rendered = def.output.render(proposeArgs(), value as never)
     expect((rendered[0] as { text: string }).text).toContain('(not created)')
+  })
+})
+
+describe('self_development_merge tool', () => {
+  it('merges an awaiting-trial task end to end and renders the success line', async () => {
+    const facade = new FakeFacade()
+    facade.getTaskDetail = {
+      ...facade.getTaskDetail,
+      projection: { ...facade.getTaskDetail.projection, status: 'awaiting-trial' },
+    }
+    const workspaces = new FakeWorkspaces()
+    const runner = new FakeRunner()
+    const { tools } = makeService({ facade, approval: new FakeApproval(), workspaces, runner })
+    const def = tools.find('self_development_merge')
+    // Explicit taskId: knownTaskIds (self.startedTaskIds) is empty on a
+    // fresh service instance, so the default-task search has nothing to
+    // search — that resolution path is covered in merge.spec.ts instead.
+    const value = await def.execute({ taskId: 'task-1' }, fakeExec({ agent: fakeAgent() }))
+    const outcome = value as { ok: boolean; taskId: string; result: { status: string } }
+    expect(outcome.ok).toBe(true)
+    expect(outcome.result.status).toBe('integrated')
+    expect(workspaces.integrateCalls).toHaveLength(1)
+    expect(workspaces.integrateCalls[0]?.targetBranch).toBe('stable')
+    const rendered = def.output.render({}, value as never)
+    expect((rendered[0] as { text: string }).text).toContain('merged')
+  })
+
+  it('omits agent, callId, and signal from the merge deps when the exec carries none of them', async () => {
+    const facade = new FakeFacade()
+    facade.getTaskDetail = {
+      ...facade.getTaskDetail,
+      projection: { ...facade.getTaskDetail.projection, status: 'awaiting-trial' },
+    }
+    const { tools } = makeService({ facade, approval: new FakeApproval(), workspaces: new FakeWorkspaces(), runner: new FakeRunner() })
+    const def = tools.find('self_development_merge')
+    const bareExec = {
+      name: 'self_development_merge',
+      arguments: {},
+      rootCallId: ToolCallId('root'),
+      token: Symbol('token'),
+      deferContext: () => {},
+      concludeTurn: () => {},
+    } as unknown as ToolRunContext
+    const value = await def.execute({ taskId: 'task-1' }, bareExec)
+    expect((value as { ok: boolean }).ok).toBe(true)
+  })
+
+  it('remembers a successfully started repair campaign\'s own task id, like a direct propose would', async () => {
+    const facade = new FakeFacade()
+    facade.getTaskDetail = {
+      ...facade.getTaskDetail,
+      projection: { ...facade.getTaskDetail.projection, status: 'awaiting-trial' },
+    }
+    const workspaces = new FakeWorkspaces()
+    workspaces.integrateResult = { status: 'conflict', files: ['src/a.ts'], baseMoved: true }
+    await mkdir(join(VALID_CONFIG.controlDirectory, 'acceptance'), { recursive: true })
+    await writeFile(join(VALID_CONFIG.controlDirectory, 'acceptance', 'task-1.json'), JSON.stringify({
+      cases: [{ caseId: 'c1', command: ['node', 'test.js'], timeoutMs: 5000, assertions: [{ assertionId: 'c1-a1', kind: 'exit-code', expected: 0 }] }],
+    }), 'utf8')
+    const { tools } = makeService({ facade, approval: new FakeApproval(), workspaces, runner: new FakeRunner() })
+    const def = tools.find('self_development_merge')
+    const value = await def.execute({ taskId: 'task-1' }, fakeExec({ agent: fakeAgent() }))
+    const outcome = value as { ok: boolean; repair?: { ok: boolean; taskId?: string } }
+    expect(outcome.ok).toBe(true)
+    expect(outcome.repair?.ok).toBe(true)
+    expect(outcome.repair?.taskId).toBeTruthy()
+    const rendered = def.output.render({}, value as never)
+    expect((rendered[0] as { text: string }).text).toContain('repair campaign')
+    expect((rendered[0] as { text: string }).text).toContain('started, unattended')
+  })
+
+  it('does not register a repair campaign\'s task id when the tool call carries no agent', async () => {
+    const facade = new FakeFacade()
+    facade.getTaskDetail = {
+      ...facade.getTaskDetail,
+      projection: { ...facade.getTaskDetail.projection, status: 'awaiting-trial' },
+    }
+    const workspaces = new FakeWorkspaces()
+    workspaces.integrateResult = { status: 'conflict', files: ['src/a.ts'], baseMoved: true }
+    await mkdir(join(VALID_CONFIG.controlDirectory, 'acceptance'), { recursive: true })
+    await writeFile(join(VALID_CONFIG.controlDirectory, 'acceptance', 'task-1.json'), JSON.stringify({
+      cases: [{ caseId: 'c1', command: ['node', 'test.js'], timeoutMs: 5000, assertions: [{ assertionId: 'c1-a1', kind: 'exit-code', expected: 0 }] }],
+    }), 'utf8')
+    const { tools } = makeService({ facade, approval: new FakeApproval(), workspaces, runner: new FakeRunner() })
+    const def = tools.find('self_development_merge')
+    const value = await def.execute({ taskId: 'task-1' }, fakeExec())
+    const outcome = value as { ok: boolean; repair?: { ok: boolean } }
+    expect(outcome.ok).toBe(true)
+    expect(outcome.repair?.ok).toBe(true)
+  })
+
+  it('renders the blocked and repair-failed-to-start lines', async () => {
+    const facade = new FakeFacade()
+    facade.getTaskDetail = {
+      ...facade.getTaskDetail,
+      projection: { ...facade.getTaskDetail.projection, status: 'awaiting-trial' },
+    }
+    const workspaces = new FakeWorkspaces()
+    workspaces.integrateResult = { status: 'verification-failed', reason: 'gate failed', baseMoved: false }
+    // No acceptance definition written: the repair campaign fails to start.
+    const { tools } = makeService({ facade, approval: new FakeApproval(), workspaces, runner: new FakeRunner() })
+    const def = tools.find('self_development_merge')
+    const value = await def.execute({ taskId: 'task-1' }, fakeExec({ agent: fakeAgent() }))
+    const outcome = value as { ok: boolean; repair?: { ok: boolean } }
+    expect(outcome.ok).toBe(true)
+    expect(outcome.repair?.ok).toBe(false)
+    const rendered = def.output.render({}, value as never)
+    expect((rendered[0] as { text: string }).text).toContain('merge blocked (verification-failed)')
+    expect((rendered[0] as { text: string }).text).toContain('failed to start')
+  })
+
+  it('renders the integrated line with the upgrade detail when upgrade.kind is not none', async () => {
+    // upgrade.kind: 'source' against a directory that cannot exist: the real
+    // (uninjectable from this tool layer) git call fails fast, which is
+    // enough to prove outcome.upgrade is populated and rendered — this test
+    // is not about upgrade succeeding, only that merge wires it through.
+    const facade = new FakeFacade()
+    facade.getTaskDetail = {
+      ...facade.getTaskDetail,
+      projection: { ...facade.getTaskDetail.projection, status: 'awaiting-trial' },
+    }
+    const { tools } = makeService(
+      { facade, approval: new FakeApproval(), workspaces: new FakeWorkspaces(), runner: new FakeRunner() },
+      { ...VALID_CONFIG, upgrade: { kind: 'source', projectRoot: '/no/such/deploy/path/self-dev-chat', restartCommand: ['restart'] } },
+    )
+    const def = tools.find('self_development_merge')
+    const value = await def.execute({ taskId: 'task-1' }, fakeExec({ agent: fakeAgent() }))
+    const outcome = value as { ok: boolean; upgrade?: { ok: boolean; detail: string } }
+    expect(outcome.ok).toBe(true)
+    expect(outcome.upgrade).toBeDefined()
+    const rendered = def.output.render({}, value as never)
+    expect((rendered[0] as { text: string }).text).toContain('merged')
+  })
+
+  it('renders the failed-status line', async () => {
+    const facade = new FakeFacade()
+    facade.getTaskDetail = {
+      ...facade.getTaskDetail,
+      projection: { ...facade.getTaskDetail.projection, status: 'awaiting-trial' },
+    }
+    const workspaces = new FakeWorkspaces()
+    workspaces.integrateResult = { status: 'failed', reason: 'stable branch was force-pushed mid-merge' }
+    const { tools } = makeService({ facade, approval: new FakeApproval(), workspaces, runner: new FakeRunner() })
+    const def = tools.find('self_development_merge')
+    const value = await def.execute({ taskId: 'task-1' }, fakeExec({ agent: fakeAgent() }))
+    const outcome = value as { ok: boolean; result: { status: string } }
+    expect(outcome.ok).toBe(true)
+    expect(outcome.result.status).toBe('failed')
+    const rendered = def.output.render({}, value as never)
+    expect((rendered[0] as { text: string }).text).toContain('merge failed — stable branch was force-pushed mid-merge')
+  })
+
+  it('renders "repair campaign failed to start" without a reason suffix for a replayed outcome missing the repair field', () => {
+    // A defensive render-time fallback: runMerge itself always sets `repair`
+    // whenever result.status is conflict/verification-failed, so this shape
+    // only arises from an older logged/replayed value — render() must not
+    // crash on it either way, matching this package's other replay-safety
+    // guards (see the tool-level presentCall/presentResult convention).
+    const { tools } = makeService({ facade: new FakeFacade(), approval: new FakeApproval() })
+    const def = tools.find('self_development_merge')
+    const synthetic = { ok: true, taskId: 'task-1', steps: [], result: { status: 'conflict', files: ['src/a.ts'], baseMoved: true } }
+    const rendered = def.output.render({}, synthetic)
+    expect((rendered[0] as { text: string }).text).toBe('Task task-1: merge blocked (conflict); repair campaign failed to start')
+  })
+
+  it('rejects when no task is awaiting-trial', async () => {
+    const facade = new FakeFacade()
+    const { tools } = makeService({ facade, approval: new FakeApproval(), runner: new FakeRunner() })
+    const def = tools.find('self_development_merge')
+    const value = await def.execute({}, fakeExec())
+    const outcome = value as { ok: boolean; reason: string }
+    expect(outcome.ok).toBe(false)
+    expect(outcome.reason).toContain('no awaiting-trial task')
+    const rendered = def.output.render({}, value as never)
+    expect((rendered[0] as { text: string }).text).toContain('merge failed')
   })
 })
 
@@ -611,6 +834,6 @@ describe('campaign-event delivery', () => {
 
   it('does nothing when no events service is mounted', () => {
     const { tools } = makeService({ facade: new FakeFacade(), approval: new FakeApproval() })
-    expect(tools.registered).toHaveLength(3)
+    expect(tools.registered).toHaveLength(4)
   })
 })

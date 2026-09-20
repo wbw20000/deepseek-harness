@@ -204,6 +204,8 @@ export interface SelfDevelopmentRemoteFacade {
   campaign(taskId: string): Promise<CampaignState | undefined>
   stopCampaign(taskId: string, reason: string): Promise<CampaignState>
   getTask(taskId: string): Promise<TaskDetailView>
+  /** Record that the user's "merge to stable" request counts as trial approval for the task (DI-b wave). */
+  recordTrialApproval(taskId: string, expectedRevision: number, approvedBy: string): Promise<FacadeOperationResult>
 }
 
 /** Structural view of the approval service (`ctx.get('approval')`). */
@@ -242,6 +244,52 @@ export interface TaskWorkspaceView {
 /** Structural view of the optional workspaces service. */
 export interface WorkspacesPort {
   allocate(req: { readonly taskId: string; readonly projectRoot: string }): Promise<TaskWorkspaceView>
+  /**
+   * Merge one task's worktree into the stable branch (DI-a wire form, DI-b
+   * wave). Serializes internally; rebases onto a moved target tip and
+   * re-verifies before fast-forwarding — see {@link IntegrationRequest}.
+   */
+  integrate(request: IntegrationRequest): Promise<IntegrationResult>
+}
+
+/**
+ * One integration request (DI-a `workflow-self-development-workspaces` wire
+ * form, frozen interface). `verify` runs after a rebase (if the target tip
+ * moved) and before the fast-forward, whether or not the base moved — a
+ * clean base still owes the repository its gates.
+ */
+export interface IntegrationRequest {
+  readonly taskId: string
+  readonly targetBranch: string
+  readonly actor: string
+  readonly verify?: (worktree: string) => Promise<VerifyOutcome>
+}
+
+/** Outcome of one `verify(worktree)` call; a thrown `verify` counts as `{ ok: false }` to the caller. */
+export type VerifyOutcome =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly reason: string }
+
+/** Result of one {@link WorkspacesPort.integrate} call (DI-a frozen interface). */
+export type IntegrationResult =
+  | { readonly status: 'integrated'; readonly commit: string; readonly baseMoved: boolean }
+  | { readonly status: 'conflict'; readonly files: readonly string[]; readonly baseMoved: true }
+  | { readonly status: 'verification-failed'; readonly reason: string; readonly baseMoved: boolean }
+  | { readonly status: 'failed'; readonly reason: string }
+
+/**
+ * Structural view of the optional runner verification port
+ * (`ctx.get('selfDevelopmentRunner')`), covering only the acceptance-only
+ * entry point `self_development_merge` calls before a fast-forward — DI-a is
+ * adding this export to `@deepseek-ai/dsh-workflow-self-development-runner`
+ * without changing the executor itself.
+ */
+export interface RunnerVerifyPort {
+  verifyAcceptance(
+    worktree: string,
+    acceptancePath: string,
+    options: { readonly experimentsRoot: string; readonly killGraceMs?: number },
+  ): Promise<VerifyOutcome>
 }
 
 /** One unified campaign notification event (events service projection; DH-a adds the campaign kinds). */
@@ -329,4 +377,74 @@ export interface StopOutcome {
   readonly reason?: string
   readonly campaign?: CampaignState
   readonly error?: ProposeError
+}
+
+/** Tool input of `self_development_merge`. */
+export interface MergeInput {
+  /** The task to merge; omitted takes the most recently proposed `awaiting-trial` task. */
+  readonly taskId?: string | undefined
+}
+
+/** One completed step of a merge, recorded for the tool result (mirrors {@link ProposeStep}). */
+export interface MergeStep {
+  /** Step name in execution order (`approval`, `recordTrialApproval`, `integrate`, then `upgrade` or `repair` when applicable). */
+  readonly step: string
+  /** One-line detail: the produced status, operation id, or failure message. */
+  readonly detail: string
+}
+
+/** Result of the post-integration upgrade attempt (`runUpgrade`). */
+export interface UpgradeOutcome {
+  readonly ok: boolean
+  /** One-line detail: what ran, or why it failed. */
+  readonly detail: string
+}
+
+/** Successful merge outcome: the task always resolved, whatever `result.status` settled on. */
+export interface MergeSuccess {
+  readonly ok: true
+  readonly taskId: string
+  readonly steps: readonly MergeStep[]
+  /** The facade's integration result — `integrated`, `conflict`, `verification-failed`, or `failed`. */
+  readonly result: IntegrationResult
+  /** Present when `result.status` is `conflict` or `verification-failed`: the auto-started repair campaign's outcome. */
+  readonly repair?: ProposeOutcome
+  /** Present when `result.status` is `integrated` and `upgrade.kind` is not `none`. */
+  readonly upgrade?: UpgradeOutcome
+}
+
+/** Failed merge outcome: resolution, approval, or a facade call failed before any integration result existed. */
+export interface MergeFailure {
+  readonly ok: false
+  readonly taskId?: string
+  readonly steps: readonly MergeStep[]
+  readonly reason: string
+  readonly error?: ProposeError
+}
+
+/** Result of `self_development_merge`. */
+export type MergeOutcome = MergeSuccess | MergeFailure
+
+/**
+ * Payload of the `self-development-chat/merge-integrated` Cordis event this
+ * package emits (see `index.ts`'s `declare module '@deepseek-ai/cordis'`).
+ * The DI frozen interface names `merge-integrated`/`merge-blocked` as events
+ * "per the events package's convention" without fixing a payload; this
+ * package owns a concrete, documented shape for the events package (or any
+ * other listener) to key off.
+ */
+export interface MergeIntegratedEventPayload {
+  readonly taskId: string
+  readonly commit: string
+  readonly baseMoved: boolean
+  readonly occurredAt: number
+}
+
+/** Payload of the `self-development-chat/merge-blocked` Cordis event this package emits; see {@link MergeIntegratedEventPayload}. */
+export interface MergeBlockedEventPayload {
+  readonly taskId: string
+  readonly status: 'conflict' | 'verification-failed' | 'failed'
+  readonly occurredAt: number
+  readonly files?: readonly string[]
+  readonly reason?: string
 }

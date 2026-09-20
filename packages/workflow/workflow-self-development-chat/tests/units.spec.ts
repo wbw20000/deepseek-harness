@@ -21,7 +21,7 @@ import {
 } from '../src/acceptance.ts'
 import { deriveTaskId, readBaselineDigest, runGit } from '../src/baseline.ts'
 import { budgetViolation, toBudgetApproval } from '../src/budget.ts'
-import { approvalReason } from '../src/card.ts'
+import { approvalReason, mergeApprovalReason } from '../src/card.ts'
 import { resolveChatConfig } from '../src/config.ts'
 import type { ProposeBudget, ResolvedProposeInput } from '../src/types.ts'
 
@@ -381,29 +381,64 @@ describe('approvalReason', () => {
   })
 })
 
+describe('mergeApprovalReason', () => {
+  it('names the task, result, target branch, and the repair-campaign consequence in English', () => {
+    const reason = mergeApprovalReason({ taskId: 'task-1', requirement: 'add search', targetBranch: 'stable' }, 'en')
+    expect(reason).toContain('Task: task-1 — add search')
+    expect(reason).toContain('Target branch: stable')
+    expect(reason).toContain('rebuilds and restarts the stable version')
+    expect(reason).toContain('will not ask again')
+  })
+
+  it('omits the requirement suffix when it is unknown, and renders Chinese', () => {
+    const reason = mergeApprovalReason({ taskId: 'task-1', requirement: undefined, targetBranch: 'stable' }, 'en')
+    expect(reason).toContain('Task: task-1')
+    expect(reason).not.toContain('Task: task-1 —')
+    const zh = mergeApprovalReason({ taskId: 'task-1', requirement: '加搜索', targetBranch: 'stable' }, 'zh')
+    expect(zh).toContain('任务：task-1——加搜索')
+    expect(zh).toContain('目标分支：stable')
+    expect(zh).toContain('不会再弹第二张审批卡')
+    const zhNoRequirement = mergeApprovalReason({ taskId: 'task-1', requirement: undefined, targetBranch: 'stable' }, 'zh')
+    expect(zhNoRequirement).toContain('任务：task-1')
+    expect(zhNoRequirement).not.toContain('任务：task-1——')
+  })
+})
+
 describe('resolveChatConfig', () => {
-  const base = { stableRepo: '/repo', controlDirectory: '/repo/control', experimentsRoot: '/exp', actor: 'user' }
+  const base = { stableRepo: '/repo', controlDirectory: '/repo/control', experimentsRoot: '/exp', actor: 'user', targetBranch: 'stable' }
 
   it('applies the documented defaults', () => {
     const resolved = resolveChatConfig(base)
     expect(resolved.cardLocale).toBe('zh')
     expect(resolved.defaultUnattended).toBe(true)
     expect(resolved.defaultBudget).toEqual({ preset: 'unlimited' })
+    expect(resolved.integrationGates).toEqual([])
+    expect(resolved.upgrade).toEqual({ kind: 'none' })
   })
 
   it('keeps explicit values', () => {
-    const resolved = resolveChatConfig({ ...base, cardLocale: 'en', defaultUnattended: false, defaultBudget: { mode: 'rounds', maxRounds: 2 } })
+    const resolved = resolveChatConfig({
+      ...base,
+      cardLocale: 'en',
+      defaultUnattended: false,
+      defaultBudget: { mode: 'rounds', maxRounds: 2 },
+      integrationGates: ['node test.mjs'],
+      upgrade: { kind: 'launcher', dshUpgradeBin: 'dsh-upgrade' },
+    })
     expect(resolved.cardLocale).toBe('en')
     expect(resolved.defaultUnattended).toBe(false)
     expect(resolved.defaultBudget).toEqual({ mode: 'rounds', maxRounds: 2 })
+    expect(resolved.integrationGates).toEqual(['node test.mjs'])
+    expect(resolved.upgrade).toEqual({ kind: 'launcher', dshUpgradeBin: 'dsh-upgrade' })
   })
 
-  it('fails loud on invalid paths, actor, and locale', () => {
+  it('fails loud on invalid paths, actor, targetBranch, and locale', () => {
     expect(() => resolveChatConfig({ ...base, stableRepo: 'relative/path' })).toThrow('stableRepo must be an absolute path')
     expect(() => resolveChatConfig({ ...base, controlDirectory: '' })).toThrow('controlDirectory')
     expect(() => resolveChatConfig({ ...base, experimentsRoot: undefined as unknown as string })).toThrow('experimentsRoot')
     expect(() => resolveChatConfig({ ...base, actor: '' })).toThrow('actor')
     expect(() => resolveChatConfig({ ...base, actor: 3 as unknown as string })).toThrow('actor')
+    expect(() => resolveChatConfig({ ...base, targetBranch: '' })).toThrow('targetBranch')
     expect(() => resolveChatConfig({ ...base, cardLocale: 'fr' as unknown as 'zh' | 'en' })).toThrow('cardLocale')
   })
 })
