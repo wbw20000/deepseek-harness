@@ -128,7 +128,7 @@ Host-only：这个工具会重建并重启它所在的这个稳定版，所以�
 <a id="campaign-result-notices"></a>
 ## 战役结果通知
 
-挂载了可选事件服务时，本包会订阅它，并在内存里保留一份有界记录：为每个仍未结算的任务记住发起它的那个存活 `NotifiableAgent`（机制照搬 `@deepseek-ai/dsh-tool-jobs` 投递后台任务完成通知的方式：`Agent.followup`/`Agent.inject`，来源标注 `{ kind: 'plugin', form: 'notice' }`）。当某任务收到 `campaign-passed` 或 `campaign-ended` 事件、且本进程仍为它记着 Agent 时，会投递一条双语单行聊天通知——空闲 Agent 走续接回合，忙碌 Agent 则注入上下文——随后消费掉该登记项。无论聊天通知能否投递成功，`self_development_status` 的 `latestEvent` 字段都会为每个这样的事件更新。
+挂载了可选事件服务时——构造时已挂载，或之后任何时候挂载都算：订阅挂在 `selfDevelopmentEvents` 的 `internal/service` 通知上，服务被重新提供时会重新订阅，因为插件激活顺序不等于 overlay 行顺序，而一次真机测试就因为只在构造时试过一次订阅而丢掉了全部通知——本包会订阅它，并在内存里保留一份有界记录：为每个仍未结算的任务记住发起它的那个存活 `NotifiableAgent`（机制照搬 `@deepseek-ai/dsh-tool-jobs` 投递后台任务完成通知的方式：`Agent.followup`/`Agent.inject`，来源标注 `{ kind: 'plugin', form: 'notice' }`）。当某任务收到 `campaign-passed` 或 `campaign-ended` 事件、且本进程仍为它记着 Agent 时，会投递一条双语单行聊天通知——空闲 Agent 走续接回合，忙碌 Agent 则注入上下文——随后消费掉该登记项。无论聊天通知能否投递成功，`self_development_status` 的 `latestEvent` 字段都会为每个这样的事件更新。
 
 -----
 

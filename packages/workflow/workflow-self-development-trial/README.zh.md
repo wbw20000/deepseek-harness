@@ -77,7 +77,7 @@ kind: "package-reference"
 <a id="automatic-open-on-a-passed-campaign"></a>
 ## 战役通过后的自动打开
 
-当 `autoOpen` 为 `true`（默认值）且能结构式读到一个事件消费方时——通过 `ctx.get('selfDevelopmentEvents')` 读取，这样本包也不必直接依赖 events 包——本服务会订阅其通知，并在 `campaign-passed` 事件点名某任务时自行调用 `openTrial`。本 worktree 的 events 消费方目前还不会发出这种事件种类；在上游把这层映射接上之前，这条订阅会一直处于静默状态，届时这里不需要再做任何改动。
+当 `autoOpen` 为 `true`（默认值）且能结构式读到一个事件消费方时——通过 `ctx.get('selfDevelopmentEvents')` 读取，这样本包也不必直接依赖 events 包——本服务会订阅其通知，并在 `campaign-passed` 事件点名某任务时自行调用 `openTrial`。晚于本服务才挂载的事件消费方同样会被接上：订阅挂在 `selfDevelopmentEvents` 的 `internal/service` 通知上（服务被重新提供时会重新订阅），因为插件激活顺序不等于 overlay 行顺序——一次真机测试里，订阅只在构造时试过一次，结果一个试验版都没自动打开过。
 
 自动打开失败时——构建失败、端口区间耗尽、或任何 `openTrial` 可能拒绝的原因——既会记一条服务日志的警告，也会追加进该任务自己的 `trials/<taskId>.log`，这样即使没人盯着宿主的通用日志也能看到失败；无论哪种记法，失败都绝不会向外传播，因为一次通知不应导致拒绝。该任务仍然可以通过显式调用 `openTrial` 来关闭或重新打开。
 
@@ -99,7 +99,7 @@ kind: "package-reference"
 - **没有操作系统级别的隔离。** 试验版实例只是宿主机上的一个普通子进程，用实验自己的数据目录启动，运行的是工作区构建产出的任何代码；除了绑定在 `127.0.0.1` 之外，没有沙箱或网络限制。
 - **每次打开都重新构建，任务之间不共享构建缓存。** 每次 `openTrial` 都会在自己的工作区里跑一次全新的 `pnpm run --silent build`；本包不在任务之间、也不在同一任务的重复打开（在其实例已退出之后）之间共享任何构建产物。
 - **实例不会在进程重启后存活。** 重启后 `trials()` 从 `[]` 开始，即便某个 sidecar 可能仍然写着一个 pid：本服务只跟踪自己在本进程里启动过的实例——这与受监督 runner 的进程组模块"只认自己 spawn 的记录"的归属原则一致，绝不会按进程名或仅凭一个存储的 pid 去发信号。
-- **`campaign-passed` 的接线目前是替身。** 本服务监听的这个事件种类在本 worktree 里还不存在；在上游的映射落地之前，自动打开只会在某个部署通过 `internals.events` 或 `ctx.selfDevelopmentEvents` 自行提供兼容的事件源时才会触发。
+- **自动打开需要事件消费方发布 `campaign-passed`。** `@deepseek-ai/dsh-workflow-self-development-events` 把门面的战役结果映射成这种事件；没有这个消费方（或用了别的事件源）的部署，只能靠自己调用 `openTrial`，或通过 `internals.events` 提供兼容的事件源。
 - **构建步骤的 `nodeBinary` 参数目前未被使用。** `runBuild` 保留这个参数只是为了与 `resolveBuildCommand`（真正用它解析 corepack 兜底路径的地方）签名对称；构建命令本身在 `runBuild` 运行之前就已经解析完毕。
 
 <a id="dev-note"></a>

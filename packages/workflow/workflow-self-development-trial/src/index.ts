@@ -378,12 +378,41 @@ export class SelfDevelopmentTrial extends TypertRemoteService {
    * even when the host's general log stream is not being watched.
    */
   private subscribeEvents(): void {
-    const source: TrialEventSource | undefined = this.internals.events
+    const readSource = (): TrialEventSource | undefined => this.internals.events
       ?? (this.ctx as unknown as { get(name: string): unknown }).get('selfDevelopmentEvents') as
         | TrialEventSource
         | undefined
-    if (source === undefined) return
-    this.unsubscribeEvents = source.subscribe((event: CampaignPassedEvent) => {
+    const source = readSource()
+    if (source === undefined) {
+      // Not mounted yet (or not at all): this row sits after the events row
+      // in the shipped overlay, yet activation order is not row order, and
+      // a field test never auto-opened a single trial because this
+      // subscription was attempted only once, at construction. Subscribe
+      // when the service appears; re-subscribe if it is re-provided.
+      let unsubscribe: (() => void) | undefined
+      const stopWatching = this.ctx.on('internal/service', (name: string) => {
+        if (name !== 'selfDevelopmentEvents') return
+        unsubscribe?.()
+        unsubscribe = undefined
+        const mounted = readSource()
+        if (mounted !== undefined) unsubscribe = this.subscribeTo(mounted)
+      })
+      this.unsubscribeEvents = () => {
+        stopWatching()
+        unsubscribe?.()
+      }
+      return
+    }
+    this.unsubscribeEvents = this.subscribeTo(source)
+  }
+
+  /**
+   * Take the `campaign-passed` subscription on one event source.
+   * @param source - the events consumer to subscribe to.
+   * @returns the subscription's disposer.
+   */
+  private subscribeTo(source: TrialEventSource): () => void {
+    return source.subscribe((event: CampaignPassedEvent) => {
       // This package's own type names only the one kind it cares about, but
       // the real events consumer's subscribe callback is structural and will
       // hand this listener its full event union once DH-a's mapping lands.

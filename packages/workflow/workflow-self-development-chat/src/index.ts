@@ -70,21 +70,28 @@ export interface ChatPorts {
   readonly runner: RunnerVerifyPort | undefined
 }
 
-/** Read the service ports from the mounted services. */
+/**
+ * Read the service ports from the mounted services. Every optional port is a
+ * getter that resolves on each read, not a value captured at construction:
+ * the optional services (`selfDevelopmentTrial` above all, whose plugin row
+ * sits after this one in the shipped overlay) may mount after this service
+ * does, and a value captured too early would stay `undefined` for the whole
+ * process lifetime — a field test's trial URL never showed for that reason.
+ */
 function contextPorts(ctx: Context): ChatPorts {
   return {
     // `static inject` guarantees the facade in composition; direct construction
     // passes ports explicitly, so the read may stay structural.
-    facade: ctx.get('selfDevelopmentRemote') as SelfDevelopmentRemoteFacade,
-    approval: ctx.get('approval'),
-    workspaces: ctx.get('selfDevelopmentWorkspaces') as WorkspacesPort | undefined,
+    get facade() { return ctx.get('selfDevelopmentRemote') as SelfDevelopmentRemoteFacade },
+    get approval() { return ctx.get('approval') },
+    get workspaces() { return ctx.get('selfDevelopmentWorkspaces') as WorkspacesPort | undefined },
     // No cast needed here (unlike workspaces/trial/runner): importing the
     // events package's own types below now loads its real `declare module`
     // augmentation, so `ctx.get('selfDevelopmentEvents')` is already typed.
-    events: ctx.get('selfDevelopmentEvents'),
-    trial: ctx.get('selfDevelopmentTrial') as TrialPort | undefined,
-    systemPrompt: ctx.get('systemPrompt'),
-    runner: ctx.get('selfDevelopmentRunner') as RunnerVerifyPort | undefined,
+    get events() { return ctx.get('selfDevelopmentEvents') },
+    get trial() { return ctx.get('selfDevelopmentTrial') as TrialPort | undefined },
+    get systemPrompt() { return ctx.get('systemPrompt') },
+    get runner() { return ctx.get('selfDevelopmentRunner') as RunnerVerifyPort | undefined },
   }
 }
 
@@ -121,20 +128,23 @@ export class SelfDevelopmentChat extends Service {
   /** Validated deployment configuration the service runs under. */
   private readonly resolved: ResolvedChatConfig
 
+  /** The service ports, re-read on every use so a service mounted after this one is still seen. */
+  private readonly ports: ChatPorts
+
   /** The stable-side facade every tool forwards to. */
-  private readonly facade: SelfDevelopmentRemoteFacade
+  private get facade(): SelfDevelopmentRemoteFacade { return this.ports.facade }
 
   /** The optional workspaces service allocation port. */
-  private readonly workspaces: WorkspacesPort | undefined
+  private get workspaces(): WorkspacesPort | undefined { return this.ports.workspaces }
 
-  /** The optional trial service port, read by the status tool. */
-  private readonly trial: TrialPort | undefined
+  /** The optional trial service port, read by the status tool and by every workspace release. */
+  private get trial(): TrialPort | undefined { return this.ports.trial }
 
   /** The optional runner verification port; `undefined` fails `self_development_merge` closed. */
-  private readonly runner: RunnerVerifyPort | undefined
+  private get runner(): RunnerVerifyPort | undefined { return this.ports.runner }
 
   /** The approval service; `undefined` only in direct construction, where the proposal fails closed. */
-  private readonly approval: ApprovalPort | undefined
+  private get approval(): ApprovalPort | undefined { return this.ports.approval }
 
   /** Task ids this service started; the `parallel: false` check runs against these. */
   private readonly startedTaskIds: string[] = []
@@ -185,11 +195,7 @@ export class SelfDevelopmentChat extends Service {
       }
     }
     this.resolved = resolveChatConfig(config)
-    this.facade = ports.facade
-    this.workspaces = ports.workspaces
-    this.trial = ports.trial
-    this.runner = ports.runner
-    this.approval = ports.approval
+    this.ports = ports
 
     if (this.resolved.guidance) {
       if (ports.systemPrompt === undefined) {
@@ -379,13 +385,31 @@ export class SelfDevelopmentChat extends Service {
       },
     })))
 
-    if (ports.events !== undefined) {
-      const unsubscribe = ports.events.subscribe((event) => {
-        if (event.kind !== 'campaign-passed' && event.kind !== 'campaign-ended') return
-        this.latestEvents.set(event.taskId, event)
-        deliverCampaignNotice(this.agentsByTask, event, this.resolved.cardLocale)
+    const subscribeCampaignEvents = (events: CampaignEventSource): (() => void) => events.subscribe((event) => {
+      if (event.kind !== 'campaign-passed' && event.kind !== 'campaign-ended') return
+      this.latestEvents.set(event.taskId, event)
+      deliverCampaignNotice(this.agentsByTask, event, this.resolved.cardLocale)
+    })
+    const events = ports.events
+    if (events !== undefined) {
+      this.disposers.push(subscribeCampaignEvents(events))
+    } else {
+      // Not mounted yet (or not at all): subscribe when the events service
+      // appears, and re-subscribe if it is re-provided. A field test lost
+      // every campaign notice because the subscription was only ever
+      // attempted once, at construction, before the events row had mounted.
+      let unsubscribe: (() => void) | undefined
+      const stopWatching = ctx.on('internal/service', (name: string) => {
+        if (name !== 'selfDevelopmentEvents') return
+        unsubscribe?.()
+        unsubscribe = undefined
+        const mounted = ports.events
+        if (mounted !== undefined) unsubscribe = subscribeCampaignEvents(mounted)
       })
-      this.disposers.push(unsubscribe)
+      this.disposers.push(() => {
+        stopWatching()
+        unsubscribe?.()
+      })
     }
 
     ctx.effect(() => () => {

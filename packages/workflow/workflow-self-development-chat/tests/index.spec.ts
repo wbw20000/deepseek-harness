@@ -418,11 +418,66 @@ describe('construction', () => {
     context.provide('selfDevelopmentRemote', facade as never)
     context.provide('approval', approval as never)
     context.provide('selfDevelopmentWorkspaces', new FakeWorkspaces() as never)
+    context.provide('selfDevelopmentRunner', new FakeRunner() as never)
     new SelfDevelopmentChat(context, VALID_CONFIG)
     const def = tools.find('self_development_propose')
     const value = await def.execute(proposeArgs(), fakeExec())
     expect((value as { ok: boolean }).ok).toBe(true)
     expect(approval.requests).toHaveLength(1)
+    // The merge tool reads the runner port from the context the same way.
+    const merged = await tools.find('self_development_merge').execute({ taskId: 'task-1' }, fakeExec()) as { ok: boolean; reason?: string }
+    expect(merged.ok).toBe(false)
+    expect(merged.reason).toContain('not awaiting-trial')
+  })
+
+  it('subscribes to an events service mounted after construction, re-subscribes when it is re-provided, and lets go on disposal', async () => {
+    context = new Context()
+    const tools = new FakeTools()
+    context.provide('tools', tools as never)
+    context.provide('selfDevelopmentRemote', new FakeFacade() as never)
+    context.provide('approval', new FakeApproval() as never)
+    context.provide('selfDevelopmentWorkspaces', new FakeWorkspaces() as never)
+    const service = new SelfDevelopmentChat(context, VALID_CONFIG)
+    // `provide` on an active root notifies dependents through
+    // `internal/service`, exactly as a mounting service plugin's activation
+    // does for the services it provides.
+    const early = new FakeEvents()
+    context.provide('selfDevelopmentEvents', early as never)
+    expect(early.listeners).toHaveLength(1)
+    const agent = fakeAgent('idle')
+    const proposeDef = tools.find('self_development_propose')
+    const proposed = await proposeDef.execute(proposeArgs(), fakeExec({ agent })) as { taskId: string }
+    early.emit({ taskId: proposed.taskId, kind: 'campaign-passed', title: 'Round 1 passed', occurredAt: 1 })
+    expect(agent.delivered).toHaveLength(1)
+    // Re-provided: the old subscription is dropped and the new service is subscribed.
+    const late = new FakeEvents()
+    context.set('selfDevelopmentEvents', late as never)
+    context.reflect.notify(['selfDevelopmentEvents'])
+    expect(early.unsubscribed).toBe(true)
+    expect(late.listeners).toHaveLength(1)
+    await context.fiber.dispose()
+    expect(late.unsubscribed).toBe(true)
+    void service
+  })
+
+  it('reads the trial port late, so a trial service mounted after construction is still used', async () => {
+    context = new Context()
+    const tools = new FakeTools()
+    const facade = new FakeFacade()
+    facade.campaigns.set('task-1', { ...CAMPAIGN })
+    context.provide('tools', tools as never)
+    context.provide('selfDevelopmentRemote', facade as never)
+    context.provide('approval', new FakeApproval() as never)
+    new SelfDevelopmentChat(context, VALID_CONFIG)
+    const statusDef = tools.find('self_development_status')
+    const before = await statusDef.execute({ taskId: 'task-1' }, fakeExec()) as { trialUrl?: string }
+    expect(before.trialUrl).toBeUndefined()
+    context.provide('selfDevelopmentTrial', {
+      trials: async () => [{ taskId: 'task-1', url: 'http://127.0.0.1:8980/?token=t', port: 8980, startedAt: 1 }],
+      closeTrial: async () => {},
+    } as never)
+    const after = await statusDef.execute({ taskId: 'task-1' }, fakeExec()) as { trialUrl?: string }
+    expect(after.trialUrl).toBe('http://127.0.0.1:8980/?token=t')
   })
 
   it('omits agent, callId, and signal from the propose deps when the exec carries none of them', async () => {

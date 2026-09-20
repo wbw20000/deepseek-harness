@@ -454,6 +454,45 @@ describe('campaign-passed auto open', () => {
     expect(service).toBeInstanceOf(SelfDevelopmentTrial)
     await expect(context.fiber.dispose()).resolves.toBeUndefined()
   })
+
+  it('subscribes to an events service mounted after construction, re-subscribes when it is re-provided, and lets go on disposal', async () => {
+    environment = await makeEnvironment()
+    context = new Context()
+    const worktree = (await makeWorktree(environment.base, 'worktree')).root
+    const dataHome = join(environment.base, 'data-home')
+    const service = new SelfDevelopmentTrial(context, trialConfig(environment), {
+      getTask: async () => taskDetail(worktree, dataHome),
+      pathEnv: '',
+    })
+    const sourceOf = (): { source: TrialEventSource; listeners: Array<(event: CampaignPassedEvent) => void> } => {
+      const listeners: Array<(event: CampaignPassedEvent) => void> = []
+      return {
+        listeners,
+        source: {
+          subscribe: (listener) => {
+            listeners.push(listener)
+            return () => { listeners.splice(listeners.indexOf(listener), 1) }
+          },
+        },
+      }
+    }
+    // `provide` on an active root notifies dependents through `internal/service`,
+    // exactly as a mounting events plugin's activation does.
+    const early = sourceOf()
+    context.provide('selfDevelopmentEvents', early.source as never)
+    expect(early.listeners).toHaveLength(1)
+    for (const listener of early.listeners) listener({ taskId: 'task-late', kind: 'campaign-passed', title: 'passed', occurredAt: 1 })
+    await until(async () => (await service.trials()).length === 1)
+    expect(await service.trials()).toMatchObject([{ taskId: 'task-late' }])
+    // Re-provided: the old subscription is dropped and the new source is subscribed.
+    const late = sourceOf()
+    context.set('selfDevelopmentEvents', late.source as never)
+    context.reflect.notify(['selfDevelopmentEvents'])
+    expect(early.listeners).toHaveLength(0)
+    expect(late.listeners).toHaveLength(1)
+    await context.fiber.dispose()
+    expect(late.listeners).toHaveLength(0)
+  })
 })
 
 describe('config validation', () => {
