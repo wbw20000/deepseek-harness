@@ -3679,10 +3679,18 @@ export interface Config {
    * process that deliberately shares a home read-only.
    */
   endpointFile: boolean
+  /**
+   * Write every plugin's `logger.warn` and `logger.error` record to this
+   * process's stderr, one line each with a timestamp and the logger name.
+   * Without it a `dsh web` run keeps runtime warnings — an attachment disk
+   * budget nearing its cap, a trial instance that failed to open — in
+   * memory only, where no operator ever sees them.
+   */
+  logWarnings: boolean
 }
 ```
 
-Source: [`packages/bundle/web-app/src/index.ts:46`](../packages/bundle/web-app/src/index.ts)
+Source: [`packages/bundle/web-app/src/index.ts:47`](../packages/bundle/web-app/src/index.ts)
 
 <a id="deepseek-aidsh-web-fetch-http"></a>
 

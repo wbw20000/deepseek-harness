@@ -17,6 +17,7 @@ import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { networkInterfaces } from 'node:os'
 import { fileURLToPath } from 'node:url'
+import { format } from 'node:util'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { addHarnessSourceSection, auditStartupEntries } from '@deepseek-ai/dsh-app-boot'
@@ -66,6 +67,14 @@ export interface Config {
    * process that deliberately shares a home read-only.
    */
   endpointFile: boolean
+  /**
+   * Write every plugin's `logger.warn` and `logger.error` record to this
+   * process's stderr, one line each with a timestamp and the logger name.
+   * Without it a `dsh web` run keeps runtime warnings — an attachment disk
+   * budget nearing its cap, a trial instance that failed to open — in
+   * memory only, where no operator ever sees them.
+   */
+  logWarnings: boolean
 }
 
 export const Config: z<Config> = z.object({
@@ -74,7 +83,21 @@ export const Config: z<Config> = z.object({
   surfaceContext: z.boolean().default(true),
   trustedHosts: z.array(String).default([]),
   endpointFile: z.boolean().default(true),
+  logWarnings: z.boolean().default(true),
 })
+
+/**
+ * Render one warn/error log record as the single stderr line
+ * `logWarnings` writes: ISO timestamp, level, logger name, then the
+ * record's arguments through `util.format`, so an `Error` keeps its stack.
+ * @param record - the logger record's timestamp, name, type, and arguments.
+ * @returns the line without a trailing newline.
+ */
+export function formatWarningLine(record: { ts: number; name: string; type: string; args: unknown[] }): string {
+  const [first, ...rest] = record.args
+  const body = first === undefined ? '' : format(first, ...rest)
+  return `${new Date(record.ts).toISOString()} [${record.name}] ${record.type}: ${body}`
+}
 
 /** File under the Harness home that names the one live `dsh web` serving it. */
 export const WEB_ENDPOINT_FILE = 'web-endpoint.json'
@@ -326,7 +349,9 @@ async function openBrowser(url: string): Promise<void> {
 export const internals: {
   resolveDistIndex: () => string
   openBrowser: (url: string) => Promise<void>
-} = { resolveDistIndex, openBrowser }
+  /** Where `logWarnings` lines go; tests capture them here instead of stderr. */
+  writeWarning: (line: string) => void
+} = { resolveDistIndex, openBrowser, writeWarning: (line) => { process.stderr.write(`${line}\n`) } }
 
 /**
  * Mount the Web runtime: dist serving, surface prompt, the bash runtime
@@ -348,6 +373,17 @@ export function apply(ctx: Context, config: Config): void {
       startedAt: Date.now(),
     })
     ctx.effect(() => () => { releaseWebEndpoint(endpointPath, process.pid) }, 'web-app: release web-endpoint.json')
+  }
+  if (config.logWarnings) {
+    ctx.logger.exporter({
+      // WARN and everything more severe; the boot's own collector keeps the
+      // startup diagnostics, this one is for the operator's terminal or log file.
+      levels: { default: 2 },
+      export: ({ ts, name, type, args }) => {
+        if (type !== 'warn' && type !== 'error') return
+        internals.writeWarning(formatWarningLine({ ts, name, type, args }))
+      },
+    })
   }
   // The loopback URL belongs to this host. Under SSH, the operator reaches it
   // through a local forwarding address that this process cannot derive.

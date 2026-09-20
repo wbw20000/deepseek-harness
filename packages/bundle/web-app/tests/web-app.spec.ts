@@ -18,7 +18,7 @@ import * as AppBoot from '@deepseek-ai/dsh-app-boot'
 import { createLaunchEnvironmentSnapshot, DSH_LAUNCH_ENVIRONMENT_KEY } from '@deepseek-ai/dsh-launch-environment'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import type { WebServer } from '@deepseek-ai/dsh-host-webserver'
-import { apply, claimWebEndpoint, Config, internals, readWebEndpoint, releaseWebEndpoint, WEB_ENDPOINT_FILE } from '../src/index.ts'
+import { apply, claimWebEndpoint, Config, formatWarningLine, internals, readWebEndpoint, releaseWebEndpoint, WEB_ENDPOINT_FILE } from '../src/index.ts'
 
 vi.mock('node:child_process', async importOriginal => ({
   ...await importOriginal<typeof import('node:child_process')>(),
@@ -50,6 +50,7 @@ afterEach(() => {
   vi.unstubAllEnvs()
   internals.resolveDistIndex = originalResolve
   internals.openBrowser = originalOpenBrowser
+  internals.writeWarning = originalWriteWarning
   if (dist !== undefined) rmSync(dist, { recursive: true, force: true })
   if (home !== undefined) rmSync(home, { recursive: true, force: true })
   home = undefined
@@ -58,6 +59,7 @@ afterEach(() => {
 
 const originalResolve = internals.resolveDistIndex
 const originalOpenBrowser = internals.openBrowser
+const originalWriteWarning = internals.writeWarning
 
 type BrowserLauncher = ChildProcess & { stderr: PassThrough }
 
@@ -141,7 +143,14 @@ describe('web-app runtime glue', () => {
     const log = vi.spyOn(console, 'log').mockImplementation((message) => { lifecycle.push(String(message)) })
     const openBrowser = vi.fn(async (url: string) => { lifecycle.push(`open:${url}`) })
     internals.openBrowser = openBrowser
-    apply(ctx, new Config({ openBrowser: true, printUrl: true, surfaceContext: true, trustedHosts: ['lab.internal'], endpointFile: true }))
+    apply(ctx, new Config({
+      openBrowser: true,
+      printUrl: true,
+      surfaceContext: true,
+      trustedHosts: ['lab.internal'],
+      endpointFile: true,
+      logWarnings: false,
+    }))
     await ctx.plugin(SystemPrompt, { personaPrefix: '' })
     // Settle the injected registrations.
     await new Promise(resolve => setTimeout(resolve, 0))
@@ -179,7 +188,14 @@ describe('web-app runtime glue', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const openBrowser = vi.fn(async () => {})
     internals.openBrowser = openBrowser
-    apply(ctx, new Config({ openBrowser: false, printUrl: false, surfaceContext: true, trustedHosts: [], endpointFile: true }))
+    apply(ctx, new Config({
+      openBrowser: false,
+      printUrl: false,
+      surfaceContext: true,
+      trustedHosts: [],
+      endpointFile: true,
+      logWarnings: false,
+    }))
     await ctx.plugin(SystemPrompt, { personaPrefix: '' })
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(log).not.toHaveBeenCalled()
@@ -202,7 +218,14 @@ describe('web-app runtime glue', () => {
         return () => {}
       },
     } as never)
-    apply(ctx, new Config({ openBrowser: false, printUrl: false, surfaceContext: false, trustedHosts: [], endpointFile: true }))
+    apply(ctx, new Config({
+      openBrowser: false,
+      printUrl: false,
+      surfaceContext: false,
+      trustedHosts: [],
+      endpointFile: true,
+      logWarnings: false,
+    }))
     await ctx.plugin(SystemPrompt, { personaPrefix: '' })
     await new Promise(resolve => setTimeout(resolve, 0))
     const assembly = await ctx.systemPrompt.assemble()
@@ -218,7 +241,14 @@ describe('web-app runtime glue', () => {
     ctx.provide('webServer', fakeHttpServer().server)
     provideConnection(ctx)
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    apply(ctx, new Config({ openBrowser: false, printUrl: true, surfaceContext: true, trustedHosts: [], endpointFile: true }))
+    apply(ctx, new Config({
+      openBrowser: false,
+      printUrl: true,
+      surfaceContext: true,
+      trustedHosts: [],
+      endpointFile: true,
+      logWarnings: false,
+    }))
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(log).toHaveBeenCalledWith('dsh web: http://127.0.0.1:4567/?token=test-token')
     await ctx.fiber.dispose()
@@ -231,7 +261,14 @@ describe('web-app runtime glue', () => {
     const first = ctx.plugin((connectionCtx: Context) => { provideConnection(connectionCtx) })
     await first
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    apply(ctx, new Config({ openBrowser: false, printUrl: true, surfaceContext: true, trustedHosts: [], endpointFile: true }))
+    apply(ctx, new Config({
+      openBrowser: false,
+      printUrl: true,
+      surfaceContext: true,
+      trustedHosts: [],
+      endpointFile: true,
+      logWarnings: false,
+    }))
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(log).toHaveBeenCalledTimes(1)
 
@@ -254,7 +291,14 @@ describe('web-app runtime glue', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const openBrowser = vi.fn(async () => {})
     internals.openBrowser = openBrowser
-    apply(ctx, new Config({ openBrowser: true, printUrl: true, surfaceContext: false, trustedHosts: [], endpointFile: true }))
+    apply(ctx, new Config({
+      openBrowser: true,
+      printUrl: true,
+      surfaceContext: false,
+      trustedHosts: [],
+      endpointFile: true,
+      logWarnings: false,
+    }))
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(log).toHaveBeenCalledWith('dsh web: http://127.0.0.1:4567/?token=test-token')
     expect(openBrowser).not.toHaveBeenCalled()
@@ -274,7 +318,14 @@ describe('web-app runtime glue', () => {
     const settlement = new Promise<void>((resolve) => { release = resolve })
     provideLoader(settled, () => settlement)
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    apply(settled, new Config({ openBrowser: true, printUrl: true, surfaceContext: true, trustedHosts: [], endpointFile: true }))
+    apply(settled, new Config({
+      openBrowser: true,
+      printUrl: true,
+      surfaceContext: true,
+      trustedHosts: [],
+      endpointFile: true,
+      logWarnings: false,
+    }))
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(log).not.toHaveBeenCalled()
     expect(openBrowser).not.toHaveBeenCalled()
@@ -292,7 +343,14 @@ describe('web-app runtime glue', () => {
     failed.provide('webServer', fakeHttpServer().server)
     provideConnection(failed)
     provideLoader(failed, async () => { throw new Error('boot failed') })
-    apply(failed, new Config({ openBrowser: true, printUrl: true, surfaceContext: true, trustedHosts: [], endpointFile: true }))
+    apply(failed, new Config({
+      openBrowser: true,
+      printUrl: true,
+      surfaceContext: true,
+      trustedHosts: [],
+      endpointFile: true,
+      logWarnings: false,
+    }))
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(log).not.toHaveBeenCalled()
     expect(openBrowser).not.toHaveBeenCalled()
@@ -311,7 +369,14 @@ describe('web-app runtime glue', () => {
     let releaseTorn: () => void
     const tornSettlement = new Promise<void>((resolve) => { releaseTorn = resolve })
     provideLoader(torn, () => tornSettlement)
-    apply(torn, new Config({ openBrowser: true, printUrl: true, surfaceContext: true, trustedHosts: [], endpointFile: true }))
+    apply(torn, new Config({
+      openBrowser: true,
+      printUrl: true,
+      surfaceContext: true,
+      trustedHosts: [],
+      endpointFile: true,
+      logWarnings: false,
+    }))
     await new Promise(resolve => setTimeout(resolve, 0))
     await child.dispose() // the webServer service goes away
     releaseTorn!()
@@ -342,7 +407,14 @@ describe('web-app runtime glue', () => {
     const openBrowser = vi.fn(async () => {})
     internals.openBrowser = openBrowser
     const audit = vi.spyOn(AppBoot, 'auditStartupEntries')
-    apply(ctx, new Config({ openBrowser: true, printUrl: true, surfaceContext: false, trustedHosts: [], endpointFile: true }))
+    apply(ctx, new Config({
+      openBrowser: true,
+      printUrl: true,
+      surfaceContext: false,
+      trustedHosts: [],
+      endpointFile: true,
+      logWarnings: false,
+    }))
     await vi.waitFor(() => { expect(audit).toHaveBeenCalledOnce() })
     await Promise.allSettled(audit.mock.results.map(result => result.value as Promise<void>))
     if (announces) {
@@ -363,7 +435,14 @@ describe('web-app runtime glue', () => {
     Object.defineProperty(server, 'port', { get: () => undefined })
     ctx.provide('webServer', server)
     provideConnection(ctx)
-    apply(ctx, new Config({ openBrowser: false, printUrl: false, surfaceContext: true, trustedHosts: [], endpointFile: true }))
+    apply(ctx, new Config({
+      openBrowser: false,
+      printUrl: false,
+      surfaceContext: true,
+      trustedHosts: [],
+      endpointFile: true,
+      logWarnings: false,
+    }))
     await ctx.plugin(SystemPrompt, { personaPrefix: '' })
     await new Promise(resolve => setTimeout(resolve, 0))
     await expect(ctx.systemPrompt.assemble()).rejects.toThrow('webServer service missing')
@@ -389,7 +468,14 @@ describe('web-app runtime glue', () => {
     internals.openBrowser = vi.fn(async () => { throw failure })
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const diagnostic = vi.spyOn(console, 'error').mockImplementation(() => {})
-    apply(ctx, new Config({ openBrowser: true, printUrl: false, surfaceContext: false, trustedHosts: [], endpointFile: true }))
+    apply(ctx, new Config({
+      openBrowser: true,
+      printUrl: false,
+      surfaceContext: false,
+      trustedHosts: [],
+      endpointFile: true,
+      logWarnings: false,
+    }))
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(log).toHaveBeenCalledWith('dsh web: opening the default browser; pass --no-open to disable')
     expect(diagnostic).toHaveBeenCalledWith(
@@ -466,7 +552,14 @@ describe('web-endpoint.json (single live GUI per Harness home)', () => {
     ctx.provide('webServer', server)
     provideConnection(ctx)
     provideLoader(ctx)
-    apply(ctx, new Config({ openBrowser: false, printUrl: false, surfaceContext: false, trustedHosts: [], endpointFile: true }))
+    apply(ctx, new Config({
+      openBrowser: false,
+      printUrl: false,
+      surfaceContext: false,
+      trustedHosts: [],
+      endpointFile: true,
+      logWarnings: false,
+    }))
     const path = join(home!, WEB_ENDPOINT_FILE)
     const record = readWebEndpoint(path)
     expect(record).toMatchObject({ host: '127.0.0.1', port: 4567, pid: process.pid })
@@ -488,7 +581,14 @@ describe('web-endpoint.json (single live GUI per Harness home)', () => {
     provideConnection(ctx)
     provideLoader(ctx)
     expect(() => {
-      apply(ctx, new Config({ openBrowser: false, printUrl: false, surfaceContext: false, trustedHosts: [], endpointFile: true }))
+      apply(ctx, new Config({
+        openBrowser: false,
+        printUrl: false,
+        surfaceContext: false,
+        trustedHosts: [],
+        endpointFile: true,
+        logWarnings: false,
+      }))
     }).toThrow(/another dsh web \(pid \d+\) already serves this Harness home on 127\.0\.0\.1:3080/u)
     expect(readWebEndpoint(path)?.pid).toBe(process.ppid)
 
@@ -496,7 +596,14 @@ describe('web-endpoint.json (single live GUI per Harness home)', () => {
     skipping.provide('webServer', server)
     provideConnection(skipping)
     provideLoader(skipping)
-    apply(skipping, new Config({ openBrowser: false, printUrl: false, surfaceContext: false, trustedHosts: [], endpointFile: false }))
+    apply(skipping, new Config({
+      openBrowser: false,
+      printUrl: false,
+      surfaceContext: false,
+      trustedHosts: [],
+      endpointFile: false,
+      logWarnings: false,
+    }))
     expect(readWebEndpoint(path)?.pid).toBe(process.ppid)
     await skipping.fiber.dispose()
     expect(existsSync(path)).toBe(true)
@@ -542,5 +649,65 @@ describe('web-endpoint.json (single live GUI per Harness home)', () => {
     mkdirSync(directory)
     expect(() => { claimWebEndpoint(directory, { host: '127.0.0.1', port: 1, pid: process.pid, startedAt: 1 }) }).toThrow(/EISDIR/u)
     void readFileSync
+  })
+})
+
+describe('logWarnings (runtime warn/error records to stderr)', () => {
+  it('writes warn and error records of any plugin logger as one line each, and ignores info', async () => {
+    stageDist()
+    const ctx = new Context()
+    const { server } = fakeHttpServer('127.0.0.1')
+    ctx.provide('webServer', server)
+    provideConnection(ctx)
+    provideLoader(ctx)
+    const lines: string[] = []
+    internals.writeWarning = (line) => { lines.push(line) }
+    apply(ctx, new Config({
+      openBrowser: false,
+      printUrl: false,
+      surfaceContext: false,
+      trustedHosts: [],
+      endpointFile: false,
+      logWarnings: true,
+    }))
+    const plugin = ctx.logger('attachment-local')
+    plugin.warn('disk budget at %d%%', 80)
+    plugin.info('not exported')
+    plugin.error(new Error('boom'))
+    expect(lines).toHaveLength(2)
+    expect(lines[0]).toMatch(/^\d{4}-\d{2}-\d{2}T[^ ]+ \[attachment-local\] warn: disk budget at 80%$/u)
+    expect(lines[1]).toMatch(/^[^ ]+ \[attachment-local\] error: Error: boom/u)
+    await ctx.fiber.dispose()
+    plugin.warn('after disposal')
+    expect(lines).toHaveLength(2)
+  })
+
+  it('writes nothing when logWarnings is false, and formats an empty record without arguments', () => {
+    const ctx = new Context()
+    const { server } = fakeHttpServer('127.0.0.1')
+    ctx.provide('webServer', server)
+    provideConnection(ctx)
+    provideLoader(ctx)
+    const lines: string[] = []
+    internals.writeWarning = (line) => { lines.push(line) }
+    apply(ctx, new Config({
+      openBrowser: false,
+      printUrl: false,
+      surfaceContext: false,
+      trustedHosts: [],
+      endpointFile: false,
+      logWarnings: false,
+    }))
+    ctx.logger('x').warn('silent')
+    expect(lines).toEqual([])
+    expect(formatWarningLine({ ts: 0, name: 'x', type: 'warn', args: [] })).toBe('1970-01-01T00:00:00.000Z [x] warn: ')
+  })
+
+  it('reaches stderr by default', () => {
+    const written: string[] = []
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => { written.push(String(chunk)); return true })
+    originalWriteWarning('a line')
+    spy.mockRestore()
+    expect(written).toEqual(['a line\n'])
   })
 })

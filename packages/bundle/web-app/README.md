@@ -51,6 +51,7 @@ Most users never set these; the command-line flags feed the four settings below 
 | `surfaceContext` | `true` | Give the agent GUI-orientation context and expose `DSH_WEB_URL` to its shell commands |
 | `trustedHosts` | `[]` | Extra hosts allowed to reach the GUI from the network |
 | `endpointFile` | `true` | Claim `$DSH_HOME/web-endpoint.json`: refuse to start while another live `dsh web` serves the same home; record this GUI's loopback host, port, and pid there; remove it on shutdown |
+| `logWarnings` | `true` | Write every plugin's `logger.warn`/`logger.error` record to stderr, one timestamped line each; otherwise runtime warnings stay in memory where nobody sees them |
 
 The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-web-app) is the exhaustive source for every accepted field and its JSDoc.
 

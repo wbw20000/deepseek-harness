@@ -51,6 +51,7 @@ dsh --profile web --no-open --port 8080
 | `surfaceContext` | `true` | 给 agent 提供 GUI 定位上下文，并把 `DSH_WEB_URL` 暴露给其 shell 命令 |
 | `trustedHosts` | `[]` | 允许从网络访问 GUI 的额外主机 |
 | `endpointFile` | `true` | 认领 `$DSH_HOME/web-endpoint.json`：另一个存活的 `dsh web` 正服务同一个 home 时拒绝启动；把本 GUI 的回环 host、端口和 pid 记进去；退出时删除 |
+| `logWarnings` | `true` | 把每个插件的 `logger.warn`/`logger.error` 记录逐条带时间戳写到 stderr；否则运行期告警只留在内存里，没人看得见 |
 
 生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-web-app)是每个受支持字段及其 JSDoc 的穷尽式真源。
 
