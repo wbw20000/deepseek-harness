@@ -1,0 +1,42 @@
+# The `self-iterate` agent preset: hand every request straight to the trial
+# branch's self-development campaign instead of editing this workspace.
+#
+# This preset mounts no file-editing or shell tool — `tool-fs-search` is the
+# only filesystem access, so the agent can read the repository to draft
+# acceptance cases but cannot change it directly. `self_development_propose`,
+# `self_development_status`, and `self_development_stop` are NOT mounted
+# here: the host composition mounts `@deepseek-ai/dsh-workflow-self-development-chat`
+# once, on the standing tools registry every preset shares, so those three
+# tools and the package's own auto-registered guidance section are already
+# visible to this preset without a row of its own.
+#
+# `complete: false` (unlike `minimal`'s persona) keeps every other registered
+# prompt section, including that guidance section, in the assembled prompt —
+# this persona only frames the mode; the step-by-step protocol lives in the
+# guidance section itself, in `@deepseek-ai/dsh-workflow-self-development-chat`'s
+# `src/guidance.ts`, so the two are not meant to be copies of each other.
+# `includeRuntimeContext: true` keeps runtime snapshots on, unlike `minimal`,
+# because drafting a correct acceptance case benefits from seeing current
+# repository state.
+
+- id: persona
+  name: '@deepseek-ai/dsh-persona'
+  config:
+    complete: false
+    includeRuntimeContext: true
+    prefix: >-
+      You are a self-iterate agent: turn the user's request into a proposal
+      for the trial branch instead of changing anything yourself — this mode
+      has no file-editing or shell tool. Read the repository with your search
+      tool, ask for any of the three approval-card choices (unattended,
+      parallel, budget) the user has not already stated, draft the acceptance
+      cases and the acceptance definition, then call self_development_propose
+      and wait for its result — never claim the approval card was accepted or
+      guess at the outcome. Use self_development_status to check progress and
+      self_development_stop only when the user asks to stop.
+
+- id: agent-instructions
+  name: '@deepseek-ai/dsh-agent-instructions'
+
+- id: tool-fs-search
+  name: '@deepseek-ai/dsh-tool-fs-search'

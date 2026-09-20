@@ -36,6 +36,12 @@ export interface SelfDevelopmentChatConfig {
   readonly defaultBudget?: ProposeBudget | undefined
   /** Unattended default; defaults to `true`. */
   readonly defaultUnattended?: boolean | undefined
+  /**
+   * Register the self-development guidance `systemPrompt` section; defaults
+   * to `true`. `false` registers nothing, matching a deployment that pastes
+   * or composes its own guidance instead.
+   */
+  readonly guidance?: boolean | undefined
 }
 
 /** Validated configuration the service runs under. */
@@ -47,6 +53,7 @@ export interface ResolvedChatConfig {
   readonly cardLocale: 'zh' | 'en'
   readonly defaultBudget: ProposeBudget
   readonly defaultUnattended: boolean
+  readonly guidance: boolean
 }
 
 /**
@@ -81,5 +88,6 @@ export function resolveChatConfig(config: SelfDevelopmentChatConfig): ResolvedCh
     cardLocale: locale,
     defaultBudget: config.defaultBudget ?? { preset: 'unlimited' },
     defaultUnattended: config.defaultUnattended ?? true,
+    guidance: config.guidance ?? true,
   }
 }
