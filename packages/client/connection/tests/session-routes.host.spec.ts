@@ -329,6 +329,16 @@ describe('connection session routes', () => {
     await dispose()
   })
 
+  it('refuses to mint a pairing link for a caller that is not the stable host', async () => {
+    const { routes, connection, dispose } = await mounted({ trustedHosts: ['dsh.example'] })
+    try {
+      const cookie = browserCookie(connection, 'dsh.example')
+      const refused = await serve(routes, fakePost({ host: 'dsh.example', cookie }, PAIRING_MINT_ROUTE_PATH, { deviceLabel: 'another-phone' }))
+      expect(refused.status).toBe(403)
+      expect(String(refused.body)).toContain('stable host only')
+    } finally { await dispose() }
+  })
+
   it('rejects a mint request without a usable Host header', async () => {
     const { connection, dispose } = await mounted()
     try {

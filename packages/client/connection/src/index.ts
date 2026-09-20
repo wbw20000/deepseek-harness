@@ -360,10 +360,17 @@ function registerConnectionRoutes(
     methods: ['POST'],
     requestBody: 'buffered',
     fetch: async (request) => {
+      const requestBase = requestOrigin(request, cookieSecure)
+      if (requestBase === undefined) return plainResponse(400, 'connection: request carries no Host header')
+      // Pairing another device is a credential operation, reserved for the
+      // stable host: a paired phone must never be able to pair a further
+      // device (the phone operation whitelist excludes credential changes).
+      if (!connection.callerOf(request).loopback) {
+        return plainResponse(403, 'connection: pairing links are minted from the stable host only')
+      }
       // The configured public origin wins: behind a relay the desktop's own
       // origin is a loopback address no phone can open.
-      const origin = publicOrigin ?? requestOrigin(request, cookieSecure)
-      if (origin === undefined) return plainResponse(400, 'connection: request carries no Host header')
+      const origin = publicOrigin ?? requestBase
       const body = (await readJsonObject(request)) ?? {}
       const ttlMs = body.ttlMs === undefined ? DEFAULT_PAIRING_TTL_MS : body.ttlMs
       const deviceLabel = body.deviceLabel
