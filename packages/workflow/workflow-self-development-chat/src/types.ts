@@ -296,19 +296,53 @@ export type IntegrationResult =
   | { readonly status: 'verification-failed'; readonly reason: string; readonly baseMoved: boolean; readonly snapshotCommit?: string }
   | { readonly status: 'failed'; readonly reason: string; readonly snapshotCommit?: string }
 
+/** Structural view of one assertion inside the acceptor's completed run. */
+export interface AcceptanceAssertionView {
+  readonly assertionId: string
+  /** `pass`, `fail`, or `skipped`, as the runner's acceptor records it. */
+  readonly status: string
+}
+
+/** Structural view of one case inside the acceptor's completed run. */
+export interface AcceptanceCaseView {
+  readonly caseId: string
+  readonly assertions: readonly AcceptanceAssertionView[]
+}
+
+/**
+ * Structural view of the acceptor's completed run (the runner's
+ * `AcceptanceRun`), covering only what the merge gate judges: the per-case
+ * assertion statuses and the run-level timeout and cancellation facts.
+ */
+export interface AcceptanceRunView {
+  readonly cases: readonly AcceptanceCaseView[]
+  readonly exitCode: number
+  readonly timedOut: boolean
+  readonly cancelled: boolean
+}
+
+/**
+ * What the runner's `verifyAcceptance` resolves: a completed run — assertion
+ * failures live inside `report`, never as an `ok: false` — or why the
+ * definition could not be run at all.
+ */
+export type RunnerVerifyResult =
+  | { readonly ok: true; readonly report: AcceptanceRunView }
+  | { readonly ok: false; readonly reason: string }
+
 /**
  * Structural view of the optional runner verification port
- * (`ctx.get('selfDevelopmentRunner')`), covering only the acceptance-only
- * entry point `self_development_merge` calls before a fast-forward — DI-a is
- * adding this export to `@deepseek-ai/dsh-workflow-self-development-runner`
- * without changing the executor itself.
+ * (`ctx.get('selfDevelopmentRunner')`): the service-side, verify-only entry
+ * point `self_development_merge` calls before a fast-forward. The runner
+ * supplies its own `experimentsRoot` and `killGraceMs`; only an optional
+ * overall deadline is passed here.
  */
 export interface RunnerVerifyPort {
   verifyAcceptance(
     worktree: string,
     acceptancePath: string,
-    options: { readonly experimentsRoot: string; readonly killGraceMs?: number },
-  ): Promise<VerifyOutcome>
+    options?: { readonly phaseTimeoutMs?: number },
+  ): Promise<RunnerVerifyResult>
 }
 
 /** One unified campaign notification event (events service projection; DH-a adds the campaign kinds). */

@@ -9,7 +9,7 @@ import { exec } from 'node:child_process'
 import { promisify } from 'node:util'
 import { acceptancePath } from './acceptance.ts'
 import type { ResolvedChatConfig } from './config.ts'
-import type { RunnerVerifyPort, VerifyOutcome } from './types.ts'
+import type { AcceptanceRunView, RunnerVerifyPort, VerifyOutcome } from './types.ts'
 
 const execAsync = promisify(exec)
 
@@ -98,6 +98,28 @@ function gateFailureReason(command: string, result: GateRunResult): string {
  * @param deps - injectable shell runner, replaceable by direct unit tests.
  * @returns the `verify` function.
  */
+/**
+ * Judge the acceptor's completed run: every assertion of every case must be
+ * `pass`, and the run must have neither timed out nor been cancelled. The
+ * runner reports assertion failures inside the run, never as its own failure,
+ * so this is where a failed case becomes a `verification-failed` reason.
+ * @param report - the acceptor's completed run.
+ * @returns `{ ok: true }` for an all-pass run, else the failed assertions and run facts in one reason.
+ */
+export function judgeAcceptanceRun(report: AcceptanceRunView): VerifyOutcome {
+  const failures: string[] = []
+  for (const testCase of report.cases) {
+    const failed = testCase.assertions.filter(assertion => assertion.status !== 'pass')
+    if (failed.length > 0) {
+      failures.push(`case ${testCase.caseId}: ${failed.map(assertion => `${assertion.assertionId} ${assertion.status}`).join(', ')}`)
+    }
+  }
+  if (report.timedOut) failures.push('a case reached its deadline')
+  if (report.cancelled) failures.push('the run was cancelled')
+  if (failures.length === 0) return { ok: true }
+  return { ok: false, reason: `acceptance failed (exit code ${report.exitCode}): ${failures.join('; ')}` }
+}
+
 export function buildVerify(
   runner: RunnerVerifyPort,
   config: ResolvedChatConfig,
@@ -108,9 +130,10 @@ export function buildVerify(
   return async (worktree: string): Promise<VerifyOutcome> => {
     let acceptanceOutcome: VerifyOutcome
     try {
-      acceptanceOutcome = await runner.verifyAcceptance(worktree, acceptancePath(config.controlDirectory, taskId), {
-        experimentsRoot: config.experimentsRoot,
+      const result = await runner.verifyAcceptance(worktree, acceptancePath(config.controlDirectory, taskId), {
+        phaseTimeoutMs: GATE_TIMEOUT_MS,
       })
+      acceptanceOutcome = result.ok ? judgeAcceptanceRun(result.report) : { ok: false, reason: `acceptance could not be run: ${result.reason}` }
     } catch (error: unknown) {
       acceptanceOutcome = { ok: false, reason: `runner acceptance verification threw: ${(error as Error).message}` }
     }

@@ -36,10 +36,10 @@ import type {
   MergeBlockedEventPayload,
   MergeIntegratedEventPayload,
   RunnerVerifyPort,
+  RunnerVerifyResult,
   SelfDevelopmentRemoteFacade,
   TaskDetailView,
   TaskWorkspaceView,
-  VerifyOutcome,
   WorkspacesPort,
 } from '../src/types.ts'
 
@@ -191,11 +191,11 @@ class FakeWorkspaces implements WorkspacesPort {
 /** Runner verification fake. */
 class FakeRunner implements RunnerVerifyPort {
   calls: { worktree: string; acceptancePath: string }[] = []
-  outcome: VerifyOutcome = { ok: true }
+  result: RunnerVerifyResult = { ok: true, report: { cases: [], exitCode: 0, timedOut: false, cancelled: false } }
 
-  async verifyAcceptance(worktree: string, acceptancePath: string): Promise<VerifyOutcome> {
+  async verifyAcceptance(worktree: string, acceptancePath: string): Promise<RunnerVerifyResult> {
     this.calls.push({ worktree, acceptancePath })
-    return this.outcome
+    return this.result
   }
 }
 

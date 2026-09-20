@@ -481,6 +481,22 @@ async stop(req: { readonly taskId: string readonly expectedRevision: number read
  * @returns a read-only snapshot; later ownership changes are not reflected.
  */
 activeTasks(): readonly string[]
+
+/**
+ * Judge one acceptance definition against a worktree through the acceptor
+ * alone, under this runner's `experimentsRoot` and `killGraceMs`: no headless
+ * dsh agent runs, no attempt is recorded, and nothing here touches the
+ * task-control core. This is the service-side entry point for the verify-only
+ * {@link verifyAcceptance} function, for callers that reach the runner through
+ * `ctx.get` — such as a merge's pre-fast-forward verification gate.
+ * @param worktree - absolute path of the worktree the acceptance cases run against.
+ * @param acceptancePath - absolute path of the acceptance definition; must resolve outside `experimentsRoot`.
+ * @param options - optional overall deadline for the whole run in milliseconds.
+ * @returns `{ ok: true, report }` once the acceptor completed — assertion failures are inside `report`,
+ *   not a failure of this call — or `{ ok: false, reason }` when the definition could not be loaded or a
+ *   case could not be spawned or torn down. Never throws.
+ */
+verifyAcceptance( worktree: string, acceptancePath: string, options: { readonly phaseTimeoutMs?: number } = {}, ): Promise<VerifyAcceptanceResult>
 ```
 
 Source: [`packages/workflow/workflow-self-development-runner/src/index.ts`](../../packages/workflow/workflow-self-development-runner/src/index.ts)

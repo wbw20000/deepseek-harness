@@ -37,9 +37,9 @@ import type {
   IntegrationResult,
   LaunchProfileWire,
   RunnerVerifyPort,
+  RunnerVerifyResult,
   SelfDevelopmentRemoteFacade,
   TaskDetailView,
-  VerifyOutcome,
 } from '../src/types.ts'
 
 /** Standard campaign state a fake `startCampaign`/`stopCampaign` returns. */
@@ -188,11 +188,11 @@ class FakeWorkspaces {
 /** Always-succeeding runner verification fake. */
 class FakeRunner implements RunnerVerifyPort {
   calls: { worktree: string; acceptancePath: string }[] = []
-  outcome: VerifyOutcome = { ok: true }
+  result: RunnerVerifyResult = { ok: true, report: { cases: [], exitCode: 0, timedOut: false, cancelled: false } }
 
-  async verifyAcceptance(worktree: string, acceptancePath: string): Promise<VerifyOutcome> {
+  async verifyAcceptance(worktree: string, acceptancePath: string): Promise<RunnerVerifyResult> {
     this.calls.push({ worktree, acceptancePath })
-    return this.outcome
+    return this.result
   }
 }
 
@@ -667,7 +667,7 @@ describe('self_development_merge tool', () => {
     expect(outcome.ok).toBe(true)
     expect(outcome.repair?.ok).toBe(false)
     const rendered = def.output.render({}, value as never)
-    expect((rendered[0] as { text: string }).text).toContain('merge blocked (verification-failed)')
+    expect((rendered[0] as { text: string }).text).toContain('merge blocked (verification-failed: gate failed)')
     expect((rendered[0] as { text: string }).text).toContain('failed to start')
   })
 
@@ -749,7 +749,7 @@ describe('self_development_merge tool', () => {
     const def = tools.find('self_development_merge')
     const synthetic = { ok: true, taskId: 'task-1', steps: [], result: { status: 'conflict', files: ['src/a.ts'], baseMoved: true } }
     const rendered = def.output.render({}, synthetic)
-    expect((rendered[0] as { text: string }).text).toBe('Task task-1: merge blocked (conflict); repair campaign failed to start')
+    expect((rendered[0] as { text: string }).text).toBe('Task task-1: merge blocked (conflict in src/a.ts); repair campaign failed to start')
   })
 
   it('rejects when no task is awaiting-trial', async () => {

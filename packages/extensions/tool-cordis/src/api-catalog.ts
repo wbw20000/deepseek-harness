@@ -1873,6 +1873,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [],
         returns: 'a read-only snapshot; later ownership changes are not reflected.',
       },
+      {
+        signature: 'verifyAcceptance( worktree: string, acceptancePath: string, options: { readonly phaseTimeoutMs?: number } = {}, ): Promise<VerifyAcceptanceResult>',
+        description: 'Judge one acceptance definition against a worktree through the acceptor alone, under this runner\'s `experimentsRoot` and `killGraceMs`: no headless dsh agent runs, no attempt is recorded, and nothing here touches the task-control core. This is the service-side entry point for the verify-only verifyAcceptance function, for callers that reach the runner through `ctx.get` — such as a merge\'s pre-fast-forward verification gate.',
+        parameters: [{ name: 'worktree', description: 'absolute path of the worktree the acceptance cases run against.' }, { name: 'acceptancePath', description: 'absolute path of the acceptance definition; must resolve outside `experimentsRoot`.' }, { name: 'options', description: 'optional overall deadline for the whole run in milliseconds.' }],
+        returns: '`{ ok: true, report }` once the acceptor completed — assertion failures are inside `report`, not a failure of this call — or `{ ok: false, reason }` when the definition could not be loaded or a case could not be spawned or torn down. Never throws.',
+      },
     ],
   },
   {
@@ -4354,6 +4360,10 @@ export const EVENT_API: readonly EventApiEntry[] = [
 /** Shapes of every exported type the Service and Event signatures reference (transitively), sorted by name. */
 export const TYPE_API: readonly TypeApiEntry[] = [
   {
+    name: 'AcceptanceRun',
+    declaration: 'export interface AcceptanceRun {\n    readonly cases: readonly CaseResult[];\n    readonly exitCode: number;\n    readonly signal: string | null;\n    readonly timedOut: boolean;\n    readonly cancelled: boolean;\n    readonly pgidReused?: boolean;\n    readonly durationMs: number;\n}',
+  },
+  {
     name: 'AdapterRegistrationHandle',
     declaration: 'export interface AdapterRegistrationHandle {\n    (): void;\n    replace(providers: string[]): void;\n}',
   },
@@ -4496,6 +4506,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'AssembledSection',
     declaration: 'export interface AssembledSection {\n    name: string;\n    text: string;\n    interpolate?: boolean;\n}',
+  },
+  {
+    name: 'AssertionResult',
+    declaration: 'export interface AssertionResult {\n    readonly assertionId: string;\n    readonly status: AssertionStatus;\n}',
+  },
+  {
+    name: 'AssertionStatus',
+    declaration: 'export type AssertionStatus = \'pass\' | \'fail\' | \'skipped\';',
   },
   {
     name: 'AssistantMessage',
@@ -4664,6 +4682,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'CardBudget',
     declaration: 'export interface CardBudget {\n    readonly mode?: BudgetMode;\n    readonly maxRounds?: number;\n    readonly durationMs?: number;\n    readonly phaseTimeoutMs?: number;\n    readonly maxStepsPerAttempt?: number;\n    readonly noProgressAttemptLimit?: number;\n}',
+  },
+  {
+    name: 'CaseResult',
+    declaration: 'export interface CaseResult {\n    readonly caseId: string;\n    readonly assertions: readonly AssertionResult[];\n}',
   },
   {
     name: 'ChangeResult',
@@ -7600,6 +7622,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'VerifiedWebhookDelivery',
     declaration: 'export interface VerifiedWebhookDelivery<K extends string = string> {\n    readonly kind: K;\n    readonly source: WebhookSourceId;\n    readonly deliveryId: WebhookDeliveryId;\n    readonly event: WebhookEventOf<K>;\n    readonly receivedAt: number;\n}',
+  },
+  {
+    name: 'VerifyAcceptanceResult',
+    declaration: 'export type VerifyAcceptanceResult = {\n    readonly ok: true;\n    readonly report: AcceptanceRun;\n} | {\n    readonly ok: false;\n    readonly reason: string;\n};',
   },
   {
     name: 'WebBootBatch',

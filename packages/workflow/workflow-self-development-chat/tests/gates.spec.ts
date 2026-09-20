@@ -10,10 +10,10 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { buildVerify, runShellCommand } from '../src/gates.ts'
+import { GATE_TIMEOUT_MS, buildVerify, judgeAcceptanceRun, runShellCommand } from '../src/gates.ts'
 import type { GateRunResult } from '../src/gates.ts'
 import { resolveChatConfig } from '../src/config.ts'
-import type { RunnerVerifyPort, VerifyOutcome } from '../src/types.ts'
+import type { AcceptanceRunView, RunnerVerifyPort, RunnerVerifyResult } from '../src/types.ts'
 
 let root: string | undefined
 
@@ -58,18 +58,26 @@ describe('runShellCommand', () => {
   })
 })
 
-/** A runner fake with a configurable outcome, recording every call. */
+/** An all-pass acceptor run: one case whose two assertions passed. */
+const PASSING_RUN: AcceptanceRunView = {
+  cases: [{ caseId: 'smoke', assertions: [{ assertionId: 'exit-zero', status: 'pass' }, { assertionId: 'stdout', status: 'pass' }] }],
+  exitCode: 0,
+  timedOut: false,
+  cancelled: false,
+}
+
+/** A runner fake with a configurable result, recording every call. */
 class FakeRunner implements RunnerVerifyPort {
-  calls: { worktree: string; acceptancePath: string; experimentsRoot: string }[] = []
-  outcome: VerifyOutcome = { ok: true }
+  calls: { worktree: string; acceptancePath: string; phaseTimeoutMs: number | undefined }[] = []
+  result: RunnerVerifyResult = { ok: true, report: PASSING_RUN }
 
   async verifyAcceptance(
     worktree: string,
     acceptancePath: string,
-    options: { readonly experimentsRoot: string },
-  ): Promise<VerifyOutcome> {
-    this.calls.push({ worktree, acceptancePath, experimentsRoot: options.experimentsRoot })
-    return this.outcome
+    options: { readonly phaseTimeoutMs?: number } = {},
+  ): Promise<RunnerVerifyResult> {
+    this.calls.push({ worktree, acceptancePath, phaseTimeoutMs: options.phaseTimeoutMs })
+    return this.result
   }
 }
 
@@ -82,22 +90,44 @@ const CONFIG = resolveChatConfig({
 })
 
 describe('buildVerify', () => {
-  it('calls the runner with the worktree, the task acceptance path, and the experiments root', async () => {
+  it('calls the runner with the worktree, the task acceptance path, and the gate deadline', async () => {
     const runner = new FakeRunner()
     const verify = buildVerify(runner, CONFIG, 'task-1')
     const outcome = await verify('/exp/task-1')
     expect(outcome).toEqual({ ok: true })
-    expect(runner.calls).toEqual([{ worktree: '/exp/task-1', acceptancePath: '/control/acceptance/task-1.json', experimentsRoot: '/exp' }])
+    expect(runner.calls).toEqual([{ worktree: '/exp/task-1', acceptancePath: '/control/acceptance/task-1.json', phaseTimeoutMs: GATE_TIMEOUT_MS }])
   })
 
-  it('fails without running any gate when the runner fails', async () => {
+  it('fails without running any gate when the runner could not run the definition', async () => {
     const runner = new FakeRunner()
-    runner.outcome = { ok: false, reason: 'a case failed' }
+    runner.result = { ok: false, reason: 'definition resolves inside the experiments root' }
     let gateCalls = 0
     const config = resolveChatConfig({ ...CONFIG, integrationGates: ['node test.mjs'] })
     const verify = buildVerify(runner, config, 'task-1', { runShell: async () => { gateCalls += 1; return { code: 0, timedOut: false, output: '' } } })
     const outcome = await verify('/exp/task-1')
-    expect(outcome).toEqual({ ok: false, reason: 'a case failed' })
+    expect(outcome).toEqual({ ok: false, reason: 'acceptance could not be run: definition resolves inside the experiments root' })
+    expect(gateCalls).toBe(0)
+  })
+
+  it('fails without running any gate when a completed run has a failed assertion', async () => {
+    const runner = new FakeRunner()
+    runner.result = {
+      ok: true,
+      report: {
+        cases: [
+          { caseId: 'smoke', assertions: [{ assertionId: 'exit-zero', status: 'pass' }, { assertionId: 'stdout', status: 'fail' }] },
+          { caseId: 'second', assertions: [{ assertionId: 'exists', status: 'skipped' }] },
+        ],
+        exitCode: 1,
+        timedOut: false,
+        cancelled: false,
+      },
+    }
+    let gateCalls = 0
+    const config = resolveChatConfig({ ...CONFIG, integrationGates: ['node test.mjs'] })
+    const verify = buildVerify(runner, config, 'task-1', { runShell: async () => { gateCalls += 1; return { code: 0, timedOut: false, output: '' } } })
+    const outcome = await verify('/exp/task-1')
+    expect(outcome).toEqual({ ok: false, reason: 'acceptance failed (exit code 1): case smoke: stdout fail; case second: exists skipped' })
     expect(gateCalls).toBe(0)
   })
 
@@ -166,5 +196,20 @@ describe('buildVerify', () => {
     // The kept tail itself is bounded to 2 KB, well under the full ~4 KB output.
     const keptOutputLength = outcome.reason.length - outcome.reason.indexOf('Output tail:\n') - 'Output tail:\n'.length
     expect(keptOutputLength).toBeLessThanOrEqual(2048)
+  })
+})
+
+describe('judgeAcceptanceRun', () => {
+  it('passes an all-pass run', () => {
+    expect(judgeAcceptanceRun(PASSING_RUN)).toEqual({ ok: true })
+  })
+
+  it('passes a run with no cases', () => {
+    expect(judgeAcceptanceRun({ cases: [], exitCode: 0, timedOut: false, cancelled: false })).toEqual({ ok: true })
+  })
+
+  it('reports a timed-out run and a cancelled run even when every assertion passed', () => {
+    expect(judgeAcceptanceRun({ ...PASSING_RUN, timedOut: true })).toEqual({ ok: false, reason: 'acceptance failed (exit code 0): a case reached its deadline' })
+    expect(judgeAcceptanceRun({ ...PASSING_RUN, cancelled: true })).toEqual({ ok: false, reason: 'acceptance failed (exit code 0): the run was cancelled' })
   })
 })

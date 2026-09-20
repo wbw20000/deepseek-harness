@@ -874,6 +874,7 @@ export const TYPE_LINK_EXEMPTIONS: Readonly<Record<string, string>> = {
   AttemptEvidence: 'stable-side attempt evidence record is owned by packages/workflow/workflow-self-development-runner/README.md',
   SupervisedAttemptRequest: 'one supervised attempt request is owned by packages/workflow/workflow-self-development-runner/README.md',
   SupervisedAttemptOutcome: 'one supervised attempt outcome is owned by packages/workflow/workflow-self-development-runner/README.md',
+  VerifyAcceptanceResult: 'the verify-only acceptance outcome is owned by packages/workflow/workflow-self-development-runner/README.md',
   SelfDevelopmentEvent: 'one unified self-development notification event is owned by packages/workflow/workflow-self-development-events/README.md',
   SelfDevelopmentEventKind: 'self-development notification event kinds are owned by packages/workflow/workflow-self-development-events/README.md',
   SelfDevelopmentEventsConfig: 'self-development events deployment configuration is owned by packages/workflow/workflow-self-development-events/README.md',

@@ -543,7 +543,12 @@ function mergeResultLine(value: JsonValue): string {
     const repairText = outcome.repair?.ok === true
       ? `repair campaign ${outcome.repair.taskId} started, unattended`
       : `repair campaign failed to start${outcome.repair === undefined ? '' : `: ${outcome.repair.reason}`}`
-    return `Task ${outcome.taskId}: merge blocked (${result.status}); ${repairText}`
+    // The user reads why the merge stopped from this line alone, so the
+    // conflict's files or the verification reason travel with the status.
+    const blockedText = result.status === 'conflict'
+      ? `conflict in ${result.files.join(', ')}`
+      : `verification-failed: ${result.reason}`
+    return `Task ${outcome.taskId}: merge blocked (${blockedText}); ${repairText}`
   }
   return `Task ${outcome.taskId}: merge failed — ${result.reason}`
 }

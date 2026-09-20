@@ -152,7 +152,7 @@ Host-only：这个工具会重建并重启它所在的这个稳定版，所以�
 
 `self_development_merge` 驱动工作区服务的 `integrate({ taskId, targetBranch, actor, verify, snapshot })`（DI-a 冻结接口），传入本包自己构造的 `verify(worktree)`，依次做两步，任一步失败都会终止：
 
-1. **runner 验收验证** ——`selfDevelopmentRunner` 的 `verifyAcceptance(worktree, acceptancePath, { experimentsRoot })`：在合并后（可能已 rebase）的工作区上，由独立进程、而不是模型，重新核对同一份验收定义。
+1. **runner 验收验证** ——`selfDevelopmentRunner` 服务的 `verifyAcceptance(worktree, acceptancePath, { phaseTimeoutMs })` 方法（runner 自带 `experimentsRoot` 与 `killGraceMs`，这里只传 20 分钟的门禁期限）：在合并后（可能已 rebase）的工作区上，由独立进程、而不是模型，重新核对同一份验收定义。只要运行跑完，runner 一律回答 `{ ok: true, report }`——断言失败记在 report 里，从不算它自己的失败——所以由本包来判定 report：每个用例的每条断言都必须是 `pass`，且整个运行既没超时也没被取消；否则就变成一条列出失败断言的 `verification-failed` 原因（`acceptance failed (exit code 1): case smoke: stdout fail`）。runner 根本跑不起来的定义（`{ ok: false, reason }`）则以 `acceptance could not be run: <reason>` 失败。
 2. **集成门禁** ——依次执行 `integrationGates` 里配置的每条命令，每条都在工作区内以 `sh -c` 运行，20 分钟后强制终止；非零退出或超时都会拒绝关闭，原因里点名命令与其合并输出（stdout/stderr）的最后 2 KB。
 
 `snapshot` 是 `{ message: 'selfdev(<taskId>): <需求首行，最多 72 字符>', author: commitIdentity }`（任务需求拿不到时就是单纯的 `selfdev(<taskId>)`）。当任务工作区有未提交的改动时——比如实验 Agent 的工作还没提交——`integrate` 会在 rebase *之前*用这条消息和这个作者把它们暂存并提交，这样合并就永远不会悄悄丢掉这些改动；干净的工作区不会产生快照提交。不管哪种情况，`integrate` 都会在 rebase（如果目标分支动过）之后、快进之前调用 `verify`，无论基线是否动过都会调用。它会落到以下四种结果之一：

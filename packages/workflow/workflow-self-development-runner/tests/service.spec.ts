@@ -9,7 +9,7 @@
 
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL, fileURLToPath } from 'node:url'
@@ -162,6 +162,49 @@ describe('service lifecycle', () => {
     const service = new SelfDevelopmentRunner(context, config)
     expect(context.selfDevelopmentRunner).toBeInstanceOf(SelfDevelopmentRunner)
     expect(service.name).toBe('selfDevelopmentRunner')
+  })
+})
+
+describe('verifyAcceptance (service method)', () => {
+  /** A worktree inside the configured experiments root plus a definition path outside it. */
+  async function makeVerifyFixture(config: RunnerConfig): Promise<{ worktree: string; acceptancePath: string }> {
+    const worktree = join(config.experimentsRoot, 'wt')
+    await mkdir(worktree, { recursive: true })
+    return { worktree, acceptancePath: join(config.experimentsRoot, '..', 'acceptance.json') }
+  }
+
+  it('runs the definition through the acceptor under the service config, with and without a deadline', async () => {
+    const config = await makeConfig({ killGraceMs: 200 })
+    context = new Context()
+    const service = new SelfDevelopmentRunner(context, config)
+    const { worktree, acceptancePath } = await makeVerifyFixture(config)
+    await writeFile(acceptancePath, JSON.stringify({
+      cases: [{
+        caseId: 'case-pass',
+        command: ['node', fakeCase, 'exit', '0'],
+        timeoutMs: 5000,
+        assertions: [{ assertionId: 'case-pass-exit', kind: 'exit-code', expected: 0 }],
+      }],
+    }))
+    const bare = await service.verifyAcceptance(worktree, acceptancePath)
+    expect(bare.ok).toBe(true)
+    if (!bare.ok) throw new Error('unreachable')
+    expect(bare.report.cases).toEqual([{ caseId: 'case-pass', assertions: [{ assertionId: 'case-pass-exit', status: 'pass' }] }])
+    const bounded = await service.verifyAcceptance(worktree, acceptancePath, { phaseTimeoutMs: 5000 })
+    expect(bounded.ok).toBe(true)
+  })
+
+  it('reports a definition inside the experiments root as ok:false without throwing', async () => {
+    const config = await makeConfig({ killGraceMs: 200 })
+    context = new Context()
+    const service = new SelfDevelopmentRunner(context, config)
+    const { worktree } = await makeVerifyFixture(config)
+    const insidePath = join(config.experimentsRoot, 'acceptance.json')
+    await writeFile(insidePath, JSON.stringify({ cases: [] }))
+    const result = await service.verifyAcceptance(worktree, insidePath)
+    expect(result.ok).toBe(false)
+    if (result.ok) throw new Error('unreachable')
+    expect(result.reason).toContain('experiments')
   })
 })
 
