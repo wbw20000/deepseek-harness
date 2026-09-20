@@ -82,9 +82,9 @@ An automatic open that fails — a build failure, an exhausted port range, anyth
 
 -----
 
-<a id="model-experience"></a>
 No runtime invariant companion is published: the service exposes no runtime observation stream of its own, and the relationships it owns — one instance per task, one registered process group per instance, and no log line carrying a launch token — are covered by focused behavior tests against real child processes.
 
+<a id="model-experience"></a>
 ## Model Experience
 
 None, as the service registers no model-facing tool, prompt, or event, and every method refuses a non-host caller. A phone-side model or UI never calls `openTrial`/`closeTrial`/`trials` directly; it watches a task's progress through the Remote facade and, once a chat-facing surface exists, would learn a trial's URL from that surface rather than from this package.

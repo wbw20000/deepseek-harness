@@ -130,9 +130,9 @@ An opt-in [agent preset](../../preset/agent-presets/README.md) at `presets/self-
 
 -----
 
-<a id="model-experience"></a>
 No runtime invariant companion is published: the service exposes no runtime observation stream of its own, and the relationships it owns — one approval request per proposal, the eight-step order, and one notice per campaign result — are covered by focused behavior tests against stand-in seams.
 
+<a id="model-experience"></a>
 ## Model Experience
 
 ### System prompt
