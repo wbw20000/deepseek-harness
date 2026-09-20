@@ -105,7 +105,7 @@ Host-only：这个工具会重建并重启它所在的这个稳定版，所以�
 
 单次审批之后，`self_development_propose` 严格按顺序驱动门面完成以下步骤，任一步失败即停止：
 
-1. **工作区** ——已挂载工作区服务时，`allocate({ taskId, projectRoot: stableRepo })`；未挂载时，取已存在的 `<experimentsRoot>/<taskId>` 目录（不存在则拒绝）。
+1. **工作区** ——已挂载工作区服务时，先做一次回收扫描，再 `allocate({ taskId, projectRoot: stableRepo })`；未挂载时，取已存在的 `<experimentsRoot>/<taskId>` 目录（不存在则拒绝）。扫描（`src/cleanup.ts`）列出每个已登记的工作区并释放其中已完结的，让名额不会被做完的活一直占着：状态为 `stopped` 的任务，或者 `awaiting-trial` 且工作区干净、HEAD 已被目标分支包含（`git merge-base --is-ancestor`，即早先某次 `self_development_merge` 已合并但它自己的释放没发生）的任务。状态读不出来的任务，以及处于 `attempting`、`ready` 或等待某个批准的任务，一律不碰——新分配的工作区同样干净且正处在目标 tip 上，只有状态能把它们区分开。被回收的工作区上若有打开的试验实例，先关掉。扫描的释放明细（如有）就是 `reclaim` 步骤；仍然分配失败时汇报工作区服务自己的原话（`workspace allocation failed: <message>`）。
 2. **验收定义写入** ——把校验过的验收定义写入 `<controlDirectory>/acceptance/<taskId>.json`（原子写入，0600 权限，目录 0700）。
 3. **`createTask(spec, 0, launchProfile)`** ——`launchProfile` 携带 `worktree`、`acceptancePath`、`confirmedBy`，工作区服务分配了数据目录时再加上 `dataHome`（工作区分配结果必含数据目录；已存在目录回退路径则永不携带）。
 4. **`authorizePlanning`**
@@ -159,12 +159,14 @@ Host-only：这个工具会重建并重启它所在的这个稳定版，所以�
 
 | 状态 | 含义 | 本包的反应 |
 |---|---|---|
-| `integrated` | 已快进；汇报 `commit`、`baseMoved`，打过快照时还有 `snapshotCommit`。 | 发出 `merge-integrated`；除非 `upgrade.kind` 是 `none`，否则跑配置的[升级](#upgrade)。 |
-| `conflict` | rebase 无法干净应用；`files` 点名冲突文件。 | 发出 `merge-blocked`；自动起一个无人值守的修复战役（见下）。不会快进任何东西。 |
-| `verification-failed` | rebase 后（或基线未动时）`verify` 失败；rebase 结果（如有）留在工作区上。 | 与 `conflict` 相同的修复战役反应。 |
+| `integrated` | 已快进；汇报 `commit`、`baseMoved`，打过快照时还有 `snapshotCommit`。 | 发出 `merge-integrated`；释放该任务的工作区（见下）；除非 `upgrade.kind` 是 `none`，否则跑配置的[升级](#upgrade)。 |
+| `conflict` | rebase 无法干净应用；`files` 点名冲突文件。 | 发出 `merge-blocked`；释放被阻止的工作区并自动起一个无人值守的修复战役（见下）。不会快进任何东西。 |
+| `verification-failed` | rebase 后（或基线未动时）`verify` 失败。 | 与 `conflict` 相同的先释放、再修复的反应。 |
 | `failed` | 门面本身未能完成这次操作。 | 发出 `merge-blocked`；只报告，不起修复战役——这不是一个能靠改代码修的失败。 |
 
 上面每处"发出"实际是两个 Cordis 事件，不是一个：本包自己的 `self-development-chat/merge-integrated`/`self-development-chat/merge-blocked`（`{ taskId, commit, baseMoved, occurredAt, revision, snapshotCommit? }` / `{ taskId, status, occurredAt, revision, files?, reason? }`，声明在 `src/index.ts`），以及 `self-development/merge-integrated`/`self-development/merge-blocked`（`{ taskId, revision }` / `{ taskId, status, revision }`，`revision` 取自 `recordTrialApproval` 的返回结果）——后者是 `@deepseek-ai/dsh-workflow-self-development-events` 真正订阅的名字与形状，会折进它统一的通知事件（`Task integrated into stable` / `Merge blocked: <status>`）。`snapshotCommit` 只存在于本包自己的事件里；上游事件的 payload 就是 DI-a 声明的那个形状，一个字段都不多。
+
+**工作区释放**：一个任务工作区会一直占着工作区服务 `maxConcurrentTasks` 中的一个名额，直到有人释放它，而核心与工作区服务都不知道一个工作区什么时候就不再要紧了——所以由本包来定。`integrated` 时，快进之后、升级之前（升级的重启会把它掐断），通过 `workspaces.release(taskId)` 释放已合并任务的工作区与数据目录；试验服务报告该工作区上有实例时先 `closeTrial(taskId)`；结果行以 `; workspace of <taskId> released`（或带 `(trial instance closed)`）结尾，释放失败只是一条 `release` 步骤明细，从不算合并失败。`conflict`/`verification-failed` 时，被阻止的工作区在修复战役启动*之前*以同样方式释放：修复是一个新任务，在当前稳定 tip 上新开工作区（它从不读被阻止的工作区），先释放能把名额留给它自己的分配。已合并或被取代的任务仍保持 `awaiting-trial` 状态——核心没有"已合并"这一状态——所以再次对它 `self_development_merge` 会在弹卡之前就被以 `has no workspace any more (already merged and released, or reclaimed)` 拒绝；这个检查读的是工作区登记表，登记表读不出来时放行走正常流程。
 
 **修复战役**：对 `conflict`/`verification-failed`，本包直接调用自己的提案编排——无人值守、`{ preset: 'unlimited' }` 预算、`allowedModificationScope: ['**']`（修复的是同一处改动，不是一个新划定范围的改动）、被拒任务已写好的**同一份**验收定义（原样读回并转发）、以及直接从该定义自身的用例推出的计划，因此天然满足计划覆盖校验。需求文案点名目标分支与冲突文件，或验证失败的原因。关键是**跳过第二张审批卡**：合并卡上已经写明冲突或验证失败会自动起修复战役，再问一次就是多余的。修复战役是一个全新任务（有自己的 id），不是被拒任务的延续。
 
@@ -271,6 +273,7 @@ self_development_propose and stop after the tool result.
 - **从不替自己点"允许"** ——每次提案都展示且只展示一次真实的 `ctx.approval.request`；本包没有任何路径会伪造、推断或绕过这个决定。
 - **战役结果聊天通知是内存态、尽力而为的** ——发起 Agent 的登记表只存在于本进程，重启即丢失；这与 DH-a 自身战役状态在重启后的处理一致（`running` 的战役会被标记为 `stopped`，原因 `process restarted`），因此不会丢失任何 DH-a 本就会保留的东西。会话已结束的 Agent 会被静默跳过。无论通知是否投递成功，`self_development_status` 轮询始终是可靠路径。
 - **通知投递依赖事件服务自身的监听器容错** ——`deliverCampaignNotice` 在事件服务的订阅回调里同步运行，自己不捕获投递失败；它依赖上游事件服务把每个监听器包在 try/catch 里（`@deepseek-ai/dsh-workflow-self-development-events` 目前就是这样做的），这样一个通知失败才不会连累其他订阅者或事件服务自身的记账。如果未来某个事件源不提供这种容错，投递失败（比如 `Agent.followup`/`Agent.inject` 抛出异常）就可能从订阅回调里冒出来。
+- **被停止任务的工作区会留到下一次提案** ——`self_development_stop` 不释放它停掉的工作区（操作者可能还想看看它）；下一次 `self_development_propose` 会把它回收，所以名额只在一次停止与下一次提案之间被占着。
 - **已存在目录的工作区回退不分配任何东西** ——没有工作区服务时，`self_development_propose` 只检查 `<experimentsRoot>/<taskId>` 是否已存在；不会创建、填充或隔离它。
 - **没有 DH-c 就无法访问试验版地址** ——`self_development_status` 的 `trialUrl` 字段在挂载 `selfDevelopmentTrial` 服务并汇报有运行实例之前始终为空。
 - **`parallel: false` 是礼貌性预检查，不是执行边界** ——它在请求审批之前读取每个已知任务的 `campaign()` 状态，但状态读取失败会被当作"未运行"处理（失败开放）而非阻塞提案；真正的权威上限是 DH-a 自身在 `startCampaign` 上的 `maxConcurrentCampaigns` 拒绝。

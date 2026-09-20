@@ -244,6 +244,10 @@ export interface TaskWorkspaceView {
 /** Structural view of the optional workspaces service. */
 export interface WorkspacesPort {
   allocate(req: { readonly taskId: string; readonly projectRoot: string }): Promise<TaskWorkspaceView>
+  /** Every registered workspace, read before a proposal reclaims the finished ones. */
+  list(): Promise<readonly TaskWorkspaceView[]>
+  /** Remove one task's worktree and data home and free its registry slot. */
+  release(taskId: string): Promise<void>
   /**
    * Merge one task's worktree into the stable branch (DI-a wire form, DI-b
    * wave). Serializes internally; rebases onto a moved target tip and
@@ -369,6 +373,8 @@ export interface TrialInstance {
 /** Structural view of the optional trial service (DH-c). */
 export interface TrialPort {
   trials(): Promise<readonly TrialInstance[]>
+  /** Stop one task's trial instance; called before that task's worktree is released. */
+  closeTrial(taskId: string): Promise<void>
 }
 
 /** Successful proposal outcome. */
@@ -446,6 +452,13 @@ export interface MergeStep {
   readonly detail: string
 }
 
+/** One workspace release attempt's outcome (`cleanup.ts`); a failed release is a step detail, never a tool failure. */
+export interface ReleaseOutcome {
+  readonly released: boolean
+  /** One-line detail: what was released, or why it could not be. */
+  readonly detail: string
+}
+
 /** Result of the post-integration upgrade attempt (`runUpgrade`). */
 export interface UpgradeOutcome {
   readonly ok: boolean
@@ -464,6 +477,12 @@ export interface MergeSuccess {
   readonly repair?: ProposeOutcome
   /** Present when `result.status` is `integrated` and `upgrade.kind` is not `none`. */
   readonly upgrade?: UpgradeOutcome
+  /**
+   * Present when `result.status` is `integrated`, `conflict`, or
+   * `verification-failed`: whether the task's worktree (and any trial on it)
+   * was released — merged into stable, or superseded by the repair campaign.
+   */
+  readonly workspaceRelease?: ReleaseOutcome
 }
 
 /** Failed merge outcome: resolution, approval, or a facade call failed before any integration result existed. */

@@ -186,6 +186,29 @@ class FakeWorkspaces implements WorkspacesPort {
     if (this.integrateFailWith !== undefined) throw this.integrateFailWith
     return this.integrateResult
   }
+
+  /** Task ids the registry lists; `undefined` makes `list` throw (the merge's registry check then fails open). */
+  registeredTaskIds: string[] | undefined = ['task-1']
+  released: string[] = []
+  releaseFailWith: Error | undefined
+
+  async list(): Promise<readonly TaskWorkspaceView[]> {
+    if (this.registeredTaskIds === undefined) throw new Error('registry unreadable')
+    return this.registeredTaskIds.map(taskId => ({
+      taskId,
+      projectRoot: '/repo',
+      baseCommit: 'a'.repeat(40),
+      worktree: `/exp/${taskId}`,
+      branch: `self-dev/${taskId}`,
+      dataHome: `/exp/${taskId}/.data`,
+      allocatedAt: 1,
+    }))
+  }
+
+  async release(taskId: string): Promise<void> {
+    if (this.releaseFailWith !== undefined) throw this.releaseFailWith
+    this.released.push(taskId)
+  }
 }
 
 /** Runner verification fake. */
@@ -374,6 +397,24 @@ describe('runMerge: required ports fail closed before any approval request', () 
     expect(approval.requests).toEqual([])
   })
 
+  it('fails before any approval request when the task\u2019s workspace is no longer registered (already merged and released)', async () => {
+    const { approval, workspaces, deps } = await makeDeps()
+    workspaces.registeredTaskIds = ['other-task']
+    const outcome = await runMerge(deps, { taskId: 'task-1' })
+    expect(outcome.ok).toBe(false)
+    if (outcome.ok) return
+    expect(outcome.reason).toContain('has no workspace any more')
+    expect(approval.requests).toEqual([])
+  })
+
+  it('fails open into the normal attempt when the workspace registry cannot be listed', async () => {
+    const { approval, workspaces, deps } = await makeDeps()
+    workspaces.registeredTaskIds = undefined
+    const outcome = await runMerge(deps, { taskId: 'task-1' })
+    expect(outcome.ok).toBe(true)
+    expect(approval.requests).toHaveLength(1)
+  })
+
   it('fails when approval is not mounted', async () => {
     const { deps } = await makeDeps({ approval: undefined })
     const outcome = await runMerge(deps, {})
@@ -485,6 +526,10 @@ describe('runMerge: integrate outcomes', () => {
     if (!outcome.ok) return
     expect(outcome.result).toEqual({ status: 'integrated', commit: 'f'.repeat(40), baseMoved: true })
     expect(outcome.upgrade).toBeUndefined()
+    // The merged worktree is released right after the fast-forward, whether or not an upgrade follows.
+    expect(outcome.workspaceRelease).toEqual({ released: true, detail: 'workspace of task-1 released' })
+    expect(workspaces.released).toEqual(['task-1'])
+    expect(outcome.steps.map(step => step.step)).toEqual(['approval', 'recordTrialApproval', 'integrate', 'release'])
     // revision: 1 — the FakeFacade's recordTrialApproval is the only
     // revision-bumping call before the event fires (see its own class doc).
     expect(integratedPayload).toMatchObject({ taskId: 'task-1', commit: 'f'.repeat(40), baseMoved: true, revision: 1 })
@@ -500,6 +545,32 @@ describe('runMerge: integrate outcomes', () => {
     if (!outcome.ok) return
     expect(outcome.result).toMatchObject({ snapshotCommit: 'a'.repeat(40) })
     expect(integratedPayload?.snapshotCommit).toBe('a'.repeat(40))
+  })
+
+  it('on integrated: closes an open trial on the worktree before releasing it', async () => {
+    const { workspaces, deps } = await makeDeps()
+    const closed: string[] = []
+    const trial = {
+      trials: async () => [{ taskId: 'task-1', url: 'http://127.0.0.1:8980/', port: 8980, startedAt: 1 }],
+      closeTrial: async (taskId: string) => { closed.push(taskId) },
+    }
+    const outcome = await runMerge({ ...deps, trial }, {})
+    expect(outcome.ok).toBe(true)
+    if (!outcome.ok) return
+    expect(closed).toEqual(['task-1'])
+    expect(outcome.workspaceRelease).toEqual({ released: true, detail: 'workspace of task-1 released (trial instance closed)' })
+    expect(workspaces.released).toEqual(['task-1'])
+  })
+
+  it('on integrated: a failed release is a step detail, and the merge still counts as integrated', async () => {
+    const { workspaces, deps } = await makeDeps()
+    workspaces.releaseFailWith = new Error('worktree is locked')
+    const outcome = await runMerge(deps, {})
+    expect(outcome.ok).toBe(true)
+    if (!outcome.ok) return
+    expect(outcome.result.status).toBe('integrated')
+    expect(outcome.workspaceRelease).toEqual({ released: false, detail: 'workspace of task-1 could not be released: worktree is locked' })
+    expect(outcome.steps.find(step => step.step === 'release')?.detail).toContain('could not be released')
   })
 
   it('on integrated: runs the configured upgrade and reports its outcome', async () => {
@@ -545,6 +616,10 @@ describe('runMerge: integrate outcomes', () => {
     expect(blockedPayload).toMatchObject({ taskId: 'task-1', status: 'conflict', files: ['src/a.ts', 'src/b.ts'], revision: 1 })
     if (outcome.repair?.ok !== true) return
     expect(outcome.repair.taskId).not.toBe('task-1')
+    // The superseded worktree is released before the repair allocates its own.
+    expect(outcome.workspaceRelease).toEqual({ released: true, detail: 'workspace of task-1 released' })
+    expect(outcome.steps.map(step => step.step)).toEqual(['approval', 'recordTrialApproval', 'integrate', 'release', 'repair'])
+    expect(workspaces.released).toEqual(['task-1'])
   })
 
   it('conflict repair requirement names the target branch and the conflicted files', async () => {

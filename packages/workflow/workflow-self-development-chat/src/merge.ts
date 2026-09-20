@@ -12,6 +12,7 @@
 import { readFile } from 'node:fs/promises'
 import { acceptancePath, parseAcceptanceDefinition } from './acceptance.ts'
 import { runGit } from './baseline.ts'
+import { releaseTaskWorkspace } from './cleanup.ts'
 import { mergeApprovalReason } from './card.ts'
 import type { ResolvedChatConfig } from './config.ts'
 import { errorOf } from './errors.ts'
@@ -36,6 +37,7 @@ import type {
   RunnerVerifyPort,
   SelfDevelopmentRemoteFacade,
   TaskDetailView,
+  TrialPort,
   WorkspacesPort,
 } from './types.ts'
 
@@ -58,6 +60,8 @@ export interface MergeDeps {
    * merging to stable without independent acceptance verification is not offered.
    */
   readonly runner: RunnerVerifyPort | undefined
+  /** The optional trial service; an open trial on the merged worktree is closed before the worktree is released. */
+  readonly trial?: TrialPort | undefined
   /** Resolved deployment configuration. */
   readonly config: ResolvedChatConfig
   /** The agent on whose behalf the approval card is shown; absent outside a live tool execution. */
@@ -151,6 +155,24 @@ async function hasNothingToMerge(
   }
 }
 
+/**
+ * Whether the workspaces service still registers a worktree for the task. A
+ * merged task keeps its `awaiting-trial` status while its worktree is gone,
+ * so this is what tells a repeat merge apart from a first one. A failing
+ * `list` answers `true`: the check fails open into the normal attempt, which
+ * reports the missing workspace through `integrate` itself.
+ * @param workspaces - the workspaces port.
+ * @param taskId - the task to look up.
+ * @returns `false` only when the registry was read and does not contain the task.
+ */
+async function hasRegisteredWorkspace(workspaces: WorkspacesPort, taskId: string): Promise<boolean> {
+  try {
+    return (await workspaces.list()).some(workspace => workspace.taskId === taskId)
+  } catch {
+    return true
+  }
+}
+
 /** Cap on the requirement-derived portion of {@link snapshotMessage}. */
 const SNAPSHOT_MESSAGE_REQUIREMENT_MAX_LENGTH = 72
 
@@ -236,6 +258,7 @@ async function startRepairCampaign(deps: MergeDeps, blockedTaskId: string, resul
     facade: deps.facade,
     approval: deps.approval,
     workspaces: deps.workspaces,
+    trial: deps.trial,
     config: deps.config,
     ...(deps.agent === undefined ? {} : { agent: deps.agent }),
     ...(deps.callId === undefined ? {} : { callId: deps.callId }),
@@ -315,6 +338,14 @@ export async function runMerge(deps: MergeDeps, input: MergeInput): Promise<Merg
   if (deps.workspaces === undefined) {
     return { ok: false, taskId, steps, reason: 'workspaces service is not mounted; self_development_merge needs its integrate() method' }
   }
+  if (!(await hasRegisteredWorkspace(deps.workspaces, taskId))) {
+    return {
+      ok: false,
+      taskId,
+      steps,
+      reason: `task ${taskId} has no workspace any more (already merged and released, or reclaimed); propose the change again if it is still wanted`,
+    }
+  }
   if (deps.approval === undefined) {
     return { ok: false, taskId, steps, reason: 'approval service is not mounted; the merge fails closed' }
   }
@@ -360,18 +391,27 @@ export async function runMerge(deps: MergeDeps, input: MergeInput): Promise<Merg
   emitMergeEvent(deps, taskId, result, recordResult.revision)
 
   if (result.status === 'integrated') {
+    // The change is in stable now: free the task's worktree (closing any
+    // trial on it) before the upgrade, whose restart would cut this short.
+    const workspaceRelease = await releaseTaskWorkspace({ workspaces: deps.workspaces, trial: deps.trial }, taskId)
+    steps.push({ step: 'release', detail: workspaceRelease.detail })
     if (config.upgrade.kind === 'none') {
-      return { ok: true, taskId, steps, result }
+      return { ok: true, taskId, steps, result, workspaceRelease }
     }
     const upgrade = await runUpgrade(config.upgrade, config.targetBranch, taskId, deps.upgradeDeps)
     steps.push({ step: 'upgrade', detail: upgrade.detail })
-    return { ok: true, taskId, steps, result, upgrade }
+    return { ok: true, taskId, steps, result, upgrade, workspaceRelease }
   }
 
   if (result.status === 'conflict' || result.status === 'verification-failed') {
+    // The repair campaign is a new task in a fresh worktree off the current
+    // stable tip; the blocked worktree is superseded, and releasing it first
+    // keeps its concurrency slot free for the repair's own allocation.
+    const workspaceRelease = await releaseTaskWorkspace({ workspaces: deps.workspaces, trial: deps.trial }, taskId)
+    steps.push({ step: 'release', detail: workspaceRelease.detail })
     const repair = await startRepairCampaign(deps, taskId, result)
     steps.push({ step: 'repair', detail: repair.ok ? `started task ${repair.taskId}` : repair.reason })
-    return { ok: true, taskId, steps, result, repair }
+    return { ok: true, taskId, steps, result, repair, workspaceRelease }
   }
 
   return { ok: true, taskId, steps, result }

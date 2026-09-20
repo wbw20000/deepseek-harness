@@ -115,11 +115,14 @@ class FakeFacade implements SelfDevelopmentRemoteFacade {
     return { ...CAMPAIGN, taskId, status: 'stopped', reason }
   }
 
+  /** Status `getTask` reports per task id; unknown ids fall back to `ready`. */
+  statuses = new Map<string, string>()
+
   async getTask(taskId: string): Promise<TaskDetailView> {
     this.calls.push({ name: 'getTask', args: [taskId] })
     return {
       projection: {
-        status: 'ready',
+        status: this.statuses.get(taskId) ?? 'ready',
         revision: 5,
         spec: { requirement: 'add chat transcript search' },
         consumedRounds: 2,
@@ -186,6 +189,19 @@ class FakeWorkspaces implements WorkspacesPort {
   /** Not exercised by this file's tests (merge is covered by merge.spec.ts). */
   integrate(): Promise<IntegrationResult> {
     throw new Error('FakeWorkspaces.integrate is not exercised in propose.spec.ts')
+  }
+
+  /** Registered workspaces the pre-allocation reclamation sees; empty unless a test registers finished ones. */
+  registered: TaskWorkspaceView[] = []
+  released: string[] = []
+
+  async list(): Promise<readonly TaskWorkspaceView[]> {
+    return this.registered
+  }
+
+  async release(taskId: string): Promise<void> {
+    this.released.push(taskId)
+    this.registered = this.registered.filter(workspace => workspace.taskId !== taskId)
   }
 }
 
@@ -374,6 +390,57 @@ describe('runPropose', () => {
     expect(workspaces.allocations[0]!.taskId).toBe(outcome.ok ? outcome.taskId : undefined)
   })
 
+  it('reclaims stopped and merged worktrees before allocating, records the step, and closes their trials', async () => {
+    const { facade, workspaces, deps } = await makeDeps()
+    const registered = (taskId: string): TaskWorkspaceView => ({
+      taskId,
+      projectRoot: '/repo',
+      baseCommit: 'a'.repeat(40),
+      worktree: `/exp/${taskId}`,
+      branch: `self-dev/${taskId}`,
+      dataHome: `/exp/${taskId}/.data`,
+      allocatedAt: 1,
+    })
+    workspaces.registered = [registered('stopped-1'), registered('merged-1'), registered('running-1')]
+    facade.statuses.set('stopped-1', 'stopped')
+    facade.statuses.set('merged-1', 'awaiting-trial')
+    facade.statuses.set('running-1', 'attempting')
+    const closed: string[] = []
+    const trial = {
+      trials: async () => [{ taskId: 'merged-1', url: 'http://127.0.0.1:8980/', port: 8980, startedAt: 1 }],
+      closeTrial: async (taskId: string) => { closed.push(taskId) },
+    }
+    // A clean worktree whose HEAD the target branch contains: fully merged.
+    const git = async (): Promise<string> => ''
+    const outcome = await runPropose({ ...deps, trial, git }, proposeInput())
+    expect(outcome.ok).toBe(true)
+    if (!outcome.ok) return
+    expect(workspaces.released).toEqual(['stopped-1', 'merged-1'])
+    expect(closed).toEqual(['merged-1'])
+    expect(outcome.steps.map(step => step.step).slice(0, 3)).toEqual(['approval', 'reclaim', 'workspace'])
+    expect(outcome.steps[1]!.detail).toBe('workspace of stopped-1 released; workspace of merged-1 released (trial instance closed)')
+    expect(workspaces.registered.map(workspace => workspace.taskId)).toEqual(['running-1'])
+  })
+
+  it('records no reclaim step when nothing is finished, and uses the real git runner by default', async () => {
+    const { facade, workspaces, deps } = await makeDeps()
+    workspaces.registered = [{
+      taskId: 'merged-1',
+      projectRoot: '/repo',
+      baseCommit: 'a'.repeat(40),
+      worktree: '/nonexistent/worktree/for/propose-spec',
+      branch: 'self-dev/merged-1',
+      dataHome: '/exp/merged-1/.data',
+      allocatedAt: 1,
+    }]
+    facade.statuses.set('merged-1', 'awaiting-trial')
+    const outcome = await runPropose(deps, proposeInput())
+    expect(outcome.ok).toBe(true)
+    if (!outcome.ok) return
+    expect(workspaces.released).toEqual([])
+    expect(outcome.steps.some(step => step.step === 'reclaim')).toBe(false)
+  })
+
   it('falls back to an existing pre-allocated experiments directory and refuses a missing one', async () => {
     const root = await mkdtemp(join(tmpdir(), 'self-dev-chat-fb-'))
     roots.push(root)
@@ -411,7 +478,7 @@ describe('runPropose', () => {
     const refused = await runPropose(missing.deps, proposeInput({ requirement: 'missing task' }))
     expect(refused.ok).toBe(false)
     if (refused.ok) return
-    expect(refused.reason).toBe('workspace allocation failed')
+    expect(refused.reason).toMatch(/^workspace allocation failed: no workspaces service is mounted and .* does not exist$/)
     expect(refused.steps.map(step => step.step)).toEqual(['approval', 'workspace'])
     expect(refused.error?.message).toContain('does not exist')
   })

@@ -410,6 +410,7 @@ export class SelfDevelopmentChat extends Service {
       facade: this.facade,
       approval: this.approval,
       workspaces: this.workspaces,
+      trial: this.trial,
       config: this.resolved,
       ...(exec?.agent === undefined ? {} : { agent: exec.agent }),
       ...(exec?.callId === undefined ? {} : { callId: exec.callId }),
@@ -441,6 +442,7 @@ export class SelfDevelopmentChat extends Service {
       approval: this.approval,
       workspaces: this.workspaces,
       runner: this.runner,
+      trial: this.trial,
       config: this.resolved,
       ...(exec?.agent === undefined ? {} : { agent: exec.agent }),
       ...(exec?.callId === undefined ? {} : { callId: exec.callId }),
@@ -537,7 +539,8 @@ function mergeResultLine(value: JsonValue): string {
   if (result.status === 'integrated') {
     const upgradeText = outcome.upgrade === undefined ? '' : `; ${outcome.upgrade.detail}`
     const snapshotText = result.snapshotCommit === undefined ? '' : ` (uncommitted worktree changes were snapshotted as ${result.snapshotCommit})`
-    return `Task ${outcome.taskId}: merged ${result.commit} into stable, rebuilding and restarting${snapshotText}${upgradeText}`
+    const releaseText = outcome.workspaceRelease === undefined ? '' : `; ${outcome.workspaceRelease.detail}`
+    return `Task ${outcome.taskId}: merged ${result.commit} into stable, rebuilding and restarting${snapshotText}${releaseText}${upgradeText}`
   }
   if (result.status === 'conflict' || result.status === 'verification-failed') {
     const repairText = outcome.repair?.ok === true

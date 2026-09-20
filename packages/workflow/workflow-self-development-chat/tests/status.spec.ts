@@ -112,6 +112,11 @@ class FakeTrial implements TrialPort {
     if (this.fail) throw new Error('trial service is down')
     return this.instances
   }
+
+  /** Not exercised by the status report (release paths are covered by cleanup.spec.ts). */
+  async closeTrial(taskId: string): Promise<void> {
+    this.instances = this.instances.filter(instance => instance.taskId !== taskId)
+  }
 }
 
 /** The event the events service delivered for the task. */

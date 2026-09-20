@@ -12,6 +12,8 @@ import {
 import { approvalReason } from './card.ts'
 import { budgetViolation, toBudgetApproval } from './budget.ts'
 import { deriveTaskId, readBaselineDigest } from './baseline.ts'
+import { reclaimFinishedWorkspaces } from './cleanup.ts'
+import type { GitRunner } from './cleanup.ts'
 import { errorOf } from './errors.ts'
 import type { ResolvedChatConfig } from './config.ts'
 import type {
@@ -24,6 +26,7 @@ import type {
   ProposeStep,
   ResolvedProposeInput,
   SelfDevelopmentRemoteFacade,
+  TrialPort,
   WorkspacesPort,
 } from './types.ts'
 
@@ -53,6 +56,10 @@ export interface ProposeDeps {
   readonly approval: ApprovalPort | undefined
   /** The workspaces service; `undefined` falls back to a pre-allocated directory under the experiments root. */
   readonly workspaces: WorkspacesPort | undefined
+  /** The optional trial service; a trial on a reclaimed worktree is closed before that worktree is released. */
+  readonly trial?: TrialPort | undefined
+  /** Git runner for the reclamation's merged-worktree check; defaults to `baseline.ts`'s `runGit`. */
+  readonly git?: GitRunner
   /** Resolved deployment configuration. */
   readonly config: ResolvedChatConfig
   /** The agent on whose behalf the approval card is shown; absent outside a live tool execution. */
@@ -173,13 +180,26 @@ export async function runPropose(deps: ProposeDeps, rawInput: ProposeInput): Pro
     steps.push({ step: 'approval', detail: `allowed-once by ${config.actor}` })
   }
 
+  if (deps.workspaces !== undefined) {
+    // Finished worktrees (stopped campaigns, merged changes) would otherwise
+    // keep holding concurrency slots until someone cleaned up by hand.
+    const reclaimed = await reclaimFinishedWorkspaces({
+      workspaces: deps.workspaces,
+      trial: deps.trial,
+      facade: deps.facade,
+      targetBranch: config.targetBranch,
+      ...(deps.git === undefined ? {} : { git: deps.git }),
+    })
+    if (reclaimed.length > 0) steps.push({ step: 'reclaim', detail: reclaimed.map(outcome => outcome.detail).join('; ') })
+  }
+
   const workspace = await allocateWorkspace(deps, taskId, steps)
   if (!workspace.ok) {
     return {
       ok: false,
       taskId,
       steps,
-      reason: 'workspace allocation failed',
+      reason: `workspace allocation failed: ${workspace.error.message}`,
       error: workspace.error,
     }
   }

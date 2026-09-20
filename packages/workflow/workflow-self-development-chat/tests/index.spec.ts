@@ -40,6 +40,7 @@ import type {
   RunnerVerifyResult,
   SelfDevelopmentRemoteFacade,
   TaskDetailView,
+  TaskWorkspaceView,
 } from '../src/types.ts'
 
 /** Standard campaign state a fake `startCampaign`/`stopCampaign` returns. */
@@ -182,6 +183,26 @@ class FakeWorkspaces {
   async integrate(request: IntegrationRequest): Promise<IntegrationResult> {
     this.integrateCalls.push(request)
     return this.integrateResult
+  }
+
+  /** Registered task ids; the merge's registry check and the proposal's reclamation read these. */
+  registeredTaskIds: string[] = ['task-1']
+  released: string[] = []
+
+  async list(): Promise<readonly TaskWorkspaceView[]> {
+    return this.registeredTaskIds.map(taskId => ({
+      taskId,
+      projectRoot: '/repo',
+      baseCommit: 'a'.repeat(40),
+      worktree: `/exp/${taskId}`,
+      branch: `self-dev/${taskId}`,
+      dataHome: `/exp/${taskId}/.data`,
+      allocatedAt: 1,
+    }))
+  }
+
+  async release(taskId: string): Promise<void> {
+    this.released.push(taskId)
   }
 }
 
@@ -546,6 +567,17 @@ describe('self_development_merge tool', () => {
     expect(workspaces.integrateCalls[0]?.targetBranch).toBe('stable')
     const rendered = def.output.render({}, value as never)
     expect((rendered[0] as { text: string }).text).toContain('merged')
+    // The merged worktree was released and the line says so.
+    expect(workspaces.released).toEqual(['task-1'])
+    expect((rendered[0] as { text: string }).text).toContain('; workspace of task-1 released')
+  })
+
+  it('renders an integrated outcome without a release detail for a replayed value missing the field', () => {
+    const { tools } = makeService({ facade: new FakeFacade(), approval: new FakeApproval() })
+    const def = tools.find('self_development_merge')
+    const synthetic = { ok: true, taskId: 'task-1', steps: [], result: { status: 'integrated', commit: 'c'.repeat(40), baseMoved: false } }
+    const rendered = def.output.render({}, synthetic)
+    expect((rendered[0] as { text: string }).text).toBe(`Task task-1: merged ${'c'.repeat(40)} into stable, rebuilding and restarting`)
   })
 
   it('emits both this package\'s own merge-integrated event and the upstream self-development/merge-integrated event the events package subscribes to', async () => {
@@ -788,7 +820,10 @@ describe('self_development_status tool', () => {
   it('renders the campaign, last outcome, and trial summary when a campaign is running', async () => {
     const facade = new FakeFacade()
     facade.campaigns.set('task-1', { ...CAMPAIGN, lastOutcome: 'failed' })
-    const trial = { trials: async () => [{ taskId: 'task-1', url: 'http://127.0.0.1:4173/?token=t', port: 4173, startedAt: 1 }] }
+    const trial = {
+      trials: async () => [{ taskId: 'task-1', url: 'http://127.0.0.1:4173/?token=t', port: 4173, startedAt: 1 }],
+      closeTrial: async () => {},
+    }
     const { tools } = makeService({ facade, trial: trial })
     const def = tools.find('self_development_status')
     const value = await def.execute({ taskId: 'task-1' }, fakeExec())
