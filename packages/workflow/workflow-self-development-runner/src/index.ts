@@ -29,7 +29,7 @@ export { SelfDevelopmentRunnerError, SelfDevelopmentRunnerErrorCode } from './ru
 export { runHeadlessExecutor } from './executor.ts'
 export { checkAcceptanceCoversPlan, loadAcceptance, runAcceptance } from './acceptor.ts'
 export type { BootTime, BootTimeReader } from './clock.ts'
-export type { PresenceConfirmation } from './presence.ts'
+export type { PresenceAcknowledgement, PresenceConfirmation } from './presence.ts'
 export type { ExecutorRequest, ExecutorRun } from './executor.ts'
 export type { AcceptanceAssertion, AcceptanceCase, AcceptanceRun } from './acceptor.ts'
 export type { RunnerConfig } from './types.ts'

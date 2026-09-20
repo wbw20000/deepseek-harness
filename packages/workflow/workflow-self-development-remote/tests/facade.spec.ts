@@ -84,6 +84,7 @@ async function makeFacade(options: {
     enabled: options.enabled ?? true,
     allowedActors: options.allowedActors ?? [],
     controlDirectory: env.controlDirectory,
+    maxConcurrentCampaigns: 2,
   })
 }
 
@@ -96,6 +97,7 @@ describe('boot-time config validation', () => {
       enabled: true,
       allowedActors: [],
       controlDirectory: 'relative/control',
+      maxConcurrentCampaigns: 2,
     })
     expect(rejected).toThrow(expect.objectContaining({ code: 'self-development/config-invalid' }))
   })

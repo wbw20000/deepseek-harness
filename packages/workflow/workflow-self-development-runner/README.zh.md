@@ -66,9 +66,9 @@ kind: "package-reference"
 <a id="human-presence-evidence"></a>
 ## 人工在场证据
 
-[`presence.ts`](src/presence.ts) 把一条具体确认变成核心 `startAttempt` 约定的能力证据。确认记录由谁确认、何时确认（一条受信时钟观察）、尝试在哪个实验 worktree 中运行、会话可绑定哪些回环端口，以及字面确认语 `supervised-not-unattended`。它还绑定被确认人审阅过的启动事实：任务 id、冻结测试计划摘要、验收定义摘要与产物路径集，因此为一次启动给出的确认不能被重放到不同内容上。
+[`presence.ts`](src/presence.ts) 把一条具体确认变成核心 `startAttempt` 约定的能力证据。确认记录由谁确认、何时确认（一条受信时钟观察）、尝试在哪个实验 worktree 中运行、会话可绑定哪些回环端口，以及字面确认语。`PresenceAcknowledgement` 为 `'supervised-not-unattended' | 'unattended-accepted'`：`supervised-not-unattended` 断言的是有人在那一次具体启动时在场；`unattended-accepted` 记录的是有人在战役开始时一次性接受了"后续轮次自动启动不再逐轮确认"。**`unattended-accepted` 不是隔离保证**——它不检测人员是否持续在场，也不提供操作系统隔离；它只记录：在被接受的预算窗口内，人不会被要求为每一轮自动尝试重新确认。它还绑定被确认人审阅过的启动事实：任务 id、冻结测试计划摘要、验收定义摘要与产物路径集，因此为一次启动给出的确认不能被重放到不同内容上。
 
-`HumanPresenceCapabilitySource` 为每个所需能力产出一条证据项，每条的摘要都绑定到该确认，核心据此把尝试记录为有人监督。该来源记录的是一次确认；它不会检测人员是否持续在场，也不会强制执行所记录的回环端口允许清单。
+`HumanPresenceCapabilitySource` 为每个所需能力产出一条证据项，每条的摘要都绑定到该确认——包含确认语字面值——无论哪种确认语，核心都据此把尝试记录为有人监督。该来源记录的是一次确认；它不会检测人员是否持续在场，也不会强制执行所记录的回环端口允许清单。
 
 <a id="attempt-budget"></a>
 ## 尝试预算

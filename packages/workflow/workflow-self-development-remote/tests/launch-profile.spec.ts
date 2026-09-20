@@ -131,6 +131,7 @@ async function makeFacade(options: {
     enabled: true,
     allowedActors: options.allowedActors ?? [],
     controlDirectory: env.controlDirectory,
+    maxConcurrentCampaigns: 2,
   })
   return { facade, env, setCaller: (caller) => { current = caller }, requests: runner?.requests ?? [] }
 }

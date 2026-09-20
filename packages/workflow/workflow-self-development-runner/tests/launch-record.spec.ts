@@ -127,6 +127,18 @@ describe('writeLaunchRecord and readLaunchRecord', () => {
     expect(read?.artifactPaths).not.toBe(record.artifactPaths)
   })
 
+  it('round-trips a record whose presence carries the unattended-accepted acknowledgement', async () => {
+    const base = await tempRoot()
+    const unattended: LaunchRecord = {
+      ...record,
+      presence: { ...presence, acknowledgement: 'unattended-accepted' },
+    }
+    await expect(writeLaunchRecord(base, unattended)).resolves.toBe('written')
+    const read = await readLaunchRecord(base, TASK, OPERATION)
+    expect(read).toEqual(unattended)
+    expect(read?.presence.acknowledgement).toBe('unattended-accepted')
+  })
+
   it('returns undefined when no record exists', async () => {
     const base = await tempRoot()
     await expect(readLaunchRecord(base, TASK, OPERATION)).resolves.toBeUndefined()

@@ -251,4 +251,118 @@ describe('real-Loader composition through the Remote facade', () => {
     expect(detail.projection.status).toBe('stopped')
     expect(await facade.activeTasks()).toEqual([])
   })
+
+  it('recognizes the core\'s reactive no-progress stop and ends the campaign as exhausted after exactly one round, never launching a second', { timeout: 60_000 }, async () => {
+    const env = await makeEnvironment()
+    root = env.base
+    const facade = await bootComposition(env)
+
+    let revision = (await facade.createTask(SPEC, 0)).revision
+    revision = (await facade.authorizePlanning(TASK_ID, revision, 'phone-user')).revision
+    revision = (await facade.submitPlanDraft(TASK_ID, revision, DRAFT)).revision
+    revision = (await facade.confirmPlan(TASK_ID, revision, PLAN, 'phone-user')).revision
+    // maxRounds is generous on purpose: the round budget must not be what
+    // ends this campaign — noProgressAttemptLimit: 1 must be. The fake CLI's
+    // 'dev' task fails its very first launch (writes WIP2, acceptance wants
+    // DONE), and the core's own noProgressCount starts at 1 on the very
+    // first failure, so one failed round already meets the limit.
+    revision = (await facade.approveBudget(TASK_ID, revision, {
+      mode: 'rounds', maxRounds: 20, phaseTimeoutMs: 20_000, maxStepsPerAttempt: 10, noProgressAttemptLimit: 1,
+      testPlanVersion: TestPlanVersion(1), taskSpecVersion: TaskSpecVersion(1), approvedBy: 'phone-user',
+    })).revision
+    await facade.setLaunchProfile(TASK_ID, {
+      worktree: env.worktree, acceptancePath: env.acceptancePath, artifactPaths: ['marker.txt', 'marker.txt'],
+      confirmedBy: 'phone-user', loopbackAllowlist: [0],
+    })
+
+    await facade.startCampaign(TASK_ID, revision, { unattended: true, acceptedBy: 'phone-user' })
+    await expect.poll(async () => (await facade.campaign(TASK_ID))?.status, { timeout: 30_000 }).toBe('exhausted')
+
+    const finalState = await facade.campaign(TASK_ID)
+    expect(finalState).toMatchObject({ status: 'exhausted', rounds: 1 })
+    expect(finalState?.reason).toContain('no-progress')
+    const detail = await facade.getTask(TASK_ID)
+    expect(detail.projection.status).toBe('stopped')
+    expect(detail.projection.stopReason).toBe('no-progress')
+    expect(detail.projection.consumedRounds).toBe(1)
+    // The fake CLI records one line per launch under DSH_HOME/launches — a
+    // buggy loop that failed to recognize the reactive stop would have kept
+    // retrying instantly and this would already show more than one line.
+    const launches = await readFile(join(env.runnerConfig.dshHome, 'launches'), 'utf8')
+    expect(launches.trim().split('\n')).toHaveLength(1)
+    expect(await facade.activeTasks()).toEqual([])
+  })
+
+  it('recognizes the core\'s reactive budget-exhausted stop (maxRounds: 1) and ends the campaign as exhausted after exactly one round', { timeout: 60_000 }, async () => {
+    const env = await makeEnvironment()
+    root = env.base
+    const facade = await bootComposition(env)
+
+    let revision = (await facade.createTask(SPEC, 0)).revision
+    revision = (await facade.authorizePlanning(TASK_ID, revision, 'phone-user')).revision
+    revision = (await facade.submitPlanDraft(TASK_ID, revision, DRAFT)).revision
+    revision = (await facade.confirmPlan(TASK_ID, revision, PLAN, 'phone-user')).revision
+    revision = (await facade.approveBudget(TASK_ID, revision, {
+      mode: 'rounds', maxRounds: 1, phaseTimeoutMs: 20_000, maxStepsPerAttempt: 10,
+      testPlanVersion: TestPlanVersion(1), taskSpecVersion: TaskSpecVersion(1), approvedBy: 'phone-user',
+    })).revision
+    await facade.setLaunchProfile(TASK_ID, {
+      worktree: env.worktree, acceptancePath: env.acceptancePath, artifactPaths: ['marker.txt', 'marker.txt'],
+      confirmedBy: 'phone-user', loopbackAllowlist: [0],
+    })
+
+    await facade.startCampaign(TASK_ID, revision, { unattended: true, acceptedBy: 'phone-user' })
+    await expect.poll(async () => (await facade.campaign(TASK_ID))?.status, { timeout: 30_000 }).toBe('exhausted')
+
+    const finalState = await facade.campaign(TASK_ID)
+    expect(finalState).toMatchObject({ status: 'exhausted', rounds: 1 })
+    expect(finalState?.reason).toContain('budget-exhausted')
+    const detail = await facade.getTask(TASK_ID)
+    expect(detail.projection.stopReason).toBe('budget-exhausted')
+    expect(detail.projection.consumedRounds).toBe(1)
+    const launches = await readFile(join(env.runnerConfig.dshHome, 'launches'), 'utf8')
+    expect(launches.trim().split('\n')).toHaveLength(1)
+  })
+
+  it('reads the live core status before every round and ends a campaign as stopped when it finds the task already attempting, without ever reaching the runner', { timeout: 60_000 }, async () => {
+    const env = await makeEnvironment()
+    root = env.base
+    const facade = await bootComposition(env)
+
+    let revision = (await facade.createTask({ ...SPEC, requirement: 'hang' }, 0)).revision
+    revision = (await facade.authorizePlanning(TASK_ID, revision, 'phone-user')).revision
+    revision = (await facade.submitPlanDraft(TASK_ID, revision, DRAFT)).revision
+    revision = (await facade.confirmPlan(TASK_ID, revision, PLAN, 'phone-user')).revision
+    revision = (await facade.approveBudget(TASK_ID, revision, APPROVAL)).revision
+    await facade.setLaunchProfile(TASK_ID, {
+      worktree: env.worktree, acceptancePath: env.acceptancePath, artifactPaths: ['marker.txt', 'marker.txt'],
+      confirmedBy: 'phone-user', loopbackAllowlist: [0],
+    })
+
+    // A manual runAttempt — not through any campaign — leaves the task
+    // 'attempting' while its own fake-CLI child hangs (ignores SIGTERM,
+    // waits for SIGKILL). The core was never stopped, so there is no
+    // stopReason to key off: exactly the branch a check keyed only on
+    // no-progress/budget-exhausted stop reasons would miss.
+    const manual = facade.runAttempt(attemptRequest(env, revision))
+    manual.catch(() => undefined)
+    await expect.poll(
+      () => readFile(join(env.runnerConfig.dshHome, 'last-pgid'), 'utf8').catch(() => ''),
+      { timeout: 30_000 },
+    ).not.toBe('')
+    expect((await facade.getTask(TASK_ID)).projection.status).toBe('attempting')
+
+    await facade.startCampaign(TASK_ID, revision, { unattended: true, acceptedBy: 'phone-user' })
+    await expect.poll(async () => (await facade.campaign(TASK_ID))?.status, { timeout: 30_000 }).toBe('stopped')
+
+    const finalState = await facade.campaign(TASK_ID)
+    expect(finalState?.reason).toContain('attempting')
+    expect(finalState?.rounds).toBe(0)
+
+    // Clean up the still-hanging manual attempt so the process group does
+    // not outlive the test.
+    const inFlight = await facade.getTask(TASK_ID)
+    await facade.stop(TASK_ID, inFlight.projection.revision)
+    await expect(manual).rejects.toBeDefined()
+  })
 })

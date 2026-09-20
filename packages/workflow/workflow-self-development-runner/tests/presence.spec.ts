@@ -81,6 +81,28 @@ describe('HumanPresenceCapabilitySource', () => {
     }
   })
 
+  it('accepts the unattended-accepted wording and binds the literal into the evidence digest', () => {
+    const unattended: PresenceConfirmation = { ...confirmation, acknowledgement: 'unattended-accepted' }
+    const evidence = new HumanPresenceCapabilitySource(unattended).evidence(['supervisor'])
+    expect(evidence[0]?.digest)
+      .toBe(digestJson({ capability: 'supervisor', source: 'human-presence', confirmation: unattended }))
+    // The wording is part of the bound payload: the same launch facts under a
+    // supervised acknowledgement digest differently.
+    expect(evidence[0]?.digest)
+      .not.toBe(new HumanPresenceCapabilitySource(confirmation).evidence(['supervisor'])[0]?.digest)
+  })
+
+  it('produces one evidence item per required capability under each acknowledgement wording', () => {
+    const required = ['supervisor', 'acceptance-runner']
+    const supervised = new HumanPresenceCapabilitySource(confirmation).evidence(required)
+    const unattended = new HumanPresenceCapabilitySource({ ...confirmation, acknowledgement: 'unattended-accepted' as const })
+      .evidence(required)
+    for (const items of [supervised, unattended]) {
+      expect(items.map(item => item.capability)).toEqual(required)
+      for (const item of items) expect(item.source).toBe('human-presence')
+    }
+  })
+
   it('produces different digests for different confirmations and capabilities', () => {
     const later: PresenceConfirmation = {
       ...confirmation,

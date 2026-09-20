@@ -10,7 +10,7 @@ kind: "package-reference"
 <a id="summary"></a>
 ## 概述
 
-无需盯住控制器即可跟踪自开发任务进展：每次持久任务提交都会折叠为一个统一事件——需要人决定、待试用、失败或停止的通知——你可以从内存缓冲中拉取、在进程内订阅，或通过自行配置的命令发布为 macOS 本地通知。未配置命令之前通知保持关闭，事件只到标题级：不含路径、凭据或需求全文。缓冲与订阅仅存在于本进程。
+无需盯住控制器即可跟踪自开发任务进展：每次持久任务提交——以及 Remote 门面无人值守战役循环直接发出的每个战役生命周期事件——都会折叠为一个统一事件：需要人决定、待试用、失败或停止的通知，你可以从内存缓冲中拉取、在进程内订阅，或通过自行配置的命令发布为 macOS 本地通知。未配置命令之前通知保持关闭，事件只到标题级：不含路径、凭据或需求全文。缓冲与订阅仅存在于本进程。
 
 ## 目录
 
@@ -59,6 +59,17 @@ kind: "package-reference"
 
 `plan/confirmed` 与 `budget/approved` 通过其留下的"需要人决定"状态（`awaiting-development-approval` 与 `ready`）映射；其余所有持久事件都是控制器簿记，不映射任何事件。轮数 `N` 是该次提交折叠后已消耗的轮数。交接与停止标题中的 `<reason>` 是持久事件词表中的枚举值（`journal-corrupted`、`cancelled` 等）；runner 的失败原因文本与交接细节绝不进入事件——需要全文请查询任务日志。`turn-finished` 保留给未来的有限循环投影——一轮结束并等待下一轮；当前已结束的一轮发布的是 `failed`。
 
+### 战役事件
+
+另外两个原始 Cordis 事件映射进同一套统一词表，由本包声明并折叠，但由 Remote 门面的战役循环发出——核心从不发出它们，核心没有战役的概念，也从不经 `self-development/committed` 发出它们：
+
+| 原始事件 | Kind | 标题 |
+|---|---|---|
+| `self-development/campaign-passed` | `awaiting-trial` | `Task passed, trial ready` |
+| `self-development/campaign-ended` | `status: 'stopped'` 时为 `stopped`，否则为 `failed` | `Campaign ended: <status>` |
+
+`campaign-ended` 的 `<status>` 是战役封闭词表的终局状态（`exhausted`、`stopped` 或 `failed`）——绝不是战役记录的自由文本 `reason`，后者留在 Remote 门面内部。`campaign-passed` 没有 `<status>` 插值：通过永远是同一固定标题，与 `task/passed` 自己的模板形状一致。载荷形状与 `mapCampaignPassedToEvent`/`mapCampaignEndedToEvent` 映射函数见 [`campaign.ts`](src/campaign.ts)；发出它们的战役循环见 Remote 门面自己的 README。
+
 -----
 
 <a id="local-notifications"></a>
@@ -87,6 +98,7 @@ kind: "package-reference"
 - **迟到的订阅者看不到任何事件**——`subscribe` 只投递订阅之后观察到的事件；需要历史的 UI 必须在挂载时读取 `recent()`。
 - **`turn-finished` 是保留种类，当前不发射**——现有映射不会产生它；在有限循环投影出现之前，消费方不得依赖收到它。
 - **失败原因不进入事件**——runner 的失败原因文本与交接细节只存在于任务日志；通知事件只携带轮数与封闭词表中的原因，需要全文的消费方必须读取任务日志。
+- **重启后被恢复为 `stopped` 的战役不发射事件**——Remote 门面的一次性重启扫描直接把该状态写进战役记录，不发出 `campaign-ended`；消费方必须轮询 `campaign(taskId)` 才能得知崩溃进程留下的战役已被处理。
 
 <a id="dev-note"></a>
 ### 开发备注

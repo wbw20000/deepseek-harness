@@ -10,7 +10,7 @@ English | [中文](README.zh.md)
 <a id="summary"></a>
 ## Summary
 
-Follow self-development task progress without watching the controller: every durable task commit folds into one unified event — a human-decision, trial, failure, or stop notice — that you can pull from an in-memory buffer, subscribe to in-process, or post as a macOS local notification through a command you configure. Notifications stay off until you configure a command, and events stay title-level: no paths, credentials, or requirement text. The buffer and subscriptions live in this process only.
+Follow self-development task progress without watching the controller: every durable task commit — and every campaign-lifecycle event the Remote facade's unattended campaign loop emits directly — folds into one unified event: a human-decision, trial, failure, or stop notice that you can pull from an in-memory buffer, subscribe to in-process, or post as a macOS local notification through a command you configure. Notifications stay off until you configure a command, and events stay title-level: no paths, credentials, or requirement text. The buffer and subscriptions live in this process only.
 
 ## Table of Contents
 
@@ -59,6 +59,17 @@ One `SelfDevelopmentEvent` carries `taskId`, `kind`, `sessionId`, `title`, `occu
 
 `plan/confirmed` and `budget/approved` map through the human-decision status they leave behind (`awaiting-development-approval` and `ready`); every other durable event is controller bookkeeping and maps to nothing. The round number `N` is the consumed round the commit folded in. The `<reason>` in the handoff and stop titles is the durable event's enum value (`journal-corrupted`, `cancelled`, ...); the runner's failure reason text and the handoff detail never enter an event — query the task journal for them. `turn-finished` is reserved for the later finite-loop projection of a round that ends and waits for the next one; today a finished round publishes `failed` instead.
 
+### Campaign events
+
+Two further raw Cordis events map into the same unified vocabulary, declared and folded by this package but emitted by the Remote facade's campaign loop — never by the core, which has no notion of a campaign and never emits them through `self-development/committed`:
+
+| Raw event | Kind | Title |
+|---|---|---|
+| `self-development/campaign-passed` | `awaiting-trial` | `Task passed, trial ready` |
+| `self-development/campaign-ended` | `stopped` when `status: 'stopped'`, otherwise `failed` | `Campaign ended: <status>` |
+
+`campaign-ended`'s `<status>` is the campaign's closed-vocabulary end status (`exhausted`, `stopped`, or `failed`) — never the campaign record's free-text `reason`, which stays inside the Remote facade. `campaign-passed` has no `<status>` interpolation: a pass is always the same fixed title, matching `task/passed`'s own template shape. See [`campaign.ts`](src/campaign.ts) for the payload shapes and the `mapCampaignPassedToEvent`/`mapCampaignEndedToEvent` mapping functions, and the Remote facade's own README for the campaign loop that emits them.
+
 -----
 
 <a id="local-notifications"></a>
@@ -87,6 +98,7 @@ None. The service touches no prompt, session, or request path, so KV-cache reuse
 - **Late subscribers see nothing** — `subscribe` delivers only events observed after subscribing; a UI that needs the past must read `recent()` at mount.
 - **`turn-finished` is reserved, not emitted** — no current mapping produces it, so consumers must not rely on receiving it until the finite-loop projection exists.
 - **Failure reasons are not in events** — the runner's failure reason text and the handoff detail stay in the task journal; a notification event carries only the round number and the closed-vocabulary reason, so a consumer that needs the text must read the journal.
+- **A campaign a restart recovers as `stopped` fires no event** — the Remote facade's one-time restart scan writes that status directly to the campaign record without emitting `campaign-ended`; a consumer must poll `campaign(taskId)` to notice a campaign a crashed process left running.
 
 <a id="dev-note"></a>
 ### Dev Note

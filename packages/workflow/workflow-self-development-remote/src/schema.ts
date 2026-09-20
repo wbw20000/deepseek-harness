@@ -9,7 +9,15 @@
 import { z as zod } from 'zod'
 import { validateTaskId } from '@deepseek-ai/dsh-workflow-self-development'
 import { SelfDevelopmentRemoteError } from './errors.ts'
-import type { LaunchProfile, LaunchProfileInput, BudgetApprovalInput, RemoteRunAttemptRequest, TaskSpecInput } from './types.ts'
+import type { CampaignRecord } from './campaign.ts'
+import type {
+  LaunchProfile,
+  LaunchProfileInput,
+  BudgetApprovalInput,
+  CampaignOptions,
+  RemoteRunAttemptRequest,
+  TaskSpecInput,
+} from './types.ts'
 
 /** Non-empty string with no length beyond what the field needs. */
 const nonEmpty = zod.string().min(1)
@@ -55,9 +63,28 @@ const confirmedPlanSchema = zod.strictObject({
   manualCases: zod.array(nonEmpty),
 })
 
-/** Wire form of a budget approval; mirrors the core's `budgetApprovalSchema`. */
+/**
+ * Milliseconds in 24 hours: the hard cap `approveBudget`'s effective
+ * `durationMs` may not exceed, whether explicit or preset-expanded.
+ */
+export const MAX_BUDGET_DURATION_MS = 24 * 60 * 60 * 1000
+
+/**
+ * The `preset: 'unlimited'` expansion: a 24-hour time budget with a
+ * conservative per-phase, per-attempt, and no-progress bound.
+ */
+export const UNLIMITED_BUDGET_PRESET = {
+  mode: 'time' as const,
+  durationMs: MAX_BUDGET_DURATION_MS,
+  phaseTimeoutMs: 600_000,
+  maxStepsPerAttempt: 40,
+  noProgressAttemptLimit: 5,
+}
+
+/** Wire form of a budget approval; mirrors the core's `budgetApprovalSchema`, plus the `preset` convenience field. */
 const budgetApprovalSchema = zod.strictObject({
-  mode: zod.enum(['rounds', 'time', 'both']),
+  preset: zod.literal('unlimited').optional(),
+  mode: zod.enum(['rounds', 'time', 'both']).optional(),
   maxRounds: zod.number().int().min(1).optional(),
   durationMs: zod.number().positive().optional(),
   phaseTimeoutMs: zod.number().positive().optional(),
@@ -66,6 +93,65 @@ const budgetApprovalSchema = zod.strictObject({
   testPlanVersion: zod.number().int().min(1),
   taskSpecVersion: zod.number().int().min(1),
   approvedBy: nonEmpty,
+}).refine(value => value.preset !== undefined || value.mode !== undefined, {
+  message: 'mode is required when preset is absent',
+  path: ['mode'],
+}).refine(value => value.durationMs === undefined || value.durationMs <= MAX_BUDGET_DURATION_MS, {
+  message: `durationMs must not exceed the 24-hour cap (${MAX_BUDGET_DURATION_MS}ms)`,
+  path: ['durationMs'],
+})
+
+/**
+ * Expand a wire budget approval's `preset` convenience field into concrete
+ * budget fields, so the core never sees the literal. A field the caller also
+ * set explicitly overrides that field's preset default. Absent `preset`
+ * returns the input with only that field stripped; `budgetApprovalSchema`
+ * already proved `mode` is then present and `durationMs` is within the cap.
+ * @param input - wire approval already proven to satisfy `budgetApprovalSchema`.
+ * @returns the approval with `preset` removed and `mode` always present.
+ */
+function expandBudgetPreset(input: zod.infer<typeof budgetApprovalSchema>): BudgetApprovalInput {
+  const { preset, ...explicit } = input
+  if (preset === undefined) return explicit
+  return {
+    mode: explicit.mode ?? UNLIMITED_BUDGET_PRESET.mode,
+    ...(explicit.maxRounds === undefined ? {} : { maxRounds: explicit.maxRounds }),
+    durationMs: explicit.durationMs ?? UNLIMITED_BUDGET_PRESET.durationMs,
+    phaseTimeoutMs: explicit.phaseTimeoutMs ?? UNLIMITED_BUDGET_PRESET.phaseTimeoutMs,
+    maxStepsPerAttempt: explicit.maxStepsPerAttempt ?? UNLIMITED_BUDGET_PRESET.maxStepsPerAttempt,
+    noProgressAttemptLimit: explicit.noProgressAttemptLimit ?? UNLIMITED_BUDGET_PRESET.noProgressAttemptLimit,
+    testPlanVersion: explicit.testPlanVersion,
+    taskSpecVersion: explicit.taskSpecVersion,
+    approvedBy: explicit.approvedBy,
+  }
+}
+
+/**
+ * Wire form of `startCampaign`'s options. Not marked `hostOnly` field-by-field:
+ * `startCampaign`, `campaign`, and `stopCampaign` are host-only in full (the
+ * facade refuses the whole method for a non-host caller with
+ * `assertCallerIsHost`, the same gate `setLaunchProfile` uses), so no field
+ * needs the per-field `assertHostOnlyFields` mechanism.
+ */
+const campaignOptionsSchema = zod.strictObject({
+  unattended: zod.boolean(),
+  acceptedBy: nonEmpty,
+  maxConcurrentCampaigns: zod.number().int().min(1).optional(),
+})
+
+/** Stored form of one campaign record file: `CampaignState` plus the `startCampaign` options it derives rounds from. */
+const campaignRecordSchema = zod.strictObject({
+  taskId: nonEmpty,
+  status: zod.enum(['running', 'passed', 'exhausted', 'stopped', 'failed']),
+  startedAt: zod.number(),
+  updatedAt: zod.number(),
+  rounds: zod.number().int().min(0),
+  lastAttemptId: nonEmpty.optional(),
+  lastOutcome: zod.enum(['passed', 'failed', 'cancelled', 'late', 'unknown']).optional(),
+  reason: nonEmpty.optional(),
+  acknowledgement: zod.enum(['supervised-not-unattended', 'unattended-accepted']),
+  unattended: zod.boolean(),
+  acceptedBy: nonEmpty,
 })
 
 /** Wire form of a `runAttempt` request. The five launch fields are optional: an absent field is derived from the task's launch profile. */
@@ -315,6 +401,29 @@ export function parseStoredLaunchProfile(path: string, value: unknown): LaunchPr
 }
 
 /**
+ * Validate an `expectedRevision` header shared by every mutating method.
+ * @param expectedRevision - revision as received.
+ * @returns the same revision once proven a non-negative integer.
+ * @throws SelfDevelopmentRemoteError with `self-development/config-invalid` when it is not a
+ *   non-negative integer.
+ */
+export function parseExpectedRevision(expectedRevision: unknown): number {
+  return parse(zod.number().int().min(0), 'expectedRevision', expectedRevision)
+}
+
+/**
+ * Validate `stopCampaign`'s free-text `reason`. Non-empty only: the facade
+ * places no vocabulary restriction on it, but an event title never carries it
+ * verbatim (see the events package's `campaign-ended` mapping).
+ * @param reason - stop reason as received.
+ * @returns the same reason once proven non-empty.
+ * @throws SelfDevelopmentRemoteError with `self-development/config-invalid` when it is empty.
+ */
+export function parseCampaignStopReason(reason: unknown): string {
+  return parse(nonEmpty, 'reason', reason)
+}
+
+/**
  * Validate an actor name.
  * @param actor - actor as received.
  * @returns the same actor once proven non-empty.
@@ -408,8 +517,38 @@ export function parseApproveBudgetInput(taskId: string, expectedRevision: number
   return {
     taskId: parseTaskId(taskId),
     expectedRevision: parse(zod.number().int().min(0), 'expectedRevision', expectedRevision),
-    approval: parse(budgetApprovalSchema, 'approval', approval),
+    approval: expandBudgetPreset(parse(budgetApprovalSchema, 'approval', approval)),
   }
+}
+
+/**
+ * Validate a `startCampaign` options argument.
+ * @param options - campaign options in wire form.
+ * @returns the parsed options.
+ * @throws SelfDevelopmentRemoteError with `self-development/config-invalid` when a field is malformed.
+ */
+export function parseCampaignOptions(options: unknown): CampaignOptions {
+  return parse(campaignOptionsSchema, 'options', options)
+}
+
+/**
+ * Validate the stored campaign record read back from one file. The failure
+ * message names the file path and the violated field, never the file content.
+ * @param path - absolute path of the campaign file the value was read from.
+ * @param value - the parsed JSON value of the file.
+ * @returns the validated record.
+ * @throws SelfDevelopmentRemoteError with `self-development/config-invalid` when the value does not
+ *   satisfy the stored campaign record schema.
+ */
+export function parseStoredCampaignRecord(path: string, value: unknown): CampaignRecord {
+  const result = campaignRecordSchema.safeParse(value)
+  if (!result.success) {
+    const detail = result.error.issues
+      .map(issue => `${issue.path.length === 0 ? 'record' : issue.path.join('.')}: ${issue.message}`)
+      .join('; ')
+    throw new SelfDevelopmentRemoteError('self-development/config-invalid', `campaign record ${path} is invalid: ${detail}`)
+  }
+  return result.data
 }
 
 /**

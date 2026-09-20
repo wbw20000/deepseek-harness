@@ -10,7 +10,8 @@
 import type { TaskProjection } from '@deepseek-ai/dsh-workflow-self-development'
 import type { SelfDevelopmentEvent } from '@deepseek-ai/dsh-workflow-self-development-events'
 import type { SupervisedAttemptOutcome } from '@deepseek-ai/dsh-workflow-self-development-runner'
-import type { RecentEvent, RemoteRunAttemptOutcome, RemoteTaskProjection } from './types.ts'
+import type { CampaignRecord } from './campaign.ts'
+import type { CampaignState, RecentEvent, RemoteRunAttemptOutcome, RemoteTaskProjection } from './types.ts'
 
 /**
  * Project one core task projection onto the JSON-safe wire view.
@@ -59,6 +60,27 @@ export function toWireOutcome(
     ...(outcome.outcomeWriteError === undefined ? {} : { outcomeWriteError: outcome.outcomeWriteError }),
     ...(worktree === undefined ? {} : { worktree }),
     operationId,
+  }
+}
+
+/**
+ * Project one stored campaign record onto its public {@link CampaignState}
+ * view, dropping the internal `unattended`/`acceptedBy` fields the record
+ * carries only to derive later rounds.
+ * @param record - the stored campaign record.
+ * @returns the public view; absent optional fields mean `undefined`.
+ */
+export function toCampaignState(record: CampaignRecord): CampaignState {
+  return {
+    taskId: record.taskId,
+    status: record.status,
+    startedAt: record.startedAt,
+    updatedAt: record.updatedAt,
+    rounds: record.rounds,
+    ...(record.lastAttemptId === undefined ? {} : { lastAttemptId: record.lastAttemptId }),
+    ...(record.lastOutcome === undefined ? {} : { lastOutcome: record.lastOutcome }),
+    ...(record.reason === undefined ? {} : { reason: record.reason }),
+    acknowledgement: record.acknowledgement,
   }
 }
 

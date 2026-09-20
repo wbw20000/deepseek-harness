@@ -30,25 +30,37 @@ import {
   SelfDevelopmentRunnerError,
 } from '@deepseek-ai/dsh-workflow-self-development-runner'
 import type {
+  PresenceAcknowledgement,
   PresenceConfirmation,
   SelfDevelopmentRunner,
 } from '@deepseek-ai/dsh-workflow-self-development-runner'
-// Type-only: pulls the events consumer's Context merge so the optional
-// `selfDevelopmentEvents` read below is typed.
+// Type-only: pulls the events consumer's Context merge (including the
+// campaign-passed/campaign-ended event declarations) so `selfDevelopmentEvents`
+// below and this facade's own `ctx.emit` calls are typed.
 import type {} from '@deepseek-ai/dsh-workflow-self-development-events'
 import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type { SelfDevelopmentErrorCode } from '@deepseek-ai/dsh-workflow-self-development'
 import type { SelfDevelopmentRunnerErrorCode } from '@deepseek-ai/dsh-workflow-self-development-runner'
 import { buildConfirmationCard, taskTitle } from './card.ts'
+import {
+  countRunningCampaigns,
+  readCampaign,
+  stopRunningCampaignsAfterRestart,
+  writeCampaign,
+} from './campaign.ts'
+import type { CampaignRecord } from './campaign.ts'
 import { readLaunchProfile, resolveLaunchProfile, writeLaunchProfile } from './launch-profile.ts'
-import { toWireEvent, toWireOutcome, toWireProjection } from './wire.ts'
+import { toCampaignState, toWireEvent, toWireOutcome, toWireProjection } from './wire.ts'
 import { SelfDevelopmentRemoteError } from './errors.ts'
 import {
   assertHostOnlyFields,
   parseApproveBudgetInput,
   parseAuthorizePlanningInput,
+  parseCampaignOptions,
+  parseCampaignStopReason,
   parseConfirmPlanInput,
   parseCreateTaskInput,
+  parseExpectedRevision,
   parseLaunchProfileInput,
   parseRecordTrialApprovalInput,
   parseRunAttemptRequest,
@@ -58,6 +70,9 @@ import {
 } from './schema.ts'
 import type {
   BudgetApprovalInput,
+  CampaignOptions,
+  CampaignState,
+  CampaignStatus,
   ConfirmedPlanInput,
   LaunchProfile,
   LaunchProfileInput,
@@ -78,6 +93,10 @@ export { SelfDevelopmentRemoteError } from './errors.ts'
 export type { SelfDevelopmentRemoteErrorCode } from './errors.ts'
 export type {
   BudgetApprovalInput,
+  CampaignOptions,
+  CampaignRoundOutcome,
+  CampaignState,
+  CampaignStatus,
   CardBudget,
   ConfirmedPlanInput,
   ConfirmationCard,
@@ -98,12 +117,22 @@ export type {
   TaskSummary,
 } from './types.ts'
 export {
+  campaignPath,
+  countRunningCampaigns,
+  listCampaigns,
+  PROCESS_RESTARTED_REASON,
+  readCampaign,
+  stopRunningCampaignsAfterRestart,
+  writeCampaign,
+} from './campaign.ts'
+export type { CampaignRecord } from './campaign.ts'
+export {
   launchProfilePath,
   readLaunchProfile,
   resolveLaunchProfile,
   writeLaunchProfile,
 } from './launch-profile.ts'
-export { toWireEvent, toWireOutcome, toWireProjection } from './wire.ts'
+export { toCampaignState, toWireEvent, toWireOutcome, toWireProjection } from './wire.ts'
 
 /**
  * The facade's own deployment configuration. `controlDirectory` repeats the
@@ -129,6 +158,7 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
     enabled: z.boolean().default(false),
     allowedActors: z.array(z.string()).default([]),
     controlDirectory: z.string().required(),
+    maxConcurrentCampaigns: z.number().step(1).default(2),
   }) as unknown as z<RemoteConfig>
 
   /** Validated deployment configuration. */
@@ -138,9 +168,44 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
   private ownClock: HostClock | undefined
 
   /**
+   * Task ids whose campaign loop this process currently owns — added the
+   * instant `startCampaign` commits the initial record, removed the instant
+   * the loop (or a racing `stopCampaign`) finalizes it. `activeTasks` unions
+   * this with the runner's own set, so a task counts as active during the
+   * gap between two rounds, when the runner itself has nothing in flight.
+   */
+  private readonly runningCampaigns = new Set<string>()
+
+  /**
+   * The in-flight `finalizeCampaign` promise for a task currently being
+   * finalized, published synchronously before any await so a racing loser
+   * can always find and await it rather than reading a write still in
+   * flight. Cleared once that finalization settles.
+   */
+  private readonly finalizing = new Map<string, Promise<CampaignRecord>>()
+
+  /**
+   * Serializes `startCampaign`'s check-then-write section (already-running
+   * check, `maxConcurrentCampaigns` count, and the initial record write),
+   * which otherwise spans several `await` points with no mutual exclusion:
+   * two concurrent calls could both observe spare capacity and both write,
+   * over-running the cap, or both win the same task's "not already running"
+   * check and start two loops for it. A promise-chain mutex, not a
+   * per-`controlDirectory` one — this process serves exactly one.
+   */
+  private campaignStartLock: Promise<unknown> = Promise.resolve()
+
+  /**
+   * This process's one-time campaign-restart recovery, memoized so every
+   * caller of a campaign method awaits the same scan instead of racing it.
+   */
+  private restartScan: Promise<void> | undefined
+
+  /**
    * @param ctx - owning Cordis context carrying the task-control service.
    * @param config - deployment configuration for the enablement switch, the
-   *   actor allowlist, and the task-control service's control directory.
+   *   actor allowlist, the task-control service's control directory, and the
+   *   default concurrent-campaign cap.
    * @throws SelfDevelopmentRemoteError with `self-development/config-invalid` when the control
    *   directory is not an absolute path. Misconfiguration fails at load.
    */
@@ -582,7 +647,7 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
       this.assertActorAllowed(effective.confirmedBy)
       const runner = this.requireRunner()
       const controller = await this.open(taskId)
-      const presence = await this.buildPresence(controller.projection, effective)
+      const presence = await this.buildPresence(controller.projection, effective, 'supervised-not-unattended')
       const operationId = this.operationId()
       const outcome = await runner.runAttempt({
         taskId,
@@ -602,15 +667,206 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
   }
 
   /**
-   * The task ids of the attempts the runner currently owns.
-   * @returns a read-only snapshot, empty when the runner plugin is absent.
+   * The task ids of the attempts the runner currently owns, plus every task
+   * with a campaign loop this process currently owns.
+   * @returns a read-only snapshot, deduplicated; excludes the runner's own
+   *   set only when the runner plugin is absent.
    * @throws SelfDevelopmentRemoteError with `self-development/disabled` while the facade is disabled.
    */
   @Remote('activeTasks')
   async activeTasks(): Promise<readonly string[]> {
     return this.forward(async () => {
       this.assertEnabled()
-      return await Promise.resolve(this.runner()?.activeTasks() ?? [])
+      const runnerActive = this.runner()?.activeTasks() ?? []
+      return await Promise.resolve([...new Set([...runnerActive, ...this.runningCampaigns])])
+    })
+  }
+
+  /**
+   * Start one unattended campaign: create its record and launch the first
+   * round immediately, in the background. The returned state is the freshly
+   * created record (`status: 'running'`, `rounds: 0`) — it never waits for
+   * the first round, which can run for as long as the approved budget
+   * allows; poll `campaign(taskId)` for progress.
+   *
+   * `options.unattended` decides both the acknowledgement every round this
+   * campaign derives carries and whether the loop continues past the first
+   * round. `true`: every round — including the first — carries
+   * `acknowledgement: 'unattended-accepted'`, the recorded fact of this
+   * call's one-time acceptance covering the whole budget window, never an
+   * isolation guarantee; the loop keeps launching rounds, each with a
+   * freshly derived `PresenceConfirmation` and a fresh operation id, until a
+   * terminal status. `false`: this call's acceptance covers only the first
+   * round, which therefore carries `acknowledgement:
+   * 'supervised-not-unattended'` — the same literal a direct `runAttempt`
+   * asserts. A pass still reaches `status: 'passed'`, sharing the loop's one
+   * success path with an `unattended: true` campaign — passing is already
+   * terminal regardless of `unattended`. Only a failure that is not itself
+   * campaign-terminal stops the loop early because `unattended` is `false`:
+   * `status: 'stopped'`, leaving further rounds to a direct manual
+   * `runAttempt`.
+   * @param taskId - task identity.
+   * @param expectedRevision - revision the caller observed; binds the first round only, later rounds re-read the current revision.
+   * @param options - campaign options; host-only in full.
+   * @returns the task id and the freshly created campaign state.
+   * @throws SelfDevelopmentRemoteError with `self-development/disabled`, `self-development/config-invalid`
+   *   (malformed fields, a task that already has a running campaign, or a call that would exceed
+   *   `maxConcurrentCampaigns`), `self-development/actor-forbidden`, `self-development/host-only-field`
+   *   from a non-host caller, or `self-development/runner-unavailable` when the runner plugin is not loaded.
+   */
+  @Remote('startCampaign')
+  async startCampaign(taskId: string, expectedRevision: number, options: CampaignOptions): Promise<{
+    readonly taskId: string
+    readonly campaign: CampaignState
+  }> {
+    return this.forward(async () => {
+      this.assertEnabled()
+      const id = parseTaskId(taskId)
+      const revision = parseExpectedRevision(expectedRevision)
+      const parsedOptions = parseCampaignOptions(options)
+      this.assertCallerIsHost('startCampaign', 'campaign lifecycle and the unattended presence acknowledgement')
+      this.assertActorAllowed(parsedOptions.acceptedBy)
+      this.requireRunner()
+      const record = await this.lockCampaignStart(() => this.claimCampaignSlot(id, parsedOptions))
+      // Fire-and-forget: the loop owns its own finalization and never lets an
+      // error escape unhandled; a crash it cannot classify still finalizes
+      // the record as 'failed' before this catch could ever run.
+      this.runCampaignLoop(id, revision).catch((error: unknown) => {
+        this.ctx.logger.warn('self-development-remote: campaign loop crashed for task "%s"', id)
+        this.ctx.logger.warn(error)
+      })
+      return { taskId: id, campaign: toCampaignState(record) }
+    })
+  }
+
+  /**
+   * Run one function while holding `campaignStartLock`, queuing behind
+   * whatever call already holds it. The lock is released whether `fn`
+   * resolves or rejects, so a refused `startCampaign` never blocks the next
+   * queued one.
+   * @param fn - the critical section to run exclusively.
+   * @returns `fn`'s result.
+   */
+  private async lockCampaignStart<T>(fn: () => Promise<T>): Promise<T> {
+    const previous = this.campaignStartLock
+    // The executor below runs synchronously inside `new Promise`, so
+    // `release` always holds the real resolver by the time `finally` reads
+    // it; this placeholder only satisfies the type without a non-null
+    // assertion, and is itself never called.
+    /* v8 ignore next */
+    let release: () => void = () => {}
+    this.campaignStartLock = new Promise<void>((resolve) => { release = resolve })
+    await previous
+    try {
+      return await fn()
+    } finally {
+      release()
+    }
+  }
+
+  /**
+   * `startCampaign`'s check-then-write critical section: the already-running
+   * and `maxConcurrentCampaigns` checks, and the initial record write. Must
+   * run inside `lockCampaignStart` — read alone, `runningCampaigns.has` and
+   * `countRunningCampaigns` are consistent only against writes serialized the
+   * same way.
+   * @param id - validated task identity.
+   * @param parsedOptions - validated campaign options.
+   * @returns the freshly written initial record.
+   * @throws SelfDevelopmentRemoteError with `self-development/config-invalid` when the task already
+   *   has a running campaign, or starting this one would exceed `maxConcurrentCampaigns`.
+   */
+  private async claimCampaignSlot(id: string, parsedOptions: CampaignOptions): Promise<CampaignRecord> {
+    await this.ensureRestartScan()
+    if (this.runningCampaigns.has(id)) {
+      throw new SelfDevelopmentRemoteError('self-development/config-invalid', `task ${JSON.stringify(id)} already has a running campaign`)
+    }
+    const cap = parsedOptions.maxConcurrentCampaigns ?? this.resolved.maxConcurrentCampaigns
+    const running = await countRunningCampaigns(this.resolved.controlDirectory)
+    if (running >= cap) {
+      throw new SelfDevelopmentRemoteError(
+        'self-development/config-invalid',
+        `starting this campaign would exceed maxConcurrentCampaigns (${cap})`,
+      )
+    }
+    const startedAt = Date.now()
+    const record: CampaignRecord = {
+      taskId: id,
+      status: 'running',
+      startedAt,
+      updatedAt: startedAt,
+      rounds: 0,
+      // 'unattended: false' still auto-launches one round, but that round's
+      // confirmation is this call's own single acceptance of that one
+      // launch — the same wording a direct runAttempt asserts — never the
+      // campaign-wide 'unattended-accepted' acceptance.
+      acknowledgement: parsedOptions.unattended ? 'unattended-accepted' : 'supervised-not-unattended',
+      unattended: parsedOptions.unattended,
+      acceptedBy: parsedOptions.acceptedBy,
+    }
+    await writeCampaign(this.resolved.controlDirectory, id, record)
+    this.runningCampaigns.add(id)
+    return record
+  }
+
+  /**
+   * Read one task's current campaign state.
+   * @param taskId - task identity.
+   * @returns the stored campaign state, or `undefined` when the task has never had a campaign.
+   * @throws SelfDevelopmentRemoteError with `self-development/disabled`, `self-development/config-invalid`
+   *   (malformed task id, or a corrupt stored record), or `self-development/host-only-field` from a
+   *   non-host caller.
+   */
+  @Remote('campaign')
+  async campaign(taskId: string): Promise<CampaignState | undefined> {
+    return this.forward(async () => {
+      this.assertEnabled()
+      const id = parseTaskId(taskId)
+      this.assertCallerIsHost('campaign', 'campaign lifecycle')
+      await this.ensureRestartScan()
+      const record = await readCampaign(this.resolved.controlDirectory, id)
+      return record === undefined ? undefined : toCampaignState(record)
+    })
+  }
+
+  /**
+   * Stop one task's campaign: cancel whatever attempt is currently in flight
+   * through the runner and end the loop. Already terminal (not `running`) is
+   * a no-op that returns the stored state unchanged — nothing is left in
+   * flight to cancel. Requires the runner plugin, exactly like
+   * `startCampaign`: a campaign cannot exist without one having launched its
+   * rounds.
+   * @param taskId - task identity.
+   * @param reason - human-readable stop reason recorded on the campaign; never entered into an event title verbatim.
+   * @returns the finalized (or already-terminal) campaign state.
+   * @throws SelfDevelopmentRemoteError with `self-development/disabled`, `self-development/config-invalid`
+   *   (malformed fields, or no campaign record exists for this task), `self-development/host-only-field`
+   *   from a non-host caller, or `self-development/runner-unavailable` when the runner plugin is not loaded.
+   * @throws whatever the core or the runner rejects with, converted at the facade boundary into
+   *   `self-development/core` (`details.code` keeps the original code).
+   */
+  @Remote('stopCampaign')
+  async stopCampaign(taskId: string, reason: string): Promise<CampaignState> {
+    return this.forward(async () => {
+      this.assertEnabled()
+      const id = parseTaskId(taskId)
+      const parsedReason = parseCampaignStopReason(reason)
+      this.assertCallerIsHost('stopCampaign', 'campaign lifecycle')
+      const runner = this.requireRunner()
+      await this.ensureRestartScan()
+      const record = await readCampaign(this.resolved.controlDirectory, id)
+      if (record === undefined) {
+        throw new SelfDevelopmentRemoteError('self-development/config-invalid', `no campaign record exists for task ${JSON.stringify(id)}`)
+      }
+      if (record.status !== 'running') return toCampaignState(record)
+      const controller = await this.open(id)
+      await runner.stop({
+        taskId: id,
+        expectedRevision: controller.projection.revision,
+        operationId: this.operationId(),
+      })
+      const finalized = await this.finalizeCampaign(id, record, { status: 'stopped', reason: parsedReason })
+      return toCampaignState(finalized)
     })
   }
 
@@ -794,9 +1050,15 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
    * Assemble the human-presence confirmation for one launch. The confirmation
    * time is one trusted-clock observation taken now; the plan digest comes
    * from the projection at the requested revision, and the acceptance digest
-   * from the definition's bytes.
+   * from the definition's bytes. A direct `runAttempt` always binds
+   * `'supervised-not-unattended'`; a campaign round binds whichever literal
+   * the caller passes — `'unattended-accepted'` for an `unattended: true`
+   * campaign, `'supervised-not-unattended'` for an `unattended: false`
+   * campaign's one automatic round — and every call derives a fresh
+   * confirmation object, never a cached or reused one.
    * @param projection - the task projection at the requested revision.
-   * @param request - the validated run-attempt request.
+   * @param request - the launch facts the confirmation binds.
+   * @param acknowledgement - the literal this confirmation carries.
    * @returns the confirmation the runner binds to the real launch facts.
    * @throws the `self-development/core` failure with `details.code` `SELF_DEV_INVALID_STATE` when the
    *   task has no confirmed plan, or `SELF_DEV_RUNNER_ACCEPTANCE_INVALID` when the acceptance
@@ -804,7 +1066,8 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
    */
   private async buildPresence(
     projection: TaskProjection,
-    request: ResolvedRunAttemptRequest,
+    request: PresenceLaunchFacts,
+    acknowledgement: PresenceAcknowledgement,
   ): Promise<PresenceConfirmation> {
     const plan = projection.plan
     if (plan === undefined) {
@@ -818,12 +1081,283 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
       confirmedAt: this.clock().observe(),
       worktree: request.worktree,
       loopbackAllowlist: [...request.loopbackAllowlist],
-      acknowledgement: 'supervised-not-unattended',
+      acknowledgement,
       taskId: request.taskId,
       testPlanDigest: plan.digest,
       acceptanceDefinitionDigest: await acceptanceDefinitionDigest(request.acceptancePath),
       artifactPaths: sortedUnique(request.artifactPaths),
     }
+  }
+
+  /**
+   * Run this process's one-time campaign-restart recovery exactly once,
+   * memoized so concurrent callers await the same scan.
+   * @returns nothing; resolves once every stored `running` campaign this
+   *   process did not itself just create has been marked `stopped`.
+   */
+  private async ensureRestartScan(): Promise<void> {
+    this.restartScan ??= stopRunningCampaignsAfterRestart(this.resolved.controlDirectory)
+    await this.restartScan
+  }
+
+  /**
+   * One campaign's full automatic lifecycle, from its first round to a
+   * terminal status. Runs detached from the `startCampaign` call that started
+   * it; every exit path finalizes the record before returning, so this
+   * promise never needs a caller to react to its settlement.
+   * @param taskId - task identity.
+   * @param firstExpectedRevision - the revision `startCampaign` observed, bound to round one only.
+   * @returns nothing; the campaign record is this method's only externally visible result.
+   */
+  private async runCampaignLoop(taskId: string, firstExpectedRevision: number): Promise<void> {
+    let record = await readCampaign(this.resolved.controlDirectory, taskId)
+    // startCampaign just wrote this exact record; only an external deletion
+    // in that instant could make this undefined, a race this package's own
+    // writers never trigger.
+    /* v8 ignore next */
+    if (record === undefined) return
+    let expectedRevision = firstExpectedRevision
+    while (this.runningCampaigns.has(taskId)) {
+      // The core can reactively stop a task after a round settles — the
+      // no-progress limit or the budget floor tripping inside the core's own
+      // post-failure bookkeeping — without that round's own rejection ever
+      // naming the stop: the round rejects with its ordinary failure code,
+      // and only the *next* startAttempt would see the task is no longer
+      // ready. Reading the live status here, before every round including
+      // the first, is what actually catches that reactive stop instead of
+      // retrying blind into it every time.
+      const notReady = await this.checkTaskReadyForRound(taskId)
+      if (notReady !== undefined) {
+        // The `while` condition above already re-checks `runningCampaigns`
+        // at the top of every iteration, so a concurrent stopCampaign that
+        // finalized before this iteration began is already caught there.
+        // This narrower guard defends only the window inside
+        // checkTaskReadyForRound's own single await: a stopCampaign call
+        // that reads the record, cancels through the runner, and finalizes
+        // — several awaits of its own — entirely within that one await is
+        // not a window this suite can force open deterministically without
+        // mocking internal timing; the concurrent-finalize races this same
+        // guard's sibling below (and finalizeCampaign's own) do close are
+        // covered directly.
+        /* v8 ignore next */
+        if (!this.runningCampaigns.has(taskId)) return
+        await this.finalizeCampaign(taskId, record, notReady)
+        return
+      }
+      let outcome: RemoteRunAttemptOutcome
+      try {
+        outcome = await this.launchCampaignRound(taskId, expectedRevision, record)
+      } catch (error: unknown) {
+        // A concurrent stopCampaign may have already finalized this campaign
+        // while the round above was in flight (that is exactly what settles
+        // this rejection, on a stop). Once finalized, this loop must touch
+        // neither the record nor the events stream again: the stale `record`
+        // captured before the stop would otherwise overwrite the caller's
+        // stop reason with a fabricated round outcome.
+        if (!this.runningCampaigns.has(taskId)) return
+        const classification = classifyCampaignFailure(error)
+        if (!classification.consumedRound) {
+          await this.finalizeCampaign(taskId, record, { status: classification.terminalStatus, reason: classification.reason })
+          return
+        }
+        record = await this.recordCampaignRound(taskId, record, { lastOutcome: classification.outcome })
+        if (classification.terminalStatus !== undefined) {
+          await this.finalizeCampaign(taskId, record, { status: classification.terminalStatus, reason: classification.reason })
+          return
+        }
+        if (!record.unattended) {
+          await this.finalizeCampaign(taskId, record, {
+            status: 'stopped',
+            reason: 'unattended is false; the automatic first round finished, further rounds require a manual runAttempt',
+          })
+          return
+        }
+        expectedRevision = await this.currentRevision(taskId)
+        continue
+      }
+      if (!this.runningCampaigns.has(taskId)) return
+      record = await this.recordCampaignRound(taskId, record, { lastAttemptId: outcome.attemptId, lastOutcome: 'passed' })
+      await this.finalizeCampaign(taskId, record, { status: 'passed' })
+      return
+    }
+  }
+
+  /**
+   * Launch one campaign round through the same runner path a direct
+   * `runAttempt` uses. Every launch field derives from the task's stored
+   * launch profile — a campaign takes no per-round field overrides — and the
+   * presence confirmation derives from the campaign record with a fresh
+   * clock observation and a fresh operation id. The acknowledgement is
+   * `record.acknowledgement` verbatim: `'unattended-accepted'` for an
+   * `unattended: true` campaign's every round, `'supervised-not-unattended'`
+   * for an `unattended: false` campaign's one automatic round.
+   * @param taskId - task identity.
+   * @param expectedRevision - the revision this round is bound to.
+   * @param record - the campaign record this round derives from.
+   * @returns the wire-mapped outcome of a passing round.
+   * @throws whatever the runner's `runAttempt` rejects with, verbatim —
+   *   `classifyCampaignFailure` is the caller's classification of this rejection.
+   */
+  private async launchCampaignRound(
+    taskId: string,
+    expectedRevision: number,
+    record: CampaignRecord,
+  ): Promise<RemoteRunAttemptOutcome> {
+    const profile = await readLaunchProfile(this.resolved.controlDirectory, taskId)
+    const worktree = fromProfile(profile, 'worktree', 'startCampaign')
+    const artifactPaths = sortedUnique(fromProfile(profile, 'artifactPaths', 'startCampaign'))
+    const acceptancePath = fromProfile(profile, 'acceptancePath', 'startCampaign')
+    const loopbackAllowlist = fromProfile(profile, 'loopbackAllowlist', 'startCampaign')
+    const runner = this.requireRunner()
+    const controller = await this.open(taskId)
+    const presence = await this.buildPresence(
+      controller.projection,
+      { taskId, confirmedBy: record.acceptedBy, worktree, loopbackAllowlist, artifactPaths, acceptancePath },
+      record.acknowledgement,
+    )
+    const operationId = this.operationId()
+    const outcome = await runner.runAttempt({
+      taskId,
+      expectedRevision,
+      operationId,
+      worktree,
+      artifactPaths,
+      acceptancePath,
+      presence,
+    })
+    return toWireOutcome(outcome, operationId, worktree)
+  }
+
+  /**
+   * Persist one round's outcome onto a campaign record still `running`.
+   * @param taskId - task identity.
+   * @param record - the record before this round.
+   * @param fields - the round's attempt id (when it produced one) and outcome; a round is recorded
+   *   only once it is known to have actually started, so the outcome is always present.
+   * @returns the updated, persisted record.
+   */
+  private async recordCampaignRound(
+    taskId: string,
+    record: CampaignRecord,
+    fields: { readonly lastAttemptId?: string | undefined; readonly lastOutcome: Exclude<CampaignRecord['lastOutcome'], undefined> },
+  ): Promise<CampaignRecord> {
+    const updated: CampaignRecord = {
+      ...record,
+      rounds: record.rounds + 1,
+      updatedAt: Date.now(),
+      lastOutcome: fields.lastOutcome,
+      ...(fields.lastAttemptId === undefined ? {} : { lastAttemptId: fields.lastAttemptId }),
+    }
+    await writeCampaign(this.resolved.controlDirectory, taskId, updated)
+    return updated
+  }
+
+  /**
+   * End one campaign's loop for good: persist the terminal status and reason,
+   * and emit the matching `campaign-passed`/`campaign-ended` event. Races
+   * itself against a concurrent `stopCampaign`: only the caller that wins
+   * `runningCampaigns.delete` writes and emits; every loser — synchronously
+   * unable to interleave before the winner has published its in-flight
+   * promise, since nothing awaits between the `delete` and that publish —
+   * awaits that same promise and returns the winner's actual persisted
+   * outcome, never a stale pre-finalization view of its own.
+   * @param taskId - task identity.
+   * @param record - the record immediately before finalization.
+   * @param fields - the terminal status (never `running`) and, for a non-`passed` status, the one-line reason.
+   * @returns the finalized record.
+   */
+  private async finalizeCampaign(
+    taskId: string,
+    record: CampaignRecord,
+    fields: { readonly status: Exclude<CampaignStatus, 'running'>; readonly reason?: string | undefined },
+  ): Promise<CampaignRecord> {
+    if (!this.runningCampaigns.delete(taskId)) {
+      const inFlight = this.finalizing.get(taskId)
+      if (inFlight !== undefined) return inFlight
+      // No in-flight finalization and this call still lost the delete race:
+      // a previous finalization already completed and cleared itself before
+      // this call ever reached here. The current persisted record is that
+      // finalization's actual outcome.
+      const current = await readCampaign(this.resolved.controlDirectory, taskId)
+      // A completed finalization always leaves a record behind; only an
+      // external deletion could make this undefined.
+      /* v8 ignore next */
+      return current ?? record
+    }
+    const finalize = (async (): Promise<CampaignRecord> => {
+      const updated: CampaignRecord = {
+        ...record,
+        status: fields.status,
+        updatedAt: Date.now(),
+        ...(fields.reason === undefined ? {} : { reason: fields.reason }),
+      }
+      await writeCampaign(this.resolved.controlDirectory, taskId, updated)
+      await this.emitCampaignEvent(taskId, fields.status)
+      return updated
+    })()
+    this.finalizing.set(taskId, finalize)
+    try {
+      return await finalize
+    } finally {
+      this.finalizing.delete(taskId)
+    }
+  }
+
+  /**
+   * Emit the matching campaign-lifecycle Cordis event for a just-finalized
+   * campaign.
+   * @param taskId - task identity.
+   * @param status - the campaign's terminal status.
+   * @returns nothing; the events package folds the emitted event into the
+   *   unified notification vocabulary.
+   */
+  private async emitCampaignEvent(taskId: string, status: Exclude<CampaignStatus, 'running'>): Promise<void> {
+    const revision = await this.currentRevision(taskId)
+    if (status === 'passed') {
+      this.ctx.emit('self-development/campaign-passed', { taskId, revision })
+      return
+    }
+    this.ctx.emit('self-development/campaign-ended', { taskId, status, revision })
+  }
+
+  /**
+   * Read one task's current projection revision.
+   * @param taskId - task identity.
+   * @returns the controller's current revision.
+   */
+  private async currentRevision(taskId: string): Promise<number> {
+    const controller = await this.open(taskId)
+    return controller.projection.revision
+  }
+
+  /**
+   * Check the core's live status before this round launches. `status:
+   * 'ready'` is the only status a round may start from; every other status
+   * ends the campaign now, mapped from the closed-vocabulary `stopReason`
+   * when the core itself stopped the task (`'no-progress'` and
+   * `'budget-exhausted'` both mean the campaign is out of runway —
+   * `'exhausted'`; `'cancelled'` and every other status — the core is
+   * mid-attempt, awaiting trial, pre-ready, or handed off — mean `'stopped'`
+   * with a reason naming what was actually observed).
+   * @param taskId - task identity.
+   * @returns the terminal fields to finalize with, or `undefined` when the
+   *   status is `'ready'` and a round may launch.
+   */
+  private async checkTaskReadyForRound(taskId: string): Promise<{
+    readonly status: Exclude<CampaignStatus, 'running' | 'passed'>
+    readonly reason: string
+  } | undefined> {
+    const controller = await this.open(taskId)
+    const { status, stopReason } = controller.projection
+    if (status === 'ready') return undefined
+    if (status === 'stopped') {
+      const outOfRunway = stopReason === 'no-progress' || stopReason === 'budget-exhausted'
+      return {
+        status: outOfRunway ? 'exhausted' : 'stopped',
+        reason: `core stopped the task: ${stopReason}`,
+      }
+    }
+    return { status: 'stopped', reason: `task is no longer ready for a round (status: ${status})` }
   }
 }
 
@@ -851,6 +1385,106 @@ type ResolvedRunAttemptRequest = RemoteRunAttemptRequest & {
   readonly loopbackAllowlist: readonly number[]
   /** Launch confirmer, explicit or derived. */
   readonly confirmedBy: string
+}
+
+/**
+ * The launch facts `buildPresence` binds into a `PresenceConfirmation`,
+ * shared by a direct `runAttempt` (a {@link ResolvedRunAttemptRequest} already
+ * carries every one of these fields) and a campaign round (derived fresh from
+ * the task's launch profile each round).
+ */
+interface PresenceLaunchFacts {
+  /** Task the confirmation covers. */
+  readonly taskId: string
+  /** Launch confirmer. */
+  readonly confirmedBy: string
+  /** Experiment worktree. */
+  readonly worktree: string
+  /** Loopback ports the session may bind. */
+  readonly loopbackAllowlist: readonly number[]
+  /** Artifact paths the acceptance covers. */
+  readonly artifactPaths: readonly string[]
+  /** Acceptance definition path. */
+  readonly acceptancePath: string
+}
+
+/**
+ * How one campaign round's failure resolves the loop, classified from
+ * whatever `launchCampaignRound` rejected with. A discriminated union on
+ * `consumedRound`: a round that never started carries no outcome to record,
+ * and one that did always carries one — never both `undefined` at once, so
+ * `recordCampaignRound` never has to tolerate a missing outcome.
+ */
+type CampaignFailureClassification =
+  | {
+    /**
+     * `false`: the core never committed `attempt/started`, so no budget was
+     * consumed — `SELF_DEV_BUDGET_EXHAUSTED`, `SELF_DEV_INVALID_STATE`, and
+     * `SELF_DEV_RUNNER_ATTEMPT_ACTIVE` are the recognized rejections where
+     * that happens (all three fire before the core commits anything), and an
+     * unrecognized exception is treated the same way, conservatively, since
+     * this function cannot otherwise tell.
+     */
+    readonly consumedRound: false
+    /**
+     * The campaign always ends now: `exhausted` for a refused start over
+     * budget, `stopped` for a refused start the core rejected for any other
+     * reason (including a status the live-status check ahead of this round
+     * should already have caught — this is the fallback if it did not),
+     * `failed` for an unrecognized crash.
+     */
+    readonly terminalStatus: 'exhausted' | 'stopped' | 'failed'
+    /** One-line reason recorded on the terminal record. */
+    readonly reason: string
+  }
+  | {
+    /** `true`: the round started and so consumed one unit of budget. */
+    readonly consumedRound: true
+    /** The round outcome to record. */
+    readonly outcome: Exclude<CampaignRecord['lastOutcome'], 'passed' | undefined>
+    /** `'stopped'` for a cancelled round; `undefined` for every other failure, retried or stopped per `unattended`. */
+    readonly terminalStatus: 'stopped' | undefined
+    /** One-line reason recorded when this round's failure does end the campaign. */
+    readonly reason: string
+  }
+
+/**
+ * Classify one campaign round's rejection. A recognized core or runner error
+ * other than the codes named below is an ordinary round failure the loop
+ * retries (when `unattended`) exactly like a human retrying a failed
+ * `runAttempt` — the core's own `noProgressAttemptLimit` is what eventually
+ * turns a persistently broken round into a reactive stop, which the live
+ * status check ahead of the next round is what actually catches (see
+ * `checkTaskReadyForRound`); `SELF_DEV_INVALID_STATE` and
+ * `SELF_DEV_RUNNER_ATTEMPT_ACTIVE` end the campaign here too, as a second,
+ * narrower net for the race that check cannot close — status flipping, or
+ * another in-flight attempt claiming the runner's own per-task slot, in the
+ * gap between that check and this round's own `runAttempt` call. An
+ * exception this function does not recognize at all is treated as a crash:
+ * terminal, never retried, and its message is never swallowed.
+ * @param error - whatever `launchCampaignRound` rejected with.
+ * @returns the classification driving `runCampaignLoop`'s next step.
+ */
+function classifyCampaignFailure(error: unknown): CampaignFailureClassification {
+  const message = error instanceof Error ? error.message : String(error)
+  if (error instanceof SelfDevelopmentError || error instanceof SelfDevelopmentRunnerError) {
+    if (error.code === 'SELF_DEV_BUDGET_EXHAUSTED') {
+      return { consumedRound: false, terminalStatus: 'exhausted', reason: message }
+    }
+    if (error.code === 'SELF_DEV_INVALID_STATE' || error.code === 'SELF_DEV_RUNNER_ATTEMPT_ACTIVE') {
+      return { consumedRound: false, terminalStatus: 'stopped', reason: message }
+    }
+    if (error.code === 'SELF_DEV_ATTEMPT_CANCELLED') {
+      return { consumedRound: true, outcome: 'cancelled', terminalStatus: 'stopped', reason: message }
+    }
+    const outcome = error.code === 'SELF_DEV_LATE_RESULT' ? 'late' : 'failed'
+    return { consumedRound: true, outcome, terminalStatus: undefined, reason: message }
+  }
+  // Not a recognized core or runner error at all: a crash, not a round
+  // outcome. `consumedRound: false` leaves `rounds` and `lastOutcome`
+  // untouched — this function cannot tell whether the core ever committed
+  // `attempt/started` — and `terminalStatus` ends the loop immediately.
+  return { consumedRound: false, terminalStatus: 'failed', reason: message }
 }
 
 /**
@@ -895,12 +1529,13 @@ function sortedUnique(paths: readonly string[]): string[] {
 function fromProfile<K extends 'worktree' | 'artifactPaths' | 'acceptancePath' | 'loopbackAllowlist' | 'confirmedBy'>(
   profile: LaunchProfile | undefined,
   field: K,
+  context: 'runAttempt' | 'startCampaign' = 'runAttempt',
 ): LaunchProfile[K] {
   const value = profile?.[field]
   if (value === undefined) {
     throw new SelfDevelopmentRemoteError(
       'self-development/config-invalid',
-      `runAttempt.${field} is missing and the task has no launch profile`,
+      `${context}.${field} is missing and the task has no launch profile`,
     )
   }
   return value
@@ -920,13 +1555,16 @@ function readApprovedBy(approval: BudgetApprovalInput): string {
  * @param config - configuration as parsed from cordis.yml.
  * @returns the same configuration once every field is proven usable.
  * @throws SelfDevelopmentRemoteError with `self-development/config-invalid` when the control directory
- *   is not an absolute path.
+ *   is not an absolute path, or `maxConcurrentCampaigns` is not a positive finite integer.
  */
 function validateConfig(config: RemoteConfig): RemoteConfig {
   const invalid = (detail: string): SelfDevelopmentRemoteError =>
     new SelfDevelopmentRemoteError('self-development/config-invalid', `self-development remote config is invalid: ${detail}`)
   if (config.controlDirectory.length === 0 || !isAbsolute(config.controlDirectory)) {
     throw invalid(`controlDirectory ${JSON.stringify(config.controlDirectory)} must be an absolute path`)
+  }
+  if (!Number.isInteger(config.maxConcurrentCampaigns) || config.maxConcurrentCampaigns < 1) {
+    throw invalid(`maxConcurrentCampaigns must be a positive finite integer, got ${String(config.maxConcurrentCampaigns)}`)
   }
   return config
 }

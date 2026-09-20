@@ -12,8 +12,17 @@ import { CapabilityDigest, digestJson } from '@deepseek-ai/dsh-workflow-self-dev
 import type { CapabilityEvidence, CapabilitySource, ClockObservation } from '@deepseek-ai/dsh-workflow-self-development'
 import { SelfDevelopmentRunnerError } from './runtime.ts'
 
-/** The only acknowledgement wording a supervised launch accepts. */
-const SUPERVISED_ACKNOWLEDGEMENT = 'supervised-not-unattended'
+/**
+ * The acknowledgement wordings a launch accepts. `supervised-not-unattended`
+ * asserts a person was present at that launch. `unattended-accepted` records
+ * that a person accepted, once at campaign start, that later campaign rounds
+ * launch without a per-round confirmation; it is not an isolation guarantee
+ * and never claims one.
+ */
+export type PresenceAcknowledgement = 'supervised-not-unattended' | 'unattended-accepted'
+
+/** The acknowledgement wordings a confirmation may carry. */
+const ACKNOWLEDGEMENTS: readonly PresenceAcknowledgement[] = ['supervised-not-unattended', 'unattended-accepted']
 
 /** Matches the boot ids `HostClock` derives (lowercase sha-256 hex). */
 const BOOT_ID_PATTERN = /^[0-9a-f]{64}$/
@@ -27,8 +36,9 @@ const DIGEST_PATTERN = /^[0-9a-f]{64}$/
 /**
  * One concrete human confirmation captured at attempt launch. It records who
  * confirmed, when (one trusted clock observation), which experiment worktree
- * the attempt runs in, which loopback ports the session may use, and that the
- * confirmation asserts supervision — not unattended isolation. It also binds
+ * the attempt runs in, which loopback ports the session may use, and the
+ * acknowledgement wording: either supervision at that launch, or the one-time
+ * acceptance a campaign records for its later automatic rounds. It also binds
  * the launch facts the person reviewed: the task, the frozen plan, the
  * acceptance definition bytes, and the artifact path set, so a confirmation
  * given for one launch cannot be replayed against different content.
@@ -42,8 +52,12 @@ export interface PresenceConfirmation {
   readonly worktree: string
   /** Loopback ports the supervised session may bind. */
   readonly loopbackAllowlist: readonly number[]
-  /** Literal acknowledgement that this launch is supervised, not unattended. */
-  readonly acknowledgement: 'supervised-not-unattended'
+  /**
+   * Literal acknowledgement wording. `unattended-accepted` appears only on
+   * confirmations a campaign record derives for its automatic rounds; it is
+   * the recorded fact of the one-time acceptance, not an isolation guarantee.
+   */
+  readonly acknowledgement: PresenceAcknowledgement
   /** Task the confirmation covers; a launch must address the same task id. */
   readonly taskId: string
   /** Frozen test plan digest the person confirmed the launch runs against. */
@@ -62,7 +76,7 @@ export interface PresenceConfirmation {
  * @throws SelfDevelopmentRunnerError with `SELF_DEV_RUNNER_CONFIG_INVALID` when the confirmer is
  *   not a non-empty string, the clock observation is not a trusted shape, the
  *   worktree is not absolute, the loopback allowlist is not a port list within
- *   0–65535, the acknowledgement does not state supervision, the task id is not
+ *   0–65535, the acknowledgement is not one of the accepted wordings, the task id is not
  *   a plain path component, a digest is not lowercase sha-256 hex, or an
  *   artifact path is absolute or carries an empty, dot, or dot-dot segment.
  */
@@ -93,8 +107,9 @@ function validateConfirmation(value: unknown): PresenceConfirmation {
   ) {
     throw invalid(`loopbackAllowlist ${JSON.stringify(confirmation.loopbackAllowlist)} must list ports 0–65535`)
   }
-  if (confirmation.acknowledgement !== SUPERVISED_ACKNOWLEDGEMENT) {
-    throw invalid(`acknowledgement must be the literal ${JSON.stringify(SUPERVISED_ACKNOWLEDGEMENT)}`)
+  const acknowledgement = confirmation.acknowledgement as PresenceAcknowledgement
+  if (!ACKNOWLEDGEMENTS.includes(acknowledgement)) {
+    throw invalid(`acknowledgement must be one of ${ACKNOWLEDGEMENTS.map(wording => JSON.stringify(wording)).join(', ')}`)
   }
   if (typeof confirmation.taskId !== 'string' || !TASK_ID_PATTERN.test(confirmation.taskId)) {
     throw invalid(`taskId ${JSON.stringify(confirmation.taskId)} must be a plain task id (1–64 characters: letter or digit, then letters, digits, dots, underscores, or hyphens)`)
@@ -115,7 +130,7 @@ function validateConfirmation(value: unknown): PresenceConfirmation {
     confirmedAt: { bootId: confirmedAt.bootId, monotonicMs: confirmedAt.monotonicMs },
     worktree: confirmation.worktree,
     loopbackAllowlist: [...(confirmation.loopbackAllowlist as number[])],
-    acknowledgement: confirmation.acknowledgement,
+    acknowledgement,
     taskId: confirmation.taskId,
     testPlanDigest,
     acceptanceDefinitionDigest,

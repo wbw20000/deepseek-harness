@@ -351,11 +351,75 @@ Stable-side Remote facade. The supervised runner is optional: every method that 
 @Remote('runAttempt') async runAttempt(request: RemoteRunAttemptRequest): Promise<RemoteRunAttemptOutcome>
 
 /**
- * The task ids of the attempts the runner currently owns.
- * @returns a read-only snapshot, empty when the runner plugin is absent.
+ * The task ids of the attempts the runner currently owns, plus every task
+ * with a campaign loop this process currently owns.
+ * @returns a read-only snapshot, deduplicated; excludes the runner's own
+ *   set only when the runner plugin is absent.
  * @throws SelfDevelopmentRemoteError with `self-development/disabled` while the facade is disabled.
  */
 @Remote('activeTasks') async activeTasks(): Promise<readonly string[]>
+
+/**
+ * Start one unattended campaign: create its record and launch the first
+ * round immediately, in the background. The returned state is the freshly
+ * created record (`status: 'running'`, `rounds: 0`) — it never waits for
+ * the first round, which can run for as long as the approved budget
+ * allows; poll `campaign(taskId)` for progress.
+ *
+ * `options.unattended` decides both the acknowledgement every round this
+ * campaign derives carries and whether the loop continues past the first
+ * round. `true`: every round — including the first — carries
+ * `acknowledgement: 'unattended-accepted'`, the recorded fact of this
+ * call's one-time acceptance covering the whole budget window, never an
+ * isolation guarantee; the loop keeps launching rounds, each with a
+ * freshly derived `PresenceConfirmation` and a fresh operation id, until a
+ * terminal status. `false`: this call's acceptance covers only the first
+ * round, which therefore carries `acknowledgement:
+ * 'supervised-not-unattended'` — the same literal a direct `runAttempt`
+ * asserts. A pass still reaches `status: 'passed'`, sharing the loop's one
+ * success path with an `unattended: true` campaign — passing is already
+ * terminal regardless of `unattended`. Only a failure that is not itself
+ * campaign-terminal stops the loop early because `unattended` is `false`:
+ * `status: 'stopped'`, leaving further rounds to a direct manual
+ * `runAttempt`.
+ * @param taskId - task identity.
+ * @param expectedRevision - revision the caller observed; binds the first round only, later rounds re-read the current revision.
+ * @param options - campaign options; host-only in full.
+ * @returns the task id and the freshly created campaign state.
+ * @throws SelfDevelopmentRemoteError with `self-development/disabled`, `self-development/config-invalid`
+ *   (malformed fields, a task that already has a running campaign, or a call that would exceed
+ *   `maxConcurrentCampaigns`), `self-development/actor-forbidden`, `self-development/host-only-field`
+ *   from a non-host caller, or `self-development/runner-unavailable` when the runner plugin is not loaded.
+ */
+@Remote('startCampaign') async startCampaign(taskId: string, expectedRevision: number, options: CampaignOptions): Promise<{ readonly taskId: string readonly campaign: CampaignState }>
+
+/**
+ * Read one task's current campaign state.
+ * @param taskId - task identity.
+ * @returns the stored campaign state, or `undefined` when the task has never had a campaign.
+ * @throws SelfDevelopmentRemoteError with `self-development/disabled`, `self-development/config-invalid`
+ *   (malformed task id, or a corrupt stored record), or `self-development/host-only-field` from a
+ *   non-host caller.
+ */
+@Remote('campaign') async campaign(taskId: string): Promise<CampaignState | undefined>
+
+/**
+ * Stop one task's campaign: cancel whatever attempt is currently in flight
+ * through the runner and end the loop. Already terminal (not `running`) is
+ * a no-op that returns the stored state unchanged — nothing is left in
+ * flight to cancel. Requires the runner plugin, exactly like
+ * `startCampaign`: a campaign cannot exist without one having launched its
+ * rounds.
+ * @param taskId - task identity.
+ * @param reason - human-readable stop reason recorded on the campaign; never entered into an event title verbatim.
+ * @returns the finalized (or already-terminal) campaign state.
+ * @throws SelfDevelopmentRemoteError with `self-development/disabled`, `self-development/config-invalid`
+ *   (malformed fields, or no campaign record exists for this task), `self-development/host-only-field`
+ *   from a non-host caller, or `self-development/runner-unavailable` when the runner plugin is not loaded.
+ * @throws whatever the core or the runner rejects with, converted at the facade boundary into
+ *   `self-development/core` (`details.code` keeps the original code).
+ */
+@Remote('stopCampaign') async stopCampaign(taskId: string, reason: string): Promise<CampaignState>
 ```
 
 Source: [`packages/workflow/workflow-self-development-remote/src/index.ts`](../../packages/workflow/workflow-self-development-remote/src/index.ts)
@@ -528,6 +592,46 @@ Source: [`packages/workflow/workflow/src/index.ts`](../../packages/workflow/work
 <a id="self-development-events"></a>
 
 ### `self-development/*` events
+
+<a id="self-developmentcampaign-ended--emit"></a>
+
+#### `self-development/campaign-ended` — emit
+
+One unattended campaign's loop ended without a pass: its budget was exhausted, a human called `stopCampaign`, or an unrecognized failure ended it. The closed-vocabulary `status` reaches the title; the free-text `CampaignState.reason` never leaves the Remote facade.
+
+```ts cordis-catalog
+/**
+ * One unattended campaign's loop ended without a pass: its budget was
+ * exhausted, a human called `stopCampaign`, or an unrecognized failure
+ * ended it. The closed-vocabulary `status` reaches the title; the
+ * free-text `CampaignState.reason` never leaves the Remote facade.
+ * @param payload - the task id, the closed-vocabulary end status, and the observed revision.
+ * @mode emit
+ */
+'self-development/campaign-ended'(payload: CampaignEndedPayload): void
+```
+
+Source: [`packages/workflow/workflow-self-development-events/src/campaign.ts`](../../packages/workflow/workflow-self-development-events/src/campaign.ts)
+
+<a id="self-developmentcampaign-passed--emit"></a>
+
+#### `self-development/campaign-passed` — emit
+
+One unattended campaign reached a passing round — the same durable `task/passed` outcome a manual `runAttempt` produces, reached through the campaign's own automatic rounds instead. Fixed title; carries no round number or free text.
+
+```ts cordis-catalog
+/**
+ * One unattended campaign reached a passing round — the same durable
+ * `task/passed` outcome a manual `runAttempt` produces, reached through
+ * the campaign's own automatic rounds instead. Fixed title; carries no
+ * round number or free text.
+ * @param payload - the task id and the post-commit projection revision.
+ * @mode emit
+ */
+'self-development/campaign-passed'(payload: CampaignPassedPayload): void
+```
+
+Source: [`packages/workflow/workflow-self-development-events/src/campaign.ts`](../../packages/workflow/workflow-self-development-events/src/campaign.ts)
 
 <a id="self-developmentcommitted--emit"></a>
 

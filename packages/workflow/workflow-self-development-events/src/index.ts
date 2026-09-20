@@ -12,6 +12,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import { Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { resolveSelfDevelopmentEventsConfig } from './config.ts'
+import { mapCampaignEndedToEvent, mapCampaignPassedToEvent } from './campaign.ts'
+import type { CampaignEndedPayload, CampaignPassedPayload } from './campaign.ts'
 import { mapCommittedToEvent } from './mapping.ts'
 import type { CommittedPayload } from './mapping.ts'
 import { runNotify } from './notify.ts'
@@ -20,6 +22,8 @@ import type { ResolvedSelfDevelopmentEventsConfig, SelfDevelopmentEvent, SelfDev
 
 export * from './types.ts'
 export { DEFAULT_RECENT_LIMIT, resolveSelfDevelopmentEventsConfig } from './config.ts'
+export { mapCampaignEndedToEvent, mapCampaignPassedToEvent } from './campaign.ts'
+export type { CampaignEndedPayload, CampaignEndedStatus, CampaignPassedPayload } from './campaign.ts'
 export { mapCommittedToEvent } from './mapping.ts'
 export type { CommittedPayload } from './mapping.ts'
 export { NOTIFY_TIMEOUT_MS, runNotify } from './notify.ts'
@@ -81,6 +85,8 @@ export class SelfDevelopmentEvents extends Service {
       await this.drain()
     }, 'self-development-events: drain in-flight notifications')
     ctx.on('self-development/committed', (payload) => { this.ingest(payload) })
+    ctx.on('self-development/campaign-passed', (payload) => { this.ingestCampaignPassed(payload) })
+    ctx.on('self-development/campaign-ended', (payload) => { this.ingestCampaignEnded(payload) })
   }
 
   /**
@@ -114,12 +120,30 @@ export class SelfDevelopmentEvents extends Service {
   }
 
   /**
-   * Fold one durable commit into the unified event, publish it to the buffer
-   * and the subscribers, and start one notification delivery when configured.
+   * Fold one durable commit into the unified event and publish it, when the
+   * commit maps to one.
    */
   private ingest(payload: CommittedPayload): void {
     const event = mapCommittedToEvent(payload, this.now)
     if (event === undefined) return
+    this.publish(event)
+  }
+
+  /** Fold one campaign-passed payload into the unified event and publish it. */
+  private ingestCampaignPassed(payload: CampaignPassedPayload): void {
+    this.publish(mapCampaignPassedToEvent(payload, this.now))
+  }
+
+  /** Fold one campaign-ended payload into the unified event and publish it. */
+  private ingestCampaignEnded(payload: CampaignEndedPayload): void {
+    this.publish(mapCampaignEndedToEvent(payload, this.now))
+  }
+
+  /**
+   * Publish one already-mapped event to the buffer and the subscribers, and
+   * start one notification delivery when configured.
+   */
+  private publish(event: SelfDevelopmentEvent): void {
     this.recentBuffer.push(event)
     if (this.recentBuffer.length > this.resolved.recentLimit) {
       this.recentBuffer.splice(0, this.recentBuffer.length - this.resolved.recentLimit)

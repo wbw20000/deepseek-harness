@@ -139,6 +139,7 @@ async function makeStack(): Promise<{
     enabled: true,
     allowedActors: [],
     controlDirectory: env.controlDirectory,
+    maxConcurrentCampaigns: 2,
   })
   const port = String(context.webServer.port)
   for (const host of [`127.0.0.1:${port}`, PHONE_HOST]) exchangeCookie(host)

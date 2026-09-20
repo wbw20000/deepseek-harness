@@ -16,6 +16,7 @@ import type {
   TaskStopReason,
   TaskHandoffReason,
 } from '@deepseek-ai/dsh-workflow-self-development'
+import type { PresenceAcknowledgement } from '@deepseek-ai/dsh-workflow-self-development-runner'
 
 export type {
   Attempt,
@@ -27,6 +28,7 @@ export type {
   TaskStopReason,
   TaskHandoffReason,
 }
+export type { PresenceAcknowledgement }
 
 /** Which limits a budget approval carries, as the core defines it. */
 export type BudgetMode = BudgetApproval['mode']
@@ -79,6 +81,15 @@ export interface RemoteConfig {
    * it never touches the `tasks/` subtree.
    */
   readonly controlDirectory: string
+  /**
+   * Default cap on simultaneously `running` campaigns across every task,
+   * applied when a `startCampaign` call omits
+   * {@link CampaignOptions.maxConcurrentCampaigns}. The deployment schema
+   * defaults this to 2 for `cordis.yml` loading; a direct construction (as
+   * every test uses) must set it explicitly, exactly like `enabled` and
+   * `allowedActors` above.
+   */
+  readonly maxConcurrentCampaigns: number
 }
 
 /**
@@ -181,11 +192,23 @@ export interface ConfirmedPlanInput {
 
 /** Wire form of a budget approval handed to `approveBudget`. */
 export interface BudgetApprovalInput {
-  /** Which limits the approval carries. */
-  readonly mode: BudgetMode
+  /**
+   * Convenience literal expanding to a fixed 24-hour time budget:
+   * `{ mode: 'time', durationMs: 86_400_000, phaseTimeoutMs: 600_000,
+   * maxStepsPerAttempt: 40, noProgressAttemptLimit: 5 }`. Any field also set
+   * explicitly below overrides that field's expanded default. Required unless
+   * `mode` is set explicitly.
+   */
+  readonly preset?: 'unlimited' | undefined
+  /** Which limits the approval carries. Required unless `preset` is set. */
+  readonly mode?: BudgetMode | undefined
   /** Maximum attempt rounds; required when mode allows rounds. */
   readonly maxRounds?: number | undefined
-  /** Maximum development run time in milliseconds; required when mode allows time. */
+  /**
+   * Maximum development run time in milliseconds; required when mode allows
+   * time. Hard-capped at 24 hours (86_400_000ms), explicit or preset-expanded;
+   * a larger value refuses with `self-development/config-invalid`.
+   */
   readonly durationMs?: number | undefined
   /** Maximum milliseconds for one phase; required for a rounds-only budget. */
   readonly phaseTimeoutMs?: number | undefined
@@ -417,4 +440,84 @@ export interface RemoteRunAttemptOutcome {
   readonly worktree?: string
   /** Operation id the facade generated for this launch. */
   readonly operationId: string
+}
+
+/**
+ * Terminal or in-progress state of one unattended campaign.
+ * `running` is the only non-terminal status; every other status ends the
+ * campaign's loop for good — a stopped or exhausted or failed campaign is
+ * never resumed automatically, and a passed campaign never restarts.
+ */
+export type CampaignStatus = 'running' | 'passed' | 'exhausted' | 'stopped' | 'failed'
+
+/**
+ * How one campaign round ended, mirroring the runner's terminal-decision
+ * vocabulary. Recorded only for a round that actually started (consumed
+ * budget); a round refused before it started (budget exhausted) leaves the
+ * campaign's `lastOutcome` from its previous round untouched.
+ */
+export type CampaignRoundOutcome = 'passed' | 'failed' | 'cancelled' | 'late' | 'unknown'
+
+/**
+ * Options handed to `startCampaign`. Host-only: refused in full from a
+ * non-host caller with `self-development/host-only-field`, the same gate
+ * `runAttempt` and `createTask` apply to isolation settings.
+ */
+export interface CampaignOptions {
+  /**
+   * `true`: the one `acceptedBy` acceptance below covers every automatic
+   * round inside the approved budget window — every round, including the
+   * first, carries `acknowledgement: 'unattended-accepted'` — and the
+   * campaign keeps launching rounds until a terminal status. `false`: this
+   * call's acceptance covers only the one round it launches automatically,
+   * which therefore carries `acknowledgement: 'supervised-not-unattended'`
+   * — the same literal a direct `runAttempt` asserts. A pass still reaches
+   * `status: 'passed'` — passing is terminal regardless of `unattended` —
+   * and only a non-terminal failure stops the campaign early because
+   * `unattended` is `false`: `status: 'stopped'`, leaving further rounds to
+   * a direct manual `runAttempt` call.
+   */
+  readonly unattended: boolean
+  /**
+   * The person accepting this campaign's rounds; checked against
+   * `allowedActors` like an explicit `runAttempt.confirmedBy`. Recorded as
+   * `PresenceConfirmation.confirmedBy` on every round this campaign derives.
+   */
+  readonly acceptedBy: string
+  /**
+   * Cap on simultaneously `running` campaigns across every task, for this
+   * call only. Defaults to the deployment's configured
+   * `maxConcurrentCampaigns` (itself defaulting to 2) when omitted.
+   */
+  readonly maxConcurrentCampaigns?: number | undefined
+}
+
+/**
+ * Read-only view of one campaign's state, returned by `startCampaign`,
+ * `campaign`, and `stopCampaign`. Never claims operating-system isolation:
+ * `acknowledgement` is `'unattended-accepted'` for an `unattended: true`
+ * campaign, recording only that a human accepted, once, that every round
+ * launches without a per-round confirmation; for an `unattended: false`
+ * campaign it is `'supervised-not-unattended'`, the one automatic round's
+ * own launch-time acceptance.
+ */
+export interface CampaignState {
+  /** Task the campaign belongs to. */
+  readonly taskId: string
+  /** Current lifecycle status; see {@link CampaignStatus}. */
+  readonly status: CampaignStatus
+  /** Wall-clock milliseconds when `startCampaign` created this campaign. */
+  readonly startedAt: number
+  /** Wall-clock milliseconds of the last recorded change to this campaign. */
+  readonly updatedAt: number
+  /** Rounds actually started (budget consumed); a budget-exhausted refusal never increments this. */
+  readonly rounds: number
+  /** Attempt id of the most recent round that started; absent before any round has. */
+  readonly lastAttemptId?: string | undefined
+  /** How the most recent started round ended; see {@link CampaignRoundOutcome}. */
+  readonly lastOutcome?: CampaignRoundOutcome | undefined
+  /** One-line reason for a terminal `exhausted`, `stopped`, or `failed` status; absent while `running` or `passed`. */
+  readonly reason?: string | undefined
+  /** Presence acknowledgement every round this campaign derives carries; see {@link CampaignOptions.unattended}. */
+  readonly acknowledgement: PresenceAcknowledgement
 }

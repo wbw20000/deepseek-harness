@@ -3893,10 +3893,19 @@ export interface RemoteConfig {
    * it never touches the `tasks/` subtree.
    */
   readonly controlDirectory: string
+  /**
+   * Default cap on simultaneously `running` campaigns across every task,
+   * applied when a `startCampaign` call omits
+   * {@link CampaignOptions.maxConcurrentCampaigns}. The deployment schema
+   * defaults this to 2 for `cordis.yml` loading; a direct construction (as
+   * every test uses) must set it explicitly, exactly like `enabled` and
+   * `allowedActors` above.
+   */
+  readonly maxConcurrentCampaigns: number
 }
 ```
 
-来源： [`packages/workflow/workflow-self-development-remote/src/types.ts:63`](../packages/workflow/workflow-self-development-remote/src/types.ts)
+来源： [`packages/workflow/workflow-self-development-remote/src/types.ts:65`](../packages/workflow/workflow-self-development-remote/src/types.ts)
 
 <a id="deepseek-aidsh-workflow-self-development-runner"></a>
 
