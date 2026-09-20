@@ -84,21 +84,6 @@ function gateFailureReason(command: string, result: GateRunResult): string {
 }
 
 /**
- * Build the `verify(worktree)` function `self_development_merge` passes to
- * `workspaces.integrate`: first the runner's own acceptance verification
- * (independent of the model, per the DI frozen interface), then every
- * configured `integrationGates` command in order with `sh -c`. The first
- * failure of either stops the sequence.
- * @param runner - the runner verification port; the caller checks this is
- *   mounted before building `verify` at all — merging to stable without an
- *   independent acceptance check is not a degrade this function offers.
- * @param config - resolved deployment config, for the acceptance path, the
- *   experiments root, and the configured integration gates.
- * @param taskId - the task whose acceptance definition is being verified.
- * @param deps - injectable shell runner, replaceable by direct unit tests.
- * @returns the `verify` function.
- */
-/**
  * Judge the acceptor's completed run: every assertion of every case must be
  * `pass`, and the run must have neither timed out nor been cancelled. The
  * runner reports assertion failures inside the run, never as its own failure,
@@ -120,6 +105,21 @@ export function judgeAcceptanceRun(report: AcceptanceRunView): VerifyOutcome {
   return { ok: false, reason: `acceptance failed (exit code ${report.exitCode}): ${failures.join('; ')}` }
 }
 
+/**
+ * Build the `verify(worktree)` function `self_development_merge` passes to
+ * `workspaces.integrate`: first the runner's own acceptance verification
+ * (independent of the model, per the DI frozen interface), then every
+ * configured `integrationGates` command in order with `sh -c`. The first
+ * failure of either stops the sequence.
+ * @param runner - the runner verification port; the caller checks this is
+ *   mounted before building `verify` at all — merging to stable without an
+ *   independent acceptance check is not a degrade this function offers.
+ * @param config - resolved deployment config, for the acceptance path, the
+ *   experiments root, and the configured integration gates.
+ * @param taskId - the task whose acceptance definition is being verified.
+ * @param deps - injectable shell runner, replaceable by direct unit tests.
+ * @returns the `verify` function.
+ */
 export function buildVerify(
   runner: RunnerVerifyPort,
   config: ResolvedChatConfig,
