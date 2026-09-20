@@ -12,7 +12,7 @@ import { chmod, mkdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { HostClock, SelfDevelopmentRunnerError } from '@deepseek-ai/dsh-workflow-self-development-runner'
+import { HostClock, HumanPresenceCapabilitySource, SelfDevelopmentRunnerError } from '@deepseek-ai/dsh-workflow-self-development-runner'
 import type {
   SelfDevelopmentRunner,
   SupervisedAttemptOutcome,
@@ -105,7 +105,56 @@ interface HangingRound {
 }
 
 /** A runner test double whose `runAttempt` outcomes are scripted per call. */
-function scriptedRunner(): {
+/**
+ * Codes `classifyCampaignFailure` already resolves as terminal without
+ * consulting the core's revision (see `runCampaignLoop`'s catch block):
+ * routing one of these through a real `startAttempt` would only spend an
+ * unneeded round on the real core for no observable difference.
+ */
+const REVISION_INDEPENDENT_CODES = new Set([
+  'SELF_DEV_BUDGET_EXHAUSTED',
+  'SELF_DEV_INVALID_STATE',
+  'SELF_DEV_ATTEMPT_CANCELLED',
+])
+
+/**
+ * Drive a real `startAttempt` whose side effect immediately rejects with
+ * `error`, so the core commits `attempt/started` then `attempt/failed` for
+ * real (genuinely advancing the projection revision) before re-throwing
+ * `error` — verbatim, since `#settleAttempt` re-throws a `SelfDevelopmentError`
+ * instance unchanged. Scoped to `SelfDevelopmentError` instances only: the
+ * core launders anything else (a plain `Error`, a string, a
+ * `SelfDevelopmentRunnerError`) into a generic `SelfDevelopmentError` with
+ * `SELF_DEV_INVALID_RESULT`, which would silently change which branch of
+ * `classifyCampaignFailure` a test meant to exercise.
+ * @param tasks - the harness's real core service.
+ * @param request - the scripted attempt request this failure answers.
+ * @param error - the exact `SelfDevelopmentError` the caller must see.
+ * @throws `error`, once the core has genuinely committed the failed attempt.
+ */
+async function failForRealAtTheCore(
+  tasks: SelfDevelopmentTasks,
+  request: SupervisedAttemptRequest,
+  error: SelfDevelopmentError,
+): Promise<never> {
+  const controller = await tasks.open(request.taskId, new HostClock())
+  await controller.startAttempt({
+    taskId: SelfDevTaskId(request.taskId),
+    expectedRevision: request.expectedRevision,
+    operationId: SelfDevOperationId(request.operationId),
+    sourceDigest: '0'.repeat(64),
+    artifactDigest: '0'.repeat(64),
+    clock: new HostClock(),
+    capabilitySource: new HumanPresenceCapabilitySource(request.presence),
+    sideEffect: () => { throw error },
+  })
+  // startAttempt's own sideEffect always rejects here, so this line is
+  // unreachable; it only satisfies the never-returning signature.
+  /* v8 ignore next */
+  throw error
+}
+
+function scriptedRunner(tasks: SelfDevelopmentTasks): {
   readonly service: SelfDevelopmentRunner
   readonly requests: SupervisedAttemptRequest[]
   readonly stopCalls: Array<{ readonly taskId: string; readonly expectedRevision: number; readonly operationId: string }>
@@ -127,7 +176,17 @@ function scriptedRunner(): {
           hangs.push({ resolve, reject })
         })
       }
-      if (next !== 'pass') throw next
+      if (next !== 'pass') {
+        // A campaign round classified as "ordinary, retry when unattended"
+        // must have genuinely reached the core, or runCampaignLoop's
+        // revision guard (added for the DH-a unattended-loop runaway fix)
+        // would wrongly end the campaign as 'failed' instead of letting the
+        // scripted outcome drive classifyCampaignFailure's intended branch.
+        if (next instanceof SelfDevelopmentError && !REVISION_INDEPENDENT_CODES.has(next.code)) {
+          await failForRealAtTheCore(tasks, request, next)
+        }
+        throw next
+      }
       const attemptId = `attempt-${requests.length}`
       return {
         operation: { revision: request.expectedRevision + 1, replayed: false },
@@ -172,6 +231,7 @@ function scriptedRunner(): {
 async function makeHarness(options: {
   readonly allowedActors?: readonly string[]
   readonly maxConcurrentCampaigns?: number
+  readonly roundDelayMs?: number
   readonly withRunner?: boolean
 } = {}): Promise<{
   readonly facade: SelfDevelopmentRemote
@@ -190,7 +250,7 @@ async function makeHarness(options: {
     checkpointInterval: 10,
   })
   const events = new SelfDevelopmentEvents(context, { recentLimit: 200 })
-  const runner = options.withRunner === false ? undefined : scriptedRunner()
+  const runner = options.withRunner === false ? undefined : scriptedRunner(tasks)
   if (runner !== undefined) context.provide('selfDevelopmentRunner', runner.service)
   let current: RemoteConnectionCaller | undefined
   context.provide('connection', { caller: { current: () => current } })
@@ -199,6 +259,7 @@ async function makeHarness(options: {
     allowedActors: [...(options.allowedActors ?? [])],
     controlDirectory: env.controlDirectory,
     maxConcurrentCampaigns: options.maxConcurrentCampaigns ?? 2,
+    roundDelayMs: options.roundDelayMs ?? 0,
   })
   return { facade, events, tasks, env, runner, setCaller: (caller) => { current = caller } }
 }
@@ -239,7 +300,20 @@ describe('boot-time config validation', () => {
     root = env.base
     context = new Context()
     const rejected = () => new SelfDevelopmentRemote(context!, {
-      enabled: true, allowedActors: [], controlDirectory: env.controlDirectory, maxConcurrentCampaigns,
+      enabled: true, allowedActors: [], controlDirectory: env.controlDirectory, maxConcurrentCampaigns, roundDelayMs: 0,
+    })
+    expect(rejected).toThrow(expect.objectContaining({ code: 'self-development/config-invalid' }))
+  })
+
+  it.each([
+    ['negative', -1],
+    ['fractional', 1.5],
+  ])('refuses a %s roundDelayMs at construction', async (_name, roundDelayMs) => {
+    const env = await makeEnvironment()
+    root = env.base
+    context = new Context()
+    const rejected = () => new SelfDevelopmentRemote(context!, {
+      enabled: true, allowedActors: [], controlDirectory: env.controlDirectory, maxConcurrentCampaigns: 2, roundDelayMs,
     })
     expect(rejected).toThrow(expect.objectContaining({ code: 'self-development/config-invalid' }))
   })
@@ -655,6 +729,38 @@ describe('campaign round loop', () => {
     expect(runner!.requests).toHaveLength(1)
   })
 
+  it('ends the campaign as failed, without retrying, when a round rejects with a runner code classifyCampaignFailure does not specially recognize and the core\'s revision never moved (the DH-a runaway-loop fix\'s own safety net)', async () => {
+    const { facade, runner, env } = await makeHarness()
+    // SELF_DEV_RUNNER_CONFIG_INVALID is deliberately not one of the codes
+    // classifyCampaignFailure resolves on its own (see its doc comment): the
+    // runner package throws it from more than one call site, only some of
+    // which precede attempt/started, so only the live revision comparison —
+    // not the code alone — can tell this specific round apart from one that
+    // genuinely reached the core. The scripted stub never touches the real
+    // core for a SelfDevelopmentRunnerError, so the projection's revision
+    // here stays exactly where readyTaskWithProfile left it, reproducing
+    // the "never reached the core" case the fix exists to catch.
+    runner!.enqueue(new SelfDevelopmentRunnerError('human-presence confirmation is invalid: confirmedBy must be a non-empty name', 'SELF_DEV_RUNNER_CONFIG_INVALID'))
+    const revision = await readyTaskWithProfile(facade, env)
+    await facade.startCampaign(TASK_ID, revision, options())
+    await vi.waitFor(async () => {
+      expect((await facade.campaign(TASK_ID))?.status).toBe('failed')
+    })
+    const finalState = await facade.campaign(TASK_ID)
+    // Never consumed: the guard fires before recordCampaignRound, exactly
+    // like the two pre-flight codes classifyCampaignFailure does recognize
+    // above — this round is indistinguishable from those in every way that
+    // matters except which mechanism caught it.
+    expect(finalState).toMatchObject({ status: 'failed', rounds: 0 })
+    expect(finalState?.lastOutcome).toBeUndefined()
+    expect(finalState?.reason).toContain('round did not reach the core')
+    expect(finalState?.reason).toContain('confirmedBy must be a non-empty name')
+    // unattended: true would otherwise retry an ordinary failure — the
+    // single request proves the guard, not budget exhaustion or a second
+    // failure, is what ended this campaign after exactly one round.
+    expect(runner!.requests).toHaveLength(1)
+  })
+
   it('reads the live core status before every round and maps a cancelled stop observed between rounds to stopped, not exhausted', async () => {
     const { facade, runner, env, tasks } = await makeHarness()
     const hanging = runner!.enqueueHanging()
@@ -801,7 +907,7 @@ describe('campaign read path', () => {
       acknowledgement: 'unattended-accepted', unattended: true, acceptedBy: 'tester',
     })
     const recovered = new SelfDevelopmentRemote(context, {
-      enabled: true, allowedActors: [], controlDirectory: env.controlDirectory, maxConcurrentCampaigns: 2,
+      enabled: true, allowedActors: [], controlDirectory: env.controlDirectory, maxConcurrentCampaigns: 2, roundDelayMs: 0,
     })
     const state = await recovered.campaign(TASK_ID)
     expect(state).toMatchObject({ status: 'stopped', reason: PROCESS_RESTARTED_REASON, rounds: 2 })

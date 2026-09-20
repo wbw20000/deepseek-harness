@@ -108,6 +108,7 @@ async function makeFacade(): Promise<{
     allowedActors: [],
     controlDirectory: env.controlDirectory,
     maxConcurrentCampaigns: 2,
+    roundDelayMs: 0,
   })
   return { facade, setCaller: (caller) => { current = caller } }
 }
@@ -127,6 +128,7 @@ describe('caller determination', () => {
       allowedActors: [],
       controlDirectory: env.controlDirectory,
       maxConcurrentCampaigns: 2,
+      roundDelayMs: 0,
     })
     await expect(facade.createTask(SPEC, 0)).resolves.toMatchObject({ taskId: TASK_ID, replayed: false })
     // The host may set the host-only dataHome; the request then runs past the

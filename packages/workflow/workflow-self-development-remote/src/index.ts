@@ -159,6 +159,7 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
     allowedActors: z.array(z.string()).default([]),
     controlDirectory: z.string().required(),
     maxConcurrentCampaigns: z.number().step(1).default(2),
+    roundDelayMs: z.number().step(1).default(1000),
   }) as unknown as z<RemoteConfig>
 
   /** Validated deployment configuration. */
@@ -1160,20 +1161,40 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
           await this.finalizeCampaign(taskId, record, { status: classification.terminalStatus, reason: classification.reason })
           return
         }
+        if (classification.terminalStatus === undefined) {
+          // The only classification shape that can still be a round that
+          // never reached the core: every terminal shape above already
+          // named its own status, and a cancelled round (the other
+          // `consumedRound: true` shape) cannot fire before `attempt/started`
+          // commits — there is nothing in flight for `stopCampaign` to cancel
+          // otherwise. The core's revision is the ground truth a rejection's
+          // code cannot always be trusted to report on its own — see
+          // `classifyCampaignFailure`'s doc comment for the three runner
+          // codes this specifically exists to catch, and it equally catches
+          // any rejection this function has never seen before.
+          const revisionAfterRound = await this.currentRevision(taskId)
+          if (revisionAfterRound === expectedRevision) {
+            await this.finalizeCampaign(taskId, record, {
+              status: 'failed',
+              reason: `round did not reach the core: ${classification.reason}`,
+            })
+            return
+          }
+          record = await this.recordCampaignRound(taskId, record, { lastOutcome: classification.outcome })
+          if (!record.unattended) {
+            await this.finalizeCampaign(taskId, record, {
+              status: 'stopped',
+              reason: 'unattended is false; the automatic first round finished, further rounds require a manual runAttempt',
+            })
+            return
+          }
+          await this.delayBeforeNextRound()
+          expectedRevision = revisionAfterRound
+          continue
+        }
         record = await this.recordCampaignRound(taskId, record, { lastOutcome: classification.outcome })
-        if (classification.terminalStatus !== undefined) {
-          await this.finalizeCampaign(taskId, record, { status: classification.terminalStatus, reason: classification.reason })
-          return
-        }
-        if (!record.unattended) {
-          await this.finalizeCampaign(taskId, record, {
-            status: 'stopped',
-            reason: 'unattended is false; the automatic first round finished, further rounds require a manual runAttempt',
-          })
-          return
-        }
-        expectedRevision = await this.currentRevision(taskId)
-        continue
+        await this.finalizeCampaign(taskId, record, { status: classification.terminalStatus, reason: classification.reason })
+        return
       }
       if (!this.runningCampaigns.has(taskId)) return
       record = await this.recordCampaignRound(taskId, record, { lastAttemptId: outcome.attemptId, lastOutcome: 'passed' })
@@ -1331,6 +1352,20 @@ export class SelfDevelopmentRemote extends TypertRemoteService {
   }
 
   /**
+   * Wait `resolved.roundDelayMs` before the loop's next round. Depth-defense
+   * only, after a round the revision check above did not already end the
+   * campaign over: it slows a rapid string of genuinely-started-but-failing
+   * rounds instead of firing them back to back, and does nothing to bound
+   * their count on its own — `roundDelayMs: 0` (every test harness in this
+   * package) makes it a no-op wait.
+   * @returns nothing; resolves once the configured delay has elapsed.
+   */
+  private async delayBeforeNextRound(): Promise<void> {
+    if (this.resolved.roundDelayMs === 0) return
+    await new Promise<void>(resolve => setTimeout(resolve, this.resolved.roundDelayMs))
+  }
+
+  /**
    * Check the core's live status before this round launches. `status:
    * 'ready'` is the only status a round may start from; every other status
    * ends the campaign now, mapped from the closed-vocabulary `stopReason`
@@ -1419,11 +1454,16 @@ type CampaignFailureClassification =
   | {
     /**
      * `false`: the core never committed `attempt/started`, so no budget was
-     * consumed — `SELF_DEV_BUDGET_EXHAUSTED`, `SELF_DEV_INVALID_STATE`, and
-     * `SELF_DEV_RUNNER_ATTEMPT_ACTIVE` are the recognized rejections where
-     * that happens (all three fire before the core commits anything), and an
-     * unrecognized exception is treated the same way, conservatively, since
-     * this function cannot otherwise tell.
+     * consumed — `SELF_DEV_BUDGET_EXHAUSTED`, `SELF_DEV_INVALID_STATE`,
+     * `SELF_DEV_RUNNER_ATTEMPT_ACTIVE`, `SELF_DEV_RUNNER_ACCEPTANCE_INVALID`,
+     * `SELF_DEV_RUNNER_PRESENCE_MISMATCH`, and `SELF_DEV_RUNNER_LAUNCH_MISMATCH`
+     * are the recognized rejections where that happens (all six fire, at
+     * every one of their throw sites in the runner package, before the core
+     * commits anything — verified by reading every call site, not assumed
+     * from the code name; see the deliberate omissions noted on
+     * `runCampaignLoop`'s catch block), and an unrecognized exception is
+     * treated the same way, conservatively, since this function cannot
+     * otherwise tell.
      */
     readonly consumedRound: false
     /**
@@ -1452,16 +1492,33 @@ type CampaignFailureClassification =
  * Classify one campaign round's rejection. A recognized core or runner error
  * other than the codes named below is an ordinary round failure the loop
  * retries (when `unattended`) exactly like a human retrying a failed
- * `runAttempt` — the core's own `noProgressAttemptLimit` is what eventually
- * turns a persistently broken round into a reactive stop, which the live
- * status check ahead of the next round is what actually catches (see
- * `checkTaskReadyForRound`); `SELF_DEV_INVALID_STATE` and
- * `SELF_DEV_RUNNER_ATTEMPT_ACTIVE` end the campaign here too, as a second,
- * narrower net for the race that check cannot close — status flipping, or
- * another in-flight attempt claiming the runner's own per-task slot, in the
- * gap between that check and this round's own `runAttempt` call. An
- * exception this function does not recognize at all is treated as a crash:
- * terminal, never retried, and its message is never swallowed.
+ * `runAttempt` — `runCampaignLoop`'s own revision comparison, not this
+ * function, is what actually catches an ordinary-looking rejection that
+ * never reached the core (see its catch block); the core's own
+ * `noProgressAttemptLimit` is what eventually turns a persistently broken
+ * *started* round into a reactive stop, which the live status check ahead of
+ * the next round is what actually catches (see `checkTaskReadyForRound`).
+ * `SELF_DEV_INVALID_STATE` and `SELF_DEV_RUNNER_ATTEMPT_ACTIVE` end the
+ * campaign here too, as a second, narrower net for the race that check
+ * cannot close — status flipping, or another in-flight attempt claiming the
+ * runner's own per-task slot, in the gap between that check and this round's
+ * own `runAttempt` call. `SELF_DEV_RUNNER_ACCEPTANCE_INVALID`,
+ * `SELF_DEV_RUNNER_PRESENCE_MISMATCH`, and `SELF_DEV_RUNNER_LAUNCH_MISMATCH`
+ * end it as `failed` — a launch-configuration problem a retry cannot route
+ * around, not a task-lifecycle stop. Three sibling runner codes —
+ * `SELF_DEV_RUNNER_CONFIG_INVALID`, `SELF_DEV_RUNNER_WORKTREE_INVALID`, and
+ * `SELF_DEV_RUNNER_BUDGET_INVALID` — are deliberately *not* classified here
+ * even though each also has a pre-`attempt/started` throw site, because each
+ * also has at least one throw site reachable only after `attempt/started`
+ * commits (worktree/artifact digesting during the executor's own post-run
+ * content-stability check, a platform check inside process-group creation,
+ * and phase/deadline budget checks during phase execution, respectively) —
+ * classifying them here by code alone would misreport a real, budget-consuming
+ * attempt that happened to fail with one of these codes as one that never
+ * reached the core. `runCampaignLoop`'s revision comparison is what correctly
+ * tells the two apart for these three, from the observed fact rather than
+ * the code. An exception this function does not recognize at all is treated
+ * as a crash: terminal, never retried, and its message is never swallowed.
  * @param error - whatever `launchCampaignRound` rejected with.
  * @returns the classification driving `runCampaignLoop`'s next step.
  */
@@ -1473,6 +1530,13 @@ function classifyCampaignFailure(error: unknown): CampaignFailureClassification 
     }
     if (error.code === 'SELF_DEV_INVALID_STATE' || error.code === 'SELF_DEV_RUNNER_ATTEMPT_ACTIVE') {
       return { consumedRound: false, terminalStatus: 'stopped', reason: message }
+    }
+    if (
+      error.code === 'SELF_DEV_RUNNER_ACCEPTANCE_INVALID'
+      || error.code === 'SELF_DEV_RUNNER_PRESENCE_MISMATCH'
+      || error.code === 'SELF_DEV_RUNNER_LAUNCH_MISMATCH'
+    ) {
+      return { consumedRound: false, terminalStatus: 'failed', reason: message }
     }
     if (error.code === 'SELF_DEV_ATTEMPT_CANCELLED') {
       return { consumedRound: true, outcome: 'cancelled', terminalStatus: 'stopped', reason: message }
@@ -1555,7 +1619,8 @@ function readApprovedBy(approval: BudgetApprovalInput): string {
  * @param config - configuration as parsed from cordis.yml.
  * @returns the same configuration once every field is proven usable.
  * @throws SelfDevelopmentRemoteError with `self-development/config-invalid` when the control directory
- *   is not an absolute path, or `maxConcurrentCampaigns` is not a positive finite integer.
+ *   is not an absolute path, `maxConcurrentCampaigns` is not a positive finite integer, or
+ *   `roundDelayMs` is not a non-negative finite integer.
  */
 function validateConfig(config: RemoteConfig): RemoteConfig {
   const invalid = (detail: string): SelfDevelopmentRemoteError =>
@@ -1565,6 +1630,9 @@ function validateConfig(config: RemoteConfig): RemoteConfig {
   }
   if (!Number.isInteger(config.maxConcurrentCampaigns) || config.maxConcurrentCampaigns < 1) {
     throw invalid(`maxConcurrentCampaigns must be a positive finite integer, got ${String(config.maxConcurrentCampaigns)}`)
+  }
+  if (!Number.isInteger(config.roundDelayMs) || config.roundDelayMs < 0) {
+    throw invalid(`roundDelayMs must be a non-negative finite integer, got ${String(config.roundDelayMs)}`)
   }
   return config
 }
