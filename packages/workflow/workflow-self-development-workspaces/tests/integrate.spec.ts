@@ -18,7 +18,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { allocateWorkspace } from '../src/allocate.ts'
 import { integrate, rebaseOnto } from '../src/integration.ts'
 import { integrationLockPath } from '../src/integration-lock.ts'
-import type { IntegrationResult } from '../src/types.ts'
+import type { IntegrationResult, VerifyOutcome } from '../src/types.ts'
 import { makeSandbox, removeSandbox, commitAll, git, type Sandbox } from './harness.ts'
 
 const execFileAsync = promisify(execFile)
@@ -69,7 +69,7 @@ describe('integration', () => {
     const workspace = await allocate('task-a')
     const commit = await commitMarker(workspace.worktree, 'task-a done\n', 'task-a work')
     const result = await integrate(sandbox.config, { taskId: 'task-a', targetBranch: 'main', actor: 'tester' })
-    expect(result).toEqual({ status: 'integrated', commit })
+    expect(result).toEqual({ status: 'integrated', commit, baseMoved: false })
     await expect(git(sandbox.projectRoot, ['rev-parse', 'main'])).resolves.toContain(commit)
     await expect(readFile(join(sandbox.projectRoot, 'marker.txt'), 'utf8')).resolves.toBe('task-a done\n')
   })
@@ -142,7 +142,12 @@ describe('integration', () => {
     const commit = await commitMarker(workspace.worktree, 'task-a done\n', 'task-a work')
     await integrate(sandbox.config, { taskId: 'task-a', targetBranch: 'main', actor: 'tester' })
     const again = await integrate(sandbox.config, { taskId: 'task-a', targetBranch: 'main', actor: 'tester' })
-    expect(again).toEqual({ status: 'integrated', commit })
+    // The second call's target tip (now the first call's fast-forwarded main)
+    // differs from the allocation's original baseCommit, so this integration
+    // detects a moved baseline — and rebases onto it, a no-op since the
+    // worktree HEAD already is that tip — even though the fast-forward itself
+    // has nothing left to move.
+    expect(again).toEqual({ status: 'integrated', commit, baseMoved: true })
   })
 
   it('fast-forwards an unchecked-out target branch through a compare-and-swap ref update', async () => {
@@ -151,7 +156,7 @@ describe('integration', () => {
     const workspace = await allocate('task-a')
     const commit = await commitMarker(workspace.worktree, 'task-a done\n', 'task-a work')
     const result = await integrate(sandbox.config, { taskId: 'task-a', targetBranch: 'release', actor: 'tester' })
-    expect(result).toEqual({ status: 'integrated', commit })
+    expect(result).toEqual({ status: 'integrated', commit, baseMoved: false })
     await expect(git(sandbox.projectRoot, ['rev-parse', 'release'])).resolves.toContain(commit)
     await expect(git(sandbox.projectRoot, ['rev-parse', 'main'])).resolves.not.toContain(commit)
   })
@@ -190,7 +195,7 @@ describe('integration', () => {
     const workspace = await allocate('task-a')
     const commit = await commitMarker(workspace.worktree, 'task-a done\n', 'task-a work')
     const result = await integrate(sandbox.config, { taskId: 'task-a', targetBranch: 'main', actor: 'tester' })
-    expect(result).toEqual({ status: 'integrated', commit })
+    expect(result).toEqual({ status: 'integrated', commit, baseMoved: false })
   })
 
   it('creates a local target branch from the fetched upstream tip when none exists', async () => {
@@ -208,7 +213,7 @@ describe('integration', () => {
     const workspace = await allocate('task-a')
     const commit = await commitMarker(workspace.worktree, 'task-a done\n', 'task-a work')
     const result = await integrate(sandbox.config, { taskId: 'task-a', targetBranch: 'main', actor: 'tester' })
-    expect(result).toEqual({ status: 'integrated', commit })
+    expect(result).toEqual({ status: 'integrated', commit, baseMoved: false })
     const created = (await execFileAsync('git', ['-C', sandbox.projectRoot, 'rev-parse', 'main'], {})).stdout.trim()
     expect(created).toBe(commit)
     // `main` is not checked out anywhere: the ref moves, the working tree of
@@ -344,7 +349,7 @@ describe('integration', () => {
     const workspace = await allocate('task-a')
     const commit = await commitMarker(workspace.worktree, 'task-a done\n', 'task-a work')
     const result = await integrate(sandbox.config, { taskId: 'task-a', targetBranch: 'main', actor: 'tester' })
-    expect(result).toEqual({ status: 'integrated', commit })
+    expect(result).toEqual({ status: 'integrated', commit, baseMoved: false })
     expect(existsSync(integrationLockPath(sandbox.experimentsRoot))).toBe(false)
   })
 
@@ -358,6 +363,98 @@ describe('integration', () => {
     expect(result.status).toBe('integrated')
     if (result.status !== 'integrated') throw new Error('unreachable')
     expect(result.commit).toMatch(/^[0-9a-f]{40}$/)
+  })
+})
+
+describe('integration verify gate', () => {
+  it('calls verify after the rebase and before the fast-forward, handing it the rebased worktree', async () => {
+    sandbox = await makeSandbox()
+    const base = (await git(sandbox.projectRoot, ['rev-parse', 'HEAD'])).trim()
+    const workspace = await allocate('task-a', base)
+    const commitA = await commitMarker(workspace.worktree, 'task-a done\n', 'task-a work')
+    const other = await allocate('task-b', base)
+    await writeFile(join(other.worktree, 'other.txt'), 'task-b work\n')
+    await commitAll(other.worktree, 'task-b work')
+    const movedMain = await integrate(sandbox.config, { taskId: 'task-b', targetBranch: 'main', actor: 'tester' })
+    expect(movedMain.status).toBe('integrated')
+    const calls: Array<{ worktree: string; head: string; mainTipAtCall: string }> = []
+    const verify = async (worktree: string): Promise<VerifyOutcome> => {
+      calls.push({
+        worktree,
+        head: (await git(worktree, ['rev-parse', 'HEAD'])).trim(),
+        mainTipAtCall: (await git(sandbox!.projectRoot, ['rev-parse', 'main'])).trim(),
+      })
+      return { ok: true }
+    }
+    const result = await integrate(sandbox.config, { taskId: 'task-a', targetBranch: 'main', actor: 'tester', verify })
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.worktree).toBe(workspace.worktree)
+    // The rebase rewrote task-a's commit onto the moved baseline, so verify
+    // observes a HEAD that differs from the pre-rebase commit.
+    expect(calls[0]!.head).not.toBe(commitA)
+    // main had not yet moved to task-a's content when verify ran: the
+    // fast-forward is still ahead of it.
+    if (movedMain.status !== 'integrated') throw new Error('unreachable')
+    expect(calls[0]!.mainTipAtCall).toBe(movedMain.commit)
+    expect(result.status).toBe('integrated')
+    if (result.status !== 'integrated') throw new Error('unreachable')
+    expect(result.baseMoved).toBe(true)
+    await expect(git(sandbox.projectRoot, ['rev-parse', 'main'])).resolves.toContain(result.commit)
+  })
+
+  it('calls verify before the fast-forward even when the baseline never moved', async () => {
+    sandbox = await makeSandbox()
+    const workspace = await allocate('task-a')
+    const commit = await commitMarker(workspace.worktree, 'task-a done\n', 'task-a work')
+    const calls: string[] = []
+    const verify = async (worktree: string): Promise<VerifyOutcome> => {
+      calls.push(worktree)
+      // main must not have fast-forwarded yet when the gate runs.
+      await expect(git(sandbox!.projectRoot, ['rev-parse', 'main'])).resolves.not.toContain(commit)
+      return { ok: true }
+    }
+    const result = await integrate(sandbox.config, { taskId: 'task-a', targetBranch: 'main', actor: 'tester', verify })
+    expect(calls).toEqual([workspace.worktree])
+    expect(result).toEqual({ status: 'integrated', commit, baseMoved: false })
+  })
+
+  it('does not fast-forward, keeps the rebase result in the worktree, and releases the lock when verify fails', async () => {
+    sandbox = await makeSandbox()
+    const base = (await git(sandbox.projectRoot, ['rev-parse', 'HEAD'])).trim()
+    const a = await allocate('task-a', base)
+    const commitA = await commitMarker(a.worktree, 'task-a done\n', 'task-a work')
+    const other = await allocate('task-b', base)
+    await writeFile(join(other.worktree, 'other.txt'), 'task-b work\n')
+    await commitAll(other.worktree, 'task-b work')
+    await integrate(sandbox.config, { taskId: 'task-b', targetBranch: 'main', actor: 'tester' })
+    const mainBefore = (await git(sandbox.projectRoot, ['rev-parse', 'main'])).trim()
+    const verify = async (): Promise<VerifyOutcome> => ({ ok: false, reason: 'acceptance gate failed' })
+    const result = await integrate(sandbox.config, { taskId: 'task-a', targetBranch: 'main', actor: 'tester', verify })
+    expect(result).toEqual({ status: 'verification-failed', reason: 'acceptance gate failed', baseMoved: true })
+    // The rebase already ran and is kept: the worktree HEAD moved off the
+    // pre-rebase commit and the worktree is clean, not aborted mid-rebase.
+    const headAfter = (await git(a.worktree, ['rev-parse', 'HEAD'])).trim()
+    expect(headAfter).not.toBe(commitA)
+    await expect(git(a.worktree, ['status', '--porcelain'])).resolves.toBe('')
+    // main never moved: the fast-forward was skipped.
+    await expect(git(sandbox.projectRoot, ['rev-parse', 'main'])).resolves.toBe(`${mainBefore}\n`)
+    // The lock released: nothing is left holding it.
+    expect(existsSync(integrationLockPath(sandbox.experimentsRoot))).toBe(false)
+  })
+
+  it('treats a throwing verify as a failed verification, carrying the error text as the reason', async () => {
+    sandbox = await makeSandbox()
+    const workspace = await allocate('task-a')
+    await commitMarker(workspace.worktree, 'task-a done\n', 'task-a work')
+    const verify = async (): Promise<VerifyOutcome> => {
+      throw new Error('boom')
+    }
+    const result = await integrate(sandbox.config, { taskId: 'task-a', targetBranch: 'main', actor: 'tester', verify })
+    expect(result.status).toBe('verification-failed')
+    if (result.status !== 'verification-failed') throw new Error('unreachable')
+    expect(result.reason).toContain('boom')
+    expect(result.baseMoved).toBe(false)
+    expect(existsSync(integrationLockPath(sandbox.experimentsRoot))).toBe(false)
   })
 })
 

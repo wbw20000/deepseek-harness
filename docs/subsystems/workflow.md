@@ -617,8 +617,12 @@ async list(): Promise<readonly TaskWorkspace[]>
  * Integrate one allocated task's worktree into a project branch. Calls on
  * one service instance serialize in memory; calls across processes
  * serialize on the experiments root's integration lock. Git failures inside
- * the integration are reported as a `failed` result, never thrown.
- * @param req - task id, target branch, and actor.
+ * the integration are reported as a `failed` result, never thrown. When
+ * `req.verify` is supplied, it runs once against the worktree after a
+ * rebase (when one was needed) and before the fast-forward, whether or not
+ * the baseline had moved; a rejection or a thrown error both report
+ * `verification-failed` and leave the target branch untouched.
+ * @param req - task id, target branch, actor, and optional verification gate.
  * @returns the integration outcome.
  * @throws SelfDevelopmentWorkspacesError with `SELF_DEV_WORKSPACE_TASK_UNKNOWN` when the
  *   task has no allocated workspace, and with `SELF_DEV_WORKSPACE_INTEGRATION_BUSY`
@@ -713,6 +717,45 @@ One task event reached its durable journal: every successful controller commit, 
 ```
 
 Source: [`packages/workflow/workflow-self-development/src/index.ts`](../../packages/workflow/workflow-self-development/src/index.ts)
+
+<a id="self-developmentmerge-blocked--emit"></a>
+
+#### `self-development/merge-blocked` — emit
+
+One merge attempt did not complete: a hard-gate refusal, a task not `awaiting-trial`, or `workspaces.integrate` reporting `conflict`, `verification-failed`, or `failed`. The closed-vocabulary `status` reaches the title; the merge flow's free-text detail never leaves it.
+
+```ts cordis-catalog
+/**
+ * One merge attempt did not complete: a hard-gate refusal, a task not
+ * `awaiting-trial`, or `workspaces.integrate` reporting `conflict`,
+ * `verification-failed`, or `failed`. The closed-vocabulary `status`
+ * reaches the title; the merge flow's free-text detail never leaves it.
+ * @param payload - the task id, the closed-vocabulary block status, and the observed revision.
+ * @mode emit
+ */
+'self-development/merge-blocked'(payload: MergeBlockedPayload): void
+```
+
+Source: [`packages/workflow/workflow-self-development-events/src/merge.ts`](../../packages/workflow/workflow-self-development-events/src/merge.ts)
+
+<a id="self-developmentmerge-integrated--emit"></a>
+
+#### `self-development/merge-integrated` — emit
+
+One task's worktree was integrated into the stable branch and the stable side is being rebuilt and restarted. Fixed title; carries no commit id or target branch.
+
+```ts cordis-catalog
+/**
+ * One task's worktree was integrated into the stable branch and the
+ * stable side is being rebuilt and restarted. Fixed title; carries no
+ * commit id or target branch.
+ * @param payload - the task id and the observed projection revision.
+ * @mode emit
+ */
+'self-development/merge-integrated'(payload: MergeIntegratedPayload): void
+```
+
+Source: [`packages/workflow/workflow-self-development-events/src/merge.ts`](../../packages/workflow/workflow-self-development-events/src/merge.ts)
 
 <a id="workflow-events"></a>
 

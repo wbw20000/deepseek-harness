@@ -766,6 +766,8 @@ export const TYPE_LINK_EXEMPTIONS: Readonly<Record<string, string>> = {
   z: 'schemastery schema constructor is owned by vendor/schemastery (vendored upstream)',
   CampaignPassedPayload: 'campaign-lifecycle event payload is owned by packages/workflow/workflow-self-development-events/README.md',
   CampaignEndedPayload: 'campaign-lifecycle event payload is owned by packages/workflow/workflow-self-development-events/README.md',
+  MergeIntegratedPayload: 'merge-to-stable event payload is owned by packages/workflow/workflow-self-development-events/README.md',
+  MergeBlockedPayload: 'merge-to-stable event payload is owned by packages/workflow/workflow-self-development-events/README.md',
   CampaignOptions: 'startCampaign options are owned by packages/workflow/workflow-self-development-remote/README.md',
   CampaignState: 'campaign state view is owned by packages/workflow/workflow-self-development-remote/README.md',
   BeginCommandRequest: 'event-local request contract is owned by packages/client/ui-input-trigger/src/types.ts',

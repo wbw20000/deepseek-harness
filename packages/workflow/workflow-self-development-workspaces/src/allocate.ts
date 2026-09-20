@@ -6,7 +6,11 @@
  * outright instead of waiting), and registers the workspace in the durable
  * registry before returning it. Every target path is proven to resolve inside
  * the experiments root before anything is created, and a failed allocation
- * tears down what it built.
+ * tears down what it built. When the deployment configures `setup`, that
+ * command runs once inside the fresh worktree — after the git worktree and
+ * data home exist, before the registry write — and a failed or timed-out
+ * setup tears the allocation down exactly like any other allocation failure;
+ * an idempotent repeat `allocate` for an already-registered task never reruns it.
  * @module @deepseek-ai/dsh-workflow-self-development-workspaces/allocate
  */
 
@@ -17,6 +21,7 @@ import { SelfDevelopmentWorkspacesError } from './runtime.ts'
 import { readRegistry, writeRegistry } from './registry.ts'
 import { realpathIfInside, validateTaskId } from './paths.ts'
 import { runInSerialChain } from './serial-chain.ts'
+import { runWorkspaceSetup } from './setup.ts'
 import { copyDataHomeTemplate, templateExists } from './template.ts'
 import type { TaskWorkspace, WorkspacesConfig } from './types.ts'
 
@@ -43,7 +48,10 @@ export interface AllocateRequest {
  *   task id cannot name a branch or directory; `SELF_DEV_WORKSPACE_LIMIT` when
  *   the configured maximum is already allocated; `SELF_DEV_WORKSPACE_ALLOC_FAILED`
  *   when the project root, baseline, template, target paths, or git worktree
- *   creation fails.
+ *   creation fails; `SELF_DEV_WORKSPACE_SETUP_FAILED` when a configured
+ *   `setup` command is empty, cannot spawn, exits non-zero, or times out —
+ *   the worktree and data home are torn down first, exactly like any other
+ *   allocation failure.
  */
 export async function allocateWorkspace(config: WorkspacesConfig, req: AllocateRequest): Promise<TaskWorkspace> {
   validateTaskId(req.taskId)
@@ -108,6 +116,7 @@ async function allocateSerially(config: WorkspacesConfig, req: AllocateRequest):
   }
   let worktree: string
   let dataHome: string
+  let setupCompletedAt: number | undefined
   try {
     await mkdir(taskRoot, { recursive: true })
     await runGit(projectRoot, ['worktree', 'add', '-b', branch, worktreePath, baseCommit])
@@ -117,10 +126,16 @@ async function allocateSerially(config: WorkspacesConfig, req: AllocateRequest):
     // every registered path against the experiments root before deleting it.
     worktree = await realpath(worktreePath)
     dataHome = await realpath(dataHomePath)
+    if (config.setup !== undefined) {
+      await runWorkspaceSetup(worktree, config.setup)
+      setupCompletedAt = Date.now()
+    }
   } catch (error) {
     // Roll the half-built workspace back: an allocation either registers
     // completely or leaves nothing behind. The rollback is best-effort — the
-    // caller must see the allocation failure, not a teardown failure.
+    // caller must see the allocation failure, not a teardown failure. This
+    // covers a failed setup exactly like any other step: the worktree and
+    // data home it ran against are torn down the same way.
     await rollbackAllocation(projectRoot, branch, worktreePath, dataHomePath, taskRoot)
     throw error instanceof SelfDevelopmentWorkspacesError
       ? error
@@ -137,6 +152,7 @@ async function allocateSerially(config: WorkspacesConfig, req: AllocateRequest):
     branch,
     dataHome,
     allocatedAt: Date.now(),
+    ...(setupCompletedAt === undefined ? {} : { setupCompletedAt }),
   }
   await writeRegistry(config.experimentsRoot, { version: 1, workspaces: [...registry.workspaces, workspace] })
   return workspace

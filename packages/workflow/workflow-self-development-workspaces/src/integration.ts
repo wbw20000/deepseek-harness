@@ -7,7 +7,12 @@
  * target branch. No merge commit is ever created and no ref is ever forced:
  * the fast-forward is either a true ancestor move or it fails. Every
  * intermediate git failure aborts cleanly: a started rebase is aborted, and
- * the result is a `failed` record with the git reason.
+ * the result is a `failed` record with the git reason. When the request
+ * carries a `verify` gate, it runs once against the (possibly rebased)
+ * worktree, after the rebase step and before the fast-forward, whether or not
+ * the baseline had moved; a rejection or a thrown error both stop the
+ * integration short of the fast-forward and leave any rebase result in the
+ * worktree for a follow-up fix.
  * @module @deepseek-ai/dsh-workflow-self-development-workspaces/integration
  */
 
@@ -17,14 +22,17 @@ import { isAncestor, revParse, runGit } from './git.ts'
 import { withIntegrationLock } from './integration-lock.ts'
 import { SelfDevelopmentWorkspacesError } from './runtime.ts'
 import { readRegistry } from './registry.ts'
-import type { IntegrationRequest, IntegrationResult, TaskWorkspace, WorkspacesConfig } from './types.ts'
+import type { IntegrationRequest, IntegrationResult, TaskWorkspace, VerifyOutcome, WorkspacesConfig } from './types.ts'
 
 /**
  * Integrate one allocated task's worktree into a project branch.
  * @param config - the service's deployment configuration.
- * @param req - task id, target branch, and actor of the integration.
- * @returns the integration outcome; git failures are reported as
- *   `{ status: 'failed', reason }`, never thrown.
+ * @param req - task id, target branch, actor, and optional verification gate
+ *   of the integration.
+ * @returns the integration outcome; git failures and a failed verification
+ *   gate are both reported as results — `{ status: 'failed', reason }` and
+ *   `{ status: 'verification-failed', reason, baseMoved }` respectively —
+ *   never thrown.
  * @throws SelfDevelopmentWorkspacesError with `SELF_DEV_WORKSPACE_TASK_UNKNOWN` when the
  *   task has no allocated workspace, and with `SELF_DEV_WORKSPACE_INTEGRATION_BUSY`
  *   when a live lock holder does not release in time.
@@ -43,7 +51,7 @@ export async function integrate(config: WorkspacesConfig, req: IntegrationReques
   }
   return withIntegrationLock(config.experimentsRoot, async () => {
     try {
-      return await integrateLocked(entry, req.targetBranch)
+      return await integrateLocked(entry, req)
     } catch (error) {
       // Any git failure inside the locked steps is reported as a failed
       // result with its reason; the lock release and the rebase abort inside
@@ -56,10 +64,12 @@ export async function integrate(config: WorkspacesConfig, req: IntegrationReques
 /**
  * Run one integration's git steps while holding the integration lock.
  * @param entry - the task's allocated workspace.
- * @param targetBranch - the project branch to fast-forward.
+ * @param req - the integration request, carrying the target branch and the
+ *   optional verification gate.
  * @returns the integration outcome.
  */
-async function integrateLocked(entry: TaskWorkspace, targetBranch: string): Promise<IntegrationResult> {
+async function integrateLocked(entry: TaskWorkspace, req: IntegrationRequest): Promise<IntegrationResult> {
+  const { targetBranch } = req
   const targetTip = await resolveTargetTip(entry.projectRoot, targetBranch)
   if (targetTip === undefined) {
     return { status: 'failed', reason: `target branch ${targetBranch} was not found in ${entry.projectRoot}` }
@@ -72,7 +82,8 @@ async function integrateLocked(entry: TaskWorkspace, targetBranch: string): Prom
   if (dirty.stdout.trim().length > 0) {
     return { status: 'failed', reason: `worktree ${entry.worktree} has uncommitted changes; commit or clean them first` }
   }
-  if (targetTip !== entry.baseCommit) {
+  const baseMoved = targetTip !== entry.baseCommit
+  if (baseMoved) {
     const rebased = await rebaseOnto(entry.worktree, targetTip)
     if (rebased.status === 'conflict') {
       return { status: 'conflict', files: rebased.files, baseMoved: true }
@@ -85,10 +96,34 @@ async function integrateLocked(entry: TaskWorkspace, targetBranch: string): Prom
   if (!(await isAncestor(entry.projectRoot, targetTip, integrated))) {
     return { status: 'failed', reason: `worktree HEAD ${integrated} does not contain target tip ${targetTip}` }
   }
-  if (integrated === targetTip) {
-    return { status: 'integrated', commit: integrated }
+  if (req.verify !== undefined) {
+    const outcome = await runVerify(req.verify, entry.worktree)
+    if (!outcome.ok) {
+      return { status: 'verification-failed', reason: outcome.reason, baseMoved }
+    }
   }
-  return fastForward(entry, targetBranch, integrated)
+  if (integrated === targetTip) {
+    return { status: 'integrated', commit: integrated, baseMoved }
+  }
+  return fastForward(entry, targetBranch, integrated, baseMoved)
+}
+
+/**
+ * Run a caller-supplied verification gate, converting a thrown error into the
+ * same `{ ok: false }` shape as an explicit rejection.
+ * @param verify - the gate from {@link IntegrationRequest.verify}.
+ * @param worktree - the (possibly rebased) worktree the gate inspects.
+ * @returns the gate's outcome; never throws.
+ */
+async function runVerify(
+  verify: (worktree: string) => Promise<VerifyOutcome>,
+  worktree: string,
+): Promise<VerifyOutcome> {
+  try {
+    return await verify(worktree)
+  } catch (error) {
+    return { ok: false, reason: detail(error) }
+  }
 }
 
 /**
@@ -183,12 +218,15 @@ async function unmergedFiles(worktree: string): Promise<readonly string[]> {
  * @param entry - the task's allocated workspace.
  * @param targetBranch - the project branch to fast-forward.
  * @param commit - the worktree HEAD to fast-forward to.
+ * @param baseMoved - whether the target tip had differed from the allocation
+ *   baseline, carried through to the returned `integrated` result.
  * @returns the integration outcome.
  */
 async function fastForward(
   entry: TaskWorkspace,
   targetBranch: string,
   commit: string,
+  baseMoved: boolean,
 ): Promise<IntegrationResult> {
   const checkedOutAt = await worktreeHoldingBranch(entry.projectRoot, targetBranch)
   const ref = `refs/heads/${targetBranch}`
@@ -198,7 +236,7 @@ async function fastForward(
       ? ['update-ref', ref, commit]
       : ['update-ref', ref, commit, localTip]
     await runGit(entry.projectRoot, args)
-    return { status: 'integrated', commit }
+    return { status: 'integrated', commit, baseMoved }
   }
   if (checkedOutAt !== entry.projectRoot) {
     return {
@@ -207,7 +245,7 @@ async function fastForward(
     }
   }
   await runGit(entry.projectRoot, ['merge', '--ff-only', commit])
-  return { status: 'integrated', commit }
+  return { status: 'integrated', commit, baseMoved }
 }
 
 /**

@@ -75,6 +75,39 @@ describe('boot-time config validation', () => {
     expect(rejected).toThrow(expect.objectContaining({ code: 'SELF_DEV_WORKSPACE_CONFIG_INVALID' }))
   })
 
+  it('refuses an empty setup.command at construction', async () => {
+    const base = await makeSandbox()
+    sandbox = base
+    const config = { ...base.config, setup: { command: [], timeoutMs: 5000 } }
+    const rejected = () => new SelfDevelopmentWorkspaces(new Context(), config)
+    expect(rejected).toThrow(expect.objectContaining({ code: 'SELF_DEV_WORKSPACE_CONFIG_INVALID' }))
+    expect(rejected).toThrow(/setup\.command must be a non-empty argv/)
+  })
+
+  it.each([
+    ['zero', 0],
+    ['negative', -1],
+    ['fractional', 2.5],
+    ['infinite', Number.POSITIVE_INFINITY],
+    ['NaN', Number.NaN],
+  ])('refuses a %s setup.timeoutMs', async (_name, timeoutMs) => {
+    const base = await makeSandbox()
+    sandbox = base
+    const config = { ...base.config, setup: { command: ['pnpm', 'install'], timeoutMs } }
+    const rejected = () => new SelfDevelopmentWorkspaces(new Context(), config)
+    expect(rejected).toThrow(expect.objectContaining({ code: 'SELF_DEV_WORKSPACE_CONFIG_INVALID' }))
+  })
+
+  it('mounts with a valid setup command configured', async () => {
+    const base = await makeSandbox()
+    sandbox = base
+    const config = { ...base.config, setup: { command: ['pnpm', 'install', '--offline', '--frozen-lockfile'], timeoutMs: 300_000 } }
+    const context = new Context()
+    const service = new SelfDevelopmentWorkspaces(context, config)
+    expect(context.selfDevelopmentWorkspaces).toBeInstanceOf(SelfDevelopmentWorkspaces)
+    expect(service.name).toBe('selfDevelopmentWorkspaces')
+  })
+
   it('mounts on a valid config and registers ctx.selfDevelopmentWorkspaces', async () => {
     const base = await makeSandbox()
     sandbox = base

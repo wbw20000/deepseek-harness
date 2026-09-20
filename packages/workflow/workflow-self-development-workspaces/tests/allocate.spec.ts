@@ -12,11 +12,15 @@
 import { existsSync, readdirSync } from 'node:fs'
 import { chmod, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { allocateWorkspace } from '../src/allocate.ts'
 import { readRegistry } from '../src/registry.ts'
 import { makeSandbox, removeSandbox, commitAll, git, type Sandbox } from './harness.ts'
 import type { TaskWorkspace } from '../src/types.ts'
+
+/** Absolute path of the fake setup command fixture, shared with setup.spec.ts. */
+const setupFixture = fileURLToPath(new URL('./fixtures/setup-case.mjs', import.meta.url))
 
 let sandbox: Sandbox | undefined
 
@@ -262,5 +266,82 @@ describe('concurrent allocation', () => {
     const worktrees = await git(sandbox.projectRoot, ['worktree', 'list', '--porcelain'])
     expect(worktrees.split('\n').filter(line => line.startsWith('worktree '))).toHaveLength(2)
     await expect(git(sandbox.projectRoot, ['branch', '--list', 'selfdev/*'])).resolves.toContain('selfdev/task-a')
+  })
+})
+
+describe('workspace setup', () => {
+  it('runs the configured command after the worktree and data home exist, before the registry write, and stamps setupCompletedAt', async () => {
+    sandbox = await makeSandbox()
+    // The allocation layout is deterministic (<experimentsRoot>/<taskId>/dsh-home),
+    // so the check can name this task's about-to-exist data home ahead of time.
+    // Fails closed (exit 9) unless the copied template file is already there,
+    // proving setup runs after the data-home copy, not before it.
+    const dataHomeCheck = join(sandbox.experimentsRoot, 'task-a', 'dsh-home', 'settings.json')
+    const config = {
+      ...sandbox.config,
+      setup: { command: ['node', setupFixture, 'check-exists', dataHomeCheck], timeoutMs: 5000 },
+    }
+    const workspace = await allocateWorkspace(config, { taskId: 'task-a', projectRoot: sandbox.projectRoot })
+    expect(typeof workspace.setupCompletedAt).toBe('number')
+    expect(workspace.setupCompletedAt!).toBeGreaterThanOrEqual(workspace.allocatedAt)
+    const listed = await readRegistry(sandbox.experimentsRoot)
+    expect(listed.workspaces[0]!.setupCompletedAt).toBe(workspace.setupCompletedAt)
+  })
+
+  it('runs the command inside the worktree itself, which already exists as a git checkout by the time it runs', async () => {
+    sandbox = await makeSandbox()
+    const config = {
+      ...sandbox.config,
+      setup: { command: ['node', setupFixture, 'check-exists', '.git'], timeoutMs: 5000 },
+    }
+    await expect(allocateWorkspace(config, { taskId: 'task-a', projectRoot: sandbox.projectRoot })).resolves.toMatchObject({
+      taskId: 'task-a',
+    })
+  })
+
+  it('tears the allocation down and reports SELF_DEV_WORKSPACE_SETUP_FAILED without registering it when setup exits non-zero', async () => {
+    sandbox = await makeSandbox()
+    const config = { ...sandbox.config, setup: { command: ['node', setupFixture, 'exit', '1'], timeoutMs: 5000 } }
+    await expect(allocateWorkspace(config, { taskId: 'task-a', projectRoot: sandbox.projectRoot }))
+      .rejects.toMatchObject({ code: 'SELF_DEV_WORKSPACE_SETUP_FAILED' })
+    const listed = await readRegistry(sandbox.experimentsRoot)
+    expect(listed.workspaces).toEqual([])
+    await expect(git(sandbox.projectRoot, ['worktree', 'list', '--porcelain'])).resolves.not.toContain('task-a')
+    await expect(git(sandbox.projectRoot, ['branch', '--list', 'selfdev/*'])).resolves.toBe('')
+    expect(existsSync(join(sandbox.experimentsRoot, 'task-a'))).toBe(false)
+  })
+
+  it('tears the allocation down when setup does not finish within its configured timeout', async () => {
+    sandbox = await makeSandbox()
+    const config = { ...sandbox.config, setup: { command: ['node', setupFixture, 'sleep', '5000'], timeoutMs: 200 } }
+    const caught = await allocateWorkspace(config, { taskId: 'task-a', projectRoot: sandbox.projectRoot }).then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+    expect(caught).toMatchObject({ code: 'SELF_DEV_WORKSPACE_SETUP_FAILED' })
+    expect(caught instanceof Error ? caught.message : String(caught)).toContain('did not finish within 200 ms')
+    const listed = await readRegistry(sandbox.experimentsRoot)
+    expect(listed.workspaces).toEqual([])
+    expect(existsSync(join(sandbox.experimentsRoot, 'task-a'))).toBe(false)
+  })
+
+  it('never reruns setup for an idempotent repeat allocation of an already-registered task', async () => {
+    sandbox = await makeSandbox()
+    const counter = join(sandbox.root, 'setup-run-count.txt')
+    const config = { ...sandbox.config, setup: { command: ['node', setupFixture, 'append', counter, 'x'], timeoutMs: 5000 } }
+    const first = await allocateWorkspace(config, { taskId: 'task-a', projectRoot: sandbox.projectRoot })
+    await expect(readFile(counter, 'utf8')).resolves.toBe('x')
+    const again = await allocateWorkspace(config, { taskId: 'task-a', projectRoot: join(sandbox.root, 'somewhere-else') })
+    expect(again).toEqual(first)
+    // Still exactly one run: the idempotent path returns the registered
+    // record before any git, copy, or setup step runs again.
+    await expect(readFile(counter, 'utf8')).resolves.toBe('x')
+  })
+
+  it('allocates normally when no setup is configured, leaving setupCompletedAt absent', async () => {
+    sandbox = await makeSandbox()
+    const workspace = await allocateWorkspace(sandbox.config, { taskId: 'task-a', projectRoot: sandbox.projectRoot })
+    expect(workspace.setupCompletedAt).toBeUndefined()
+    expect(Object.hasOwn(workspace, 'setupCompletedAt')).toBe(false)
   })
 })

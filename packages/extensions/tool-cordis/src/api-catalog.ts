@@ -1955,8 +1955,8 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'integrate(req: IntegrationRequest): Promise<IntegrationResult>',
-        description: 'Integrate one allocated task\'s worktree into a project branch. Calls on one service instance serialize in memory; calls across processes serialize on the experiments root\'s integration lock. Git failures inside the integration are reported as a `failed` result, never thrown.',
-        parameters: [{ name: 'req', description: 'task id, target branch, and actor.' }],
+        description: 'Integrate one allocated task\'s worktree into a project branch. Calls on one service instance serialize in memory; calls across processes serialize on the experiments root\'s integration lock. Git failures inside the integration are reported as a `failed` result, never thrown. When `req.verify` is supplied, it runs once against the worktree after a rebase (when one was needed) and before the fast-forward, whether or not the baseline had moved; a rejection or a thrown error both report `verification-failed` and leave the target branch untouched.',
+        parameters: [{ name: 'req', description: 'task id, target branch, actor, and optional verification gate.' }],
         returns: 'the integration outcome.',
         throws: ['SelfDevelopmentWorkspacesError with `SELF_DEV_WORKSPACE_TASK_UNKNOWN` when the task has no allocated workspace, and with `SELF_DEV_WORKSPACE_INTEGRATION_BUSY` when a live cross-process lock holder does not release in time. The in-memory chain itself has no busy bound: a call waits indefinitely behind a serialized callback that never settles.'],
       },
@@ -4094,6 +4094,22 @@ export const EVENT_API: readonly EventApiEntry[] = [
     parameters: [{ name: 'payload', description: 'the task id, the committed journal record, and the frozen projection after the commit.' }],
   },
   {
+    name: 'self-development/merge-blocked',
+    mode: 'emit',
+    signature: '\'self-development/merge-blocked\'(payload: MergeBlockedPayload): void',
+    summary: 'One merge attempt did not complete: a hard-gate refusal, a task not `awaiting-trial`, or `workspaces.integrate` reporting `conflict`, `verification-failed`, or `failed`.',
+    description: 'One merge attempt did not complete: a hard-gate refusal, a task not `awaiting-trial`, or `workspaces.integrate` reporting `conflict`, `verification-failed`, or `failed`. The closed-vocabulary `status` reaches the title; the merge flow\'s free-text detail never leaves it.',
+    parameters: [{ name: 'payload', description: 'the task id, the closed-vocabulary block status, and the observed revision.' }],
+  },
+  {
+    name: 'self-development/merge-integrated',
+    mode: 'emit',
+    signature: '\'self-development/merge-integrated\'(payload: MergeIntegratedPayload): void',
+    summary: 'One task\'s worktree was integrated into the stable branch and the stable side is being rebuilt and restarted.',
+    description: 'One task\'s worktree was integrated into the stable branch and the stable side is being rebuilt and restarted. Fixed title; carries no commit id or target branch.',
+    parameters: [{ name: 'payload', description: 'the task id and the observed projection revision.' }],
+  },
+  {
     name: 'session-telemetry/record',
     mode: 'waterfall',
     signature: '\'session-telemetry/record\'(record: SessionTelemetryRecord, next: () => SessionTelemetryRecord): SessionTelemetryRecord',
@@ -5303,11 +5319,11 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'IntegrationRequest',
-    declaration: 'export interface IntegrationRequest {\n    readonly taskId: string;\n    readonly targetBranch: string;\n    readonly actor: string;\n}',
+    declaration: 'export interface IntegrationRequest {\n    readonly taskId: string;\n    readonly targetBranch: string;\n    readonly actor: string;\n    readonly verify?: (worktree: string) => Promise<VerifyOutcome>;\n}',
   },
   {
     name: 'IntegrationResult',
-    declaration: 'export type IntegrationResult = {\n    status: \'integrated\';\n    commit: string;\n} | {\n    status: \'conflict\';\n    files: readonly string[];\n    baseMoved: true;\n} | {\n    status: \'failed\';\n    reason: string;\n};',
+    declaration: 'export type IntegrationResult = {\n    status: \'integrated\';\n    commit: string;\n    baseMoved: boolean;\n} | {\n    status: \'conflict\';\n    files: readonly string[];\n    baseMoved: true;\n} | {\n    status: \'verification-failed\';\n    reason: string;\n    baseMoved: boolean;\n} | {\n    status: \'failed\';\n    reason: string;\n};',
   },
   {
     name: 'InvariantFailure',
@@ -5556,6 +5572,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'McpResourceRequest',
     declaration: 'export type McpResourceRequest = {\n    method: \'resources/list\' | \'resources/templates/list\';\n    cursor?: string;\n} | {\n    method: \'resources/read\';\n    uri: string;\n};',
+  },
+  {
+    name: 'MergeBlockedPayload',
+    declaration: 'export interface MergeBlockedPayload {\n    readonly taskId: string;\n    readonly status: string;\n    readonly revision: number;\n}',
+  },
+  {
+    name: 'MergeIntegratedPayload',
+    declaration: 'export interface MergeIntegratedPayload {\n    readonly taskId: string;\n    readonly revision: number;\n}',
   },
   {
     name: 'Message',
@@ -7135,7 +7159,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'TaskWorkspace',
-    declaration: 'export interface TaskWorkspace {\n    readonly taskId: string;\n    readonly projectRoot: string;\n    readonly baseCommit: string;\n    readonly worktree: string;\n    readonly branch: string;\n    readonly dataHome: string;\n    readonly allocatedAt: number;\n}',
+    declaration: 'export interface TaskWorkspace {\n    readonly taskId: string;\n    readonly projectRoot: string;\n    readonly baseCommit: string;\n    readonly worktree: string;\n    readonly branch: string;\n    readonly dataHome: string;\n    readonly allocatedAt: number;\n    readonly setupCompletedAt?: number;\n}',
   },
   {
     name: 'TeamId',
@@ -7560,6 +7584,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'VerifiedWebhookDelivery',
     declaration: 'export interface VerifiedWebhookDelivery<K extends string = string> {\n    readonly kind: K;\n    readonly source: WebhookSourceId;\n    readonly deliveryId: WebhookDeliveryId;\n    readonly event: WebhookEventOf<K>;\n    readonly receivedAt: number;\n}',
+  },
+  {
+    name: 'VerifyOutcome',
+    declaration: 'export type VerifyOutcome = {\n    ok: true;\n} | {\n    ok: false;\n    reason: string;\n};',
   },
   {
     name: 'WebBootBatch',

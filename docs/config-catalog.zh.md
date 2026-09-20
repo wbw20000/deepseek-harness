@@ -4045,6 +4045,23 @@ export interface WorkspacesConfig {
   readonly dataHomeTemplate: string
   /** Maximum number of workspaces this service keeps allocated at once. */
   readonly maxConcurrentTasks: number
+  /**
+   * Optional command run once inside a newly created worktree — after the git
+   * worktree and data home exist, before the allocation registers — for
+   * example to install dependencies a project's own worktree does not carry
+   * (`git worktree add` copies no `node_modules`). Absent skips setup
+   * entirely; a repeated `allocate` that returns an already-registered
+   * workspace never reruns it.
+   */
+  readonly setup?: WorkspaceSetupConfig
+}
+
+/** One deployment-configured setup command and its wall-clock deadline. */
+export interface WorkspaceSetupConfig {
+  /** Argv spawned with `cwd` the worktree root; `command[0]` resolves through `PATH`. */
+  readonly command: readonly string[]
+  /** Wall-clock milliseconds before the command's whole process group is killed as a failed setup. */
+  readonly timeoutMs: number
 }
 ```
 
