@@ -3,10 +3,11 @@
  * integration. The service validates its deployment configuration at
  * construction and owns no injected dependency: it allocates one git worktree,
  * `selfdev/<taskId>` branch, and copied data home per task under the
- * experiments root, registers every allocation durably, releases only what it
- * registered, and integrates finished task branches back into a project
- * baseline strictly one at a time. It registers no tool, prompt, or event, and
- * it performs no unattended execution.
+ * experiments root, optionally runs a deployment-configured setup command
+ * inside the fresh worktree before registering it, registers every allocation
+ * durably, releases only what it registered, and integrates finished task
+ * branches back into a project baseline strictly one at a time. It registers
+ * no tool, prompt, or event, and it performs no unattended execution.
  * @module @deepseek-ai/dsh-workflow-self-development-workspaces
  */
 
@@ -33,8 +34,9 @@ export type { AllocateRequest } from './allocate.ts'
 export { releaseWorkspace } from './release.ts'
 export { integrate } from './integration.ts'
 export { copyDataHomeTemplate, templateExists } from './template.ts'
+export { assertSetupPlatformSupport, runWorkspaceSetup } from './setup.ts'
 export { validateTaskId, realpathIfInside } from './paths.ts'
-export type { TaskWorkspace, WorkspacesConfig, IntegrationResult, IntegrationRequest, VerifyOutcome } from './types.ts'
+export type { TaskWorkspace, WorkspacesConfig, IntegrationResult, IntegrationRequest, VerifyOutcome, WorkspaceSetupConfig } from './types.ts'
 
 /**
  * Cordis service composing workspace allocation, release, and serialized
@@ -48,6 +50,12 @@ export class SelfDevelopmentWorkspaces extends Service {
     experimentsRoot: z.string().required(),
     dataHomeTemplate: z.string().required(),
     maxConcurrentTasks: z.number().step(1).min(1).default(2),
+    // Absent must stay absent: no setup configured is `undefined`, not an
+    // empty-argv object with an unset timeout.
+    setup: z.object({
+      command: z.array(z.string()).required(),
+      timeoutMs: z.number().step(1).min(1).required(),
+    }).default(undefined as unknown as { command: string[]; timeoutMs: number }),
   }) as unknown as z<WorkspacesConfig>
 
   // Cordis service shadows read state through a prototype-extended proxy, so
@@ -68,10 +76,12 @@ export class SelfDevelopmentWorkspaces extends Service {
   /**
    * @param ctx - owning Cordis context.
    * @param config - deployment configuration for the experiments root, the
-   *   data-home template, and the workspace limit.
+   *   data-home template, the workspace limit, and the optional setup command.
    * @throws SelfDevelopmentWorkspacesError with `SELF_DEV_WORKSPACE_CONFIG_INVALID` when a
-   *   path field is missing, empty, or not absolute, or `maxConcurrentTasks`
-   *   is not a positive finite integer. Misconfiguration fails at load.
+   *   path field is missing, empty, or not absolute, `maxConcurrentTasks` is
+   *   not a positive finite integer, or a configured `setup.command` is empty
+   *   or `setup.timeoutMs` is not a positive finite integer. Misconfiguration
+   *   fails at load.
    */
   constructor(ctx: Context, config: WorkspacesConfig) {
     super(ctx, 'selfDevelopmentWorkspaces')
@@ -155,8 +165,9 @@ export default SelfDevelopmentWorkspaces
  * @param config - configuration as parsed from cordis.yml.
  * @returns the same configuration once every field is proven usable.
  * @throws SelfDevelopmentWorkspacesError with `SELF_DEV_WORKSPACE_CONFIG_INVALID` when a
- *   path field is missing, empty, or not absolute, or `maxConcurrentTasks` is
- *   not a positive finite integer.
+ *   path field is missing, empty, or not absolute, `maxConcurrentTasks` is
+ *   not a positive finite integer, or a configured `setup.command` is empty
+ *   or `setup.timeoutMs` is not a positive finite integer.
  */
 function validateConfig(config: WorkspacesConfig): WorkspacesConfig {
   const invalid = (detail: string): SelfDevelopmentWorkspacesError =>
@@ -169,6 +180,14 @@ function validateConfig(config: WorkspacesConfig): WorkspacesConfig {
   }
   if (!Number.isInteger(config.maxConcurrentTasks) || config.maxConcurrentTasks < 1) {
     throw invalid(`maxConcurrentTasks must be a positive finite integer, got ${String(config.maxConcurrentTasks)}`)
+  }
+  if (config.setup !== undefined) {
+    if (config.setup.command.length === 0) {
+      throw invalid('setup.command must be a non-empty argv')
+    }
+    if (!Number.isInteger(config.setup.timeoutMs) || config.setup.timeoutMs < 1) {
+      throw invalid(`setup.timeoutMs must be a positive finite integer, got ${String(config.setup.timeoutMs)}`)
+    }
   }
   return config
 }

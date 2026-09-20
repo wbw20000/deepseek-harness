@@ -7159,7 +7159,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'TaskWorkspace',
-    declaration: 'export interface TaskWorkspace {\n    readonly taskId: string;\n    readonly projectRoot: string;\n    readonly baseCommit: string;\n    readonly worktree: string;\n    readonly branch: string;\n    readonly dataHome: string;\n    readonly allocatedAt: number;\n}',
+    declaration: 'export interface TaskWorkspace {\n    readonly taskId: string;\n    readonly projectRoot: string;\n    readonly baseCommit: string;\n    readonly worktree: string;\n    readonly branch: string;\n    readonly dataHome: string;\n    readonly allocatedAt: number;\n    readonly setupCompletedAt?: number;\n}',
   },
   {
     name: 'TeamId',
