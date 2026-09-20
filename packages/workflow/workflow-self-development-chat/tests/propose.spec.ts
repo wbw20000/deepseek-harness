@@ -28,6 +28,7 @@ import type {
   ApprovalPort,
   CampaignState,
   FacadeOperationResult,
+  IntegrationResult,
   LaunchProfileWire,
   ResolvedProposeInput,
   SelfDevelopmentRemoteFacade,
@@ -136,6 +137,11 @@ class FakeFacade implements SelfDevelopmentRemoteFacade {
     }
   }
 
+  /** Not exercised by this file's tests (merge is covered by merge.spec.ts); wired through `step` for consistency. */
+  async recordTrialApproval(taskId: string, expectedRevision: number, approvedBy: string): Promise<FacadeOperationResult> {
+    return this.step('recordTrialApproval', [taskId, expectedRevision, approvedBy])
+  }
+
   /** Record one step, apply the configured failure, and bump the revision. */
   private step(name: string, args: unknown[]): FacadeOperationResult {
     this.calls.push({ name, args })
@@ -176,6 +182,11 @@ class FakeWorkspaces implements WorkspacesPort {
       allocatedAt: 1,
     }
   }
+
+  /** Not exercised by this file's tests (merge is covered by merge.spec.ts). */
+  integrate(): Promise<IntegrationResult> {
+    throw new Error('FakeWorkspaces.integrate is not exercised in propose.spec.ts')
+  }
 }
 
 /** Harness bundling the fakes and a temp control directory. */
@@ -201,6 +212,7 @@ async function makeDeps(overrides: Partial<ProposeDeps> = {}): Promise<{
       controlDirectory: control,
       experimentsRoot: join(root, 'exp'),
       actor: 'user',
+      targetBranch: 'stable',
     }),
     agent: { id: 'agent-1' },
     callId: 'call-1',
@@ -255,7 +267,7 @@ describe('runPropose', () => {
       facade,
       approval,
       workspaces: new FakeWorkspaces(),
-      config: resolveChatConfig({ stableRepo: '/repo', controlDirectory, experimentsRoot, actor: 'user' }),
+      config: resolveChatConfig({ stableRepo: '/repo', controlDirectory, experimentsRoot, actor: 'user', targetBranch: 'stable' }),
       agent: { id: 'agent-1' },
       callId: 'call-1',
       knownTaskIds: [],
@@ -377,6 +389,7 @@ describe('runPropose', () => {
         controlDirectory: join(root, 'control'),
         experimentsRoot,
         actor: 'user',
+        targetBranch: 'stable',
       }),
       // The task id is derived from the requirement; seed it deterministically.
       taskIdSuffix: 'fallback',
@@ -391,6 +404,7 @@ describe('runPropose', () => {
         controlDirectory: join(root, 'control'),
         experimentsRoot: join(root, 'no-such-root'),
         actor: 'user',
+        targetBranch: 'stable',
       }),
       taskIdSuffix: 'missing',
     })
@@ -456,6 +470,7 @@ describe('runPropose', () => {
         controlDirectory: join(root, 'control'),
         experimentsRoot: join(root, 'exp'),
         actor: 'user',
+        targetBranch: 'stable',
         defaultUnattended: false,
       }),
     })
@@ -506,6 +521,7 @@ describe('runPropose', () => {
         controlDirectory: join(root, 'control'),
         experimentsRoot,
         actor: 'user',
+        targetBranch: 'stable',
       }),
       taskIdSuffix: 'task',
     })
@@ -546,6 +562,7 @@ describe('resolveProposeInput', () => {
     controlDirectory: '/repo/control',
     experimentsRoot: '/exp',
     actor: 'user',
+    targetBranch: 'stable',
     defaultBudget: { mode: 'rounds', maxRounds: 9 },
     defaultUnattended: false,
   })

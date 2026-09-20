@@ -19,22 +19,30 @@ import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import { ASSERTION_SHAPE_REFERENCE, controlDirectoryPlacementViolation } from './acceptance.ts'
 import { resolveChatConfig } from './config.ts'
-import type { ResolvedChatConfig, SelfDevelopmentChatConfig } from './config.ts'
+import type { ResolvedChatConfig, SelfDevelopmentChatConfig, UpgradeConfig } from './config.ts'
 import { budgetViolation } from './budget.ts'
 import { GUIDANCE_SECTION_NAME, GUIDANCE_SECTION_ORDER_NAME, GUIDANCE_TEXT } from './guidance.ts'
+import { runMerge } from './merge.ts'
+import type { MergeDeps } from './merge.ts'
 import { deliverCampaignNotice } from './notify.ts'
 import type { NotifiableAgent } from './notify.ts'
 import { runPropose } from './propose.ts'
 import type { ProposeDeps } from './propose.ts'
 import { buildStatusReport, stopTask } from './status.ts'
 import type { StatusDeps } from './status.ts'
+import { upgradeViolation } from './upgrade.ts'
 import type {
   ApprovalPort,
   CampaignEvent,
   CampaignEventSource,
+  MergeBlockedEventPayload,
+  MergeInput,
+  MergeIntegratedEventPayload,
+  MergeOutcome,
   ProposeBudget,
   ProposeInput,
   ProposeOutcome,
+  RunnerVerifyPort,
   SelfDevelopmentRemoteFacade,
   StatusReport,
   StopOutcome,
@@ -57,6 +65,8 @@ export interface ChatPorts {
   readonly trial: TrialPort | undefined
   /** The optional `systemPrompt` service; without one, the guidance section is skipped (logged at debug). */
   readonly systemPrompt: SystemPromptPort | undefined
+  /** The optional runner verification port (DI-a); without one, `self_development_merge` fails closed rather than merging unverified. */
+  readonly runner: RunnerVerifyPort | undefined
 }
 
 /** Read the service ports from the mounted services. */
@@ -70,6 +80,7 @@ function contextPorts(ctx: Context): ChatPorts {
     events: ctx.get('selfDevelopmentEvents') as CampaignEventSource | undefined,
     trial: ctx.get('selfDevelopmentTrial') as TrialPort | undefined,
     systemPrompt: ctx.get('systemPrompt'),
+    runner: ctx.get('selfDevelopmentRunner') as RunnerVerifyPort | undefined,
   }
 }
 
@@ -93,6 +104,9 @@ export class SelfDevelopmentChat extends Service {
     controlDirectory: z.string(),
     experimentsRoot: z.string(),
     actor: z.string(),
+    targetBranch: z.string(),
+    integrationGates: z.array(z.string()).default([]),
+    upgrade: z.any<UpgradeConfig>().default({ kind: 'none' }),
     cardLocale: z.union(['zh', 'en'] as const).default('zh'),
     defaultUnattended: z.boolean().default(true),
     defaultBudget: z.any<ProposeBudget>().default({ preset: 'unlimited' }),
@@ -110,6 +124,9 @@ export class SelfDevelopmentChat extends Service {
 
   /** The optional trial service port, read by the status tool. */
   private readonly trial: TrialPort | undefined
+
+  /** The optional runner verification port; `undefined` fails `self_development_merge` closed. */
+  private readonly runner: RunnerVerifyPort | undefined
 
   /** The approval service; `undefined` only in direct construction, where the proposal fails closed. */
   private readonly approval: ApprovalPort | undefined
@@ -135,7 +152,8 @@ export class SelfDevelopmentChat extends Service {
   /**
    * @param ctx - owning Cordis context.
    * @param config - deployment configuration for the stable repo, control
-   *   directory, experiments root, actor, card language, and defaults.
+   *   directory, experiments root, actor, target branch, integration gates,
+   *   upgrade strategy, card language, and defaults.
    * @param ports - service ports; defaults to the context's mounted services.
    * @throws Error when the configuration is invalid or the default budget is
    *   not a valid budget. Misconfiguration fails at load.
@@ -155,10 +173,17 @@ export class SelfDevelopmentChat extends Service {
       // failed closed at the runner (see `controlDirectoryPlacementViolation`).
       throw new Error(`self-development chat config is invalid: ${placement}`)
     }
+    if (config.upgrade !== undefined) {
+      const upgrade = upgradeViolation(config.upgrade)
+      if (upgrade !== undefined) {
+        throw new Error(`self-development chat config is invalid: ${upgrade}`)
+      }
+    }
     this.resolved = resolveChatConfig(config)
     this.facade = ports.facade
     this.workspaces = ports.workspaces
     this.trial = ports.trial
+    this.runner = ports.runner
     this.approval = ports.approval
 
     if (this.resolved.guidance) {
@@ -334,6 +359,21 @@ export class SelfDevelopmentChat extends Service {
       execute: async args => await this.stop(args.taskId, args.reason) as unknown as JsonValue,
     })))
 
+    this.disposers.push(ctx.tools.register(defineTool({
+      name: 'self_development_merge',
+      description: 'Merge one passed, awaiting-trial self-development task into the stable branch. Host-only: only run this when the current process is the stable deployment being upgraded, since a successful merge rebuilds and restarts it. Asks the user exactly once for approval — the card also names the automatic repair campaign a conflict or verification failure triggers, so that case never asks a second time. On approval: records trial approval, integrates the task worktree (rebasing onto a moved target branch when needed), independently re-verifies acceptance and every configured integration gate before fast-forwarding, and on success runs the deployment\'s configured upgrade. A conflict or post-rebase verification failure instead starts an unattended repair campaign for the same acceptance definition. Nothing already completed is rolled back on any other failure.',
+      parameters: {
+        taskId: { type: 'string', description: 'The task to merge; omit to take the most recently proposed task that is awaiting-trial.' },
+      },
+      output: {
+        schema: { type: 'json' },
+        render: (_args, value) => [{ type: 'text', text: mergeResultLine(value) }],
+      },
+      execute: async (args, exec) => {
+        return await this.merge(args, exec) as unknown as JsonValue
+      },
+    })))
+
     if (ports.events !== undefined) {
       const unsubscribe = ports.events.subscribe((event) => {
         if (event.kind !== 'campaign-passed' && event.kind !== 'campaign-ended') return
@@ -375,6 +415,42 @@ export class SelfDevelopmentChat extends Service {
     if (outcome.ok) {
       this.startedTaskIds.push(outcome.taskId)
       if (exec?.agent !== undefined) this.agentsByTask.set(outcome.taskId, exec.agent)
+    }
+    return outcome
+  }
+
+  /**
+   * Run one merge end to end and remember every task it started — the merged
+   * task itself (for a later `parallel: false` check, mirroring `propose`)
+   * and, on `conflict`/`verification-failed`, the repair campaign's own task
+   * id, registering the calling agent for its eventual settlement notice the
+   * same way a direct `self_development_propose` call would. Private for the
+   * same reason as {@link propose}.
+   * @param input - the validated tool input.
+   * @param exec - the tool execution context the approval card attaches to.
+   * @returns the merge outcome.
+   */
+  private async merge(input: MergeInput, exec?: Pick<ToolRunContext, 'agent' | 'callId' | 'signal'>): Promise<MergeOutcome> {
+    const deps: MergeDeps = {
+      facade: this.facade,
+      approval: this.approval,
+      workspaces: this.workspaces,
+      runner: this.runner,
+      config: this.resolved,
+      ...(exec?.agent === undefined ? {} : { agent: exec.agent }),
+      ...(exec?.callId === undefined ? {} : { callId: exec.callId }),
+      ...(exec?.signal === undefined ? {} : { signal: exec.signal }),
+      knownTaskIds: [...this.startedTaskIds],
+      emitIntegrated: (payload: MergeIntegratedEventPayload) => { this.ctx.emit('self-development-chat/merge-integrated', payload) },
+      emitBlocked: (payload: MergeBlockedEventPayload) => { this.ctx.emit('self-development-chat/merge-blocked', payload) },
+    }
+    const outcome = await runMerge(deps, input)
+    if (outcome.ok) {
+      this.startedTaskIds.push(outcome.taskId)
+      if (outcome.repair?.ok === true) {
+        this.startedTaskIds.push(outcome.repair.taskId)
+        if (exec?.agent !== undefined) this.agentsByTask.set(outcome.repair.taskId, exec.agent)
+      }
     }
     return outcome
   }
@@ -440,9 +516,36 @@ function stopResultLine(value: JsonValue): string {
     : `Stop failed — ${outcome.error?.message ?? outcome.reason}`
 }
 
+/** One-line model/UI summary of a merge outcome. */
+function mergeResultLine(value: JsonValue): string {
+  const outcome = value as unknown as MergeOutcome
+  if (!outcome.ok) return `Task ${outcome.taskId ?? '(unknown)'}: merge failed — ${outcome.reason}`
+  const result = outcome.result
+  if (result.status === 'integrated') {
+    const upgradeText = outcome.upgrade === undefined ? '' : `; ${outcome.upgrade.detail}`
+    return `Task ${outcome.taskId}: merged ${result.commit} into stable, rebuilding and restarting${upgradeText}`
+  }
+  if (result.status === 'conflict' || result.status === 'verification-failed') {
+    const repairText = outcome.repair?.ok === true
+      ? `repair campaign ${outcome.repair.taskId} started, unattended`
+      : `repair campaign failed to start${outcome.repair === undefined ? '' : `: ${outcome.repair.reason}`}`
+    return `Task ${outcome.taskId}: merge blocked (${result.status}); ${repairText}`
+  }
+  return `Task ${outcome.taskId}: merge failed — ${result.reason}`
+}
+
 declare module '@deepseek-ai/cordis' {
   interface Context {
     selfDevelopmentChat: SelfDevelopmentChat
+  }
+  interface Events {
+    /** Emitted after a successful `self_development_merge` fast-forward (DI-b wave); see {@link MergeIntegratedEventPayload}. */
+    'self-development-chat/merge-integrated'(payload: MergeIntegratedEventPayload): void
+    /**
+     * Emitted when `self_development_merge` settles on `conflict`,
+     * `verification-failed`, or `failed`; see {@link MergeBlockedEventPayload}.
+     */
+    'self-development-chat/merge-blocked'(payload: MergeBlockedEventPayload): void
   }
 }
 
