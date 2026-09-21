@@ -228,10 +228,14 @@
       name: '@deepseek-ai/dsh-pwsh-sandbox'
       disabled: !!js process.platform !== 'win32'
 
+    # Every preset carries `ask`; the full-access preset does not prompt because
+    # dsh-permission-presets auto-grants approvals in the danger-full-access
+    # sandbox (see its README), not because the policy is `never` (which would
+    # reject). So the default policy is `ask` regardless of DSH_PERMISSION_MODE.
     - id: approval
       name: '@deepseek-ai/dsh-user-approval'
       config:
-        policy: !!js "(process.env.DSH_PERMISSION_MODE ?? 'workspace-write') === 'danger-full-access' ? 'never' : 'ask'"
+        policy: ask
 
     - id: permission
       name: '@deepseek-ai/dsh-permission-presets'
@@ -245,7 +249,7 @@
             approval: ask
           danger-full-access:
             sandbox: danger-full-access
-            approval: never
+            approval: ask
 
     - id: shell-env
       name: '@deepseek-ai/dsh-shell-env'
