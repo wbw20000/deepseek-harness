@@ -35,6 +35,7 @@ import type {
   TrialTaskDetail,
 } from './types.ts'
 import { spawnWebProcess, redactToken } from './web-process.ts'
+import { seedTrialWorkspace } from './workspace-seed.ts'
 
 /** Default build deadline: twenty minutes per the campaign plan. */
 export const DEFAULT_BUILD_TIMEOUT_MS = 20 * 60 * 1000
@@ -207,6 +208,7 @@ export class SelfDevelopmentTrial extends TypertRemoteService {
       return { url: undefined, reason: `worktree is not a DSH repository; artifacts at ${worktree}` }
     }
     await this.build(id, worktree)
+    await this.seedWorkspace(id, worktree, dshHome)
     const port = await allocatePort(this.resolved.portRange[0], this.resolved.portRange[1], this.takenPorts())
     const spawned = spawnWebProcess({
       nodeBinary: this.resolved.nodeBinary,
@@ -349,6 +351,26 @@ export class SelfDevelopmentTrial extends TypertRemoteService {
     } catch (error) {
       await this.log(taskId, `trial build failed: ${errorText(error)}`)
       throw error
+    }
+  }
+
+  /**
+   * Register the worktree in the trial data home's workspace registry so
+   * the GUI opens on it. Seeding is a convenience: a failure is logged to the
+   * trial log and the open continues, since the person can still add the
+   * workspace by hand.
+   * @param taskId - validated task identity naming the log file and the workspace title.
+   * @param worktree - the verified DSH worktree.
+   * @param dshHome - the trial data home whose registry is seeded.
+   */
+  private async seedWorkspace(taskId: string, worktree: string, dshHome: string): Promise<void> {
+    try {
+      const outcome = await seedTrialWorkspace(dshHome, worktree, `${taskId} (trial)`, this.now)
+      await this.log(taskId, outcome.kind === 'skipped'
+        ? `trial workspace not seeded: ${outcome.reason}`
+        : `trial workspace ${outcome.kind}: ${outcome.path}`)
+    } catch (error) {
+      await this.log(taskId, `trial workspace seeding failed; add the worktree as a workspace by hand: ${errorText(error)}`)
     }
   }
 

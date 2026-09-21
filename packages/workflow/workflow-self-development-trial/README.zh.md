@@ -59,8 +59,9 @@ kind: "package-reference"
 
 1. **DSH 仓库判定。** 工作区根目录的 `package.json` 必须命名为 `@deepseek-ai/dsh-root`。不满足这一判定的工作区——比如一个普通的 demo 仓库——会返回 `{ url: undefined, reason: 'worktree is not a DSH repository; artifacts at <path>' }` 而不是一个实例；不会有任何构建或启动发生。
 2. **构建。** 在工作区内运行 `pnpm run --silent build`，并透传宿主自己的环境（`PATH`、`HOME` 等），好让解析出的 pnpm 能找到它自己的依赖。用哪个 pnpm 跑，按顺序试：配置的 `pnpmBinary`、宿主 `PATH` 上能找到的 `pnpm`、工作区自己安装的 pnpm、`nodeBinary` 旁边的 corepack shim——每一个不存在的候选都只是跳过，不算失败。所有候选都找不到、以非零码退出、或跑过 `buildTimeoutMs`，才会让本次打开以 `self-development/trial-build-failed` 失败；无论哪种情况，构建的 stdout 与 stderr 都会流入该任务的日志。
-3. **端口分配。** 在 `portRange` 中扫描第一个空闲的回环端口，跳过本进程已经分给存活实例的端口。区间耗尽则以 `self-development/trial-port-exhausted` 拒绝。
-4. **启动。** 在工作区内运行 `node apps/cli/lib/bin.js web --host 127.0.0.1 --port <port> --no-open`，`DSH_HOME` 设为解析出的数据目录，以独立进程组方式后台启动。实例的地址从其输出的第一行 `dsh web: http://…` 中读取；进程退出、或在 `readyTimeoutMs` 之前始终没有打印这一行，都会让打开以 `self-development/trial-start-failed` 失败，并且在抛出失败之前会先把进程组收尾掉。
+3. **登记工作区。** 数据目录的工作区注册表（`storages/workspace.json`，即 workspace 域按默认 `storage-json` 后端布局的单文档）会加入该工作区，标题为 `<taskId> (trial)`，这样试验版 GUI 一打开就在这个工作区里，而不是让人再去添加。注册表不存在则新建并写 `initialized: false`，把战役期间的会话挂到记录上的历史引导留给注册表自己；已存在则把记录插到显示顺序最前；注册表已列有该工作区、或带有未完成的变更标记，则不动。结果在试验日志里记一行；无法识别的注册表会被拒绝而不是覆盖——那一行会提示手动添加工作区，打开流程照常继续。
+4. **端口分配。** 在 `portRange` 中扫描第一个空闲的回环端口，跳过本进程已经分给存活实例的端口。区间耗尽则以 `self-development/trial-port-exhausted` 拒绝。
+5. **启动。** 在工作区内运行 `node apps/cli/lib/bin.js web --host 127.0.0.1 --port <port> --no-open`，`DSH_HOME` 设为解析出的数据目录，以独立进程组方式后台启动。实例的地址从其输出的第一行 `dsh web: http://…` 中读取；进程退出、或在 `readyTimeoutMs` 之前始终没有打印这一行，都会让打开以 `self-development/trial-start-failed` 失败，并且在抛出失败之前会先把进程组收尾掉。
 
 对已有存活实例的任务重复调用 `openTrial`，会原样返回该实例——不会再构建、再启动、再占端口。任务 id 未通过核心自身校验（比如一个带路径转义的 id）会在任何这些步骤之前就以 `self-development/config-invalid` 拒绝。
 
@@ -101,6 +102,7 @@ kind: "package-reference"
 - **每次打开都重新构建，任务之间不共享构建缓存。** 每次 `openTrial` 都会在自己的工作区里跑一次全新的 `pnpm run --silent build`；本包不在任务之间、也不在同一任务的重复打开（在其实例已退出之后）之间共享任何构建产物。
 - **实例不会在进程重启后存活。** 重启后 `trials()` 从 `[]` 开始，即便某个 sidecar 可能仍然写着一个 pid：本服务只跟踪自己在本进程里启动过的实例——这与受监督 runner 的进程组模块"只认自己 spawn 的记录"的归属原则一致，绝不会按进程名或仅凭一个存储的 pid 去发信号。
 - **自动打开需要事件消费方发布 `campaign-passed`。** `@deepseek-ai/dsh-workflow-self-development-events` 把门面的战役结果映射成这种事件；没有这个消费方（或用了别的事件源）的部署，只能靠自己调用 `openTrial`，或通过 `internals.events` 提供兼容的事件源。
+- **工作区登记只写 `storage-json` 的单文档布局。** 若部署的数据目录模板选了别的存储后端，或给 workspace 域选了逐记录布局，登记出的文件会被忽略，试验版 GUI 仍会要求添加工作区；记录形状与版本取自 `@deepseek-ai/dsh-workspace` 自己的域规格，文档外壳取自 `storage-json` 文档化的格式。
 - **构建步骤的 `nodeBinary` 参数目前未被使用。** `runBuild` 保留这个参数只是为了与 `resolveBuildCommand`（真正用它解析 corepack 兜底路径的地方）签名对称；构建命令本身在 `runBuild` 运行之前就已经解析完毕。
 
 <a id="dev-note"></a>

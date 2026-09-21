@@ -25,6 +25,9 @@
     },
     {
       "path": "../workflow-self-development-remote"
+    },
+    {
+      "path": "../../workspace/workspace"
     }
   ]
 }

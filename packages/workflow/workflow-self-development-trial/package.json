@@ -38,6 +38,7 @@
   "dependencies": {
     "@deepseek-ai/dsh-workflow-self-development": "workspace:^",
     "@deepseek-ai/dsh-workflow-self-development-remote": "workspace:^",
+    "@deepseek-ai/dsh-workspace": "workspace:^",
     "@deepseek-ai/schemastery": "workspace:^"
   },
   "devDependencies": {

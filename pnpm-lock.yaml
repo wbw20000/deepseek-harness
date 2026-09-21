@@ -12683,6 +12683,9 @@ importers:
       '@deepseek-ai/dsh-workflow-self-development-remote':
         specifier: workspace:^
         version: link:../workflow-self-development-remote
+      '@deepseek-ai/dsh-workspace':
+        specifier: workspace:^
+        version: link:../../workspace/workspace
       '@deepseek-ai/schemastery':
         specifier: link:../../../vendor/schemastery
         version: link:../../../vendor/schemastery

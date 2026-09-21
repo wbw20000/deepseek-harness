@@ -222,9 +222,12 @@ describe('openTrial teardown bookkeeping', () => {
     await expect(service.openTrial('task-no-pid'))
       .rejects.toMatchObject({ code: 'self-development/trial-start-failed' })
     expect(stopMock).not.toHaveBeenCalled()
-    // discard() returns before logging anything when the pid is missing, so
-    // no log file is ever created for this task.
-    await expect(readFile(trialLogPath(control, 'task-no-pid'), 'utf8')).rejects.toThrow()
+    // discard() returns before logging anything when the pid is missing: the
+    // log holds the build and the workspace seed that ran before the spawn,
+    // and nothing about a teardown.
+    const log = await readFile(trialLogPath(control, 'task-no-pid'), 'utf8')
+    expect(log).toContain('trial workspace seeded: ')
+    expect(log).not.toContain('trial open failed')
   })
 
   it('stops the group after a failed ready and logs the stop', async () => {

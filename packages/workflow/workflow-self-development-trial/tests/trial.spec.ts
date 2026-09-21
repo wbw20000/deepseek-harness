@@ -7,7 +7,7 @@
  * @module trial.spec
  */
 
-import { chmod, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -15,6 +15,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 import SelfDevelopmentTrial from '../src/index.ts'
 import { trialLogPath, trialRecordPath } from '../src/registry.ts'
+import { WORKSPACE_UNIT_FILE } from '../src/workspace-seed.ts'
 import type { CampaignPassedEvent, TrialConfig, TrialEventSource, TrialRecord } from '../src/types.ts'
 import { expectOpened, freePort, isAlive, makeEnvironment, makeWorktree, removeEnvironment, trialConfig, until } from './helpers.ts'
 import type { TrialEnvironment } from './helpers.ts'
@@ -318,6 +319,44 @@ describe('openTrial', () => {
     expect(await recordExists('task-start-fail')).toBe(false)
     const log = await readFile(trialLogPath(environment.controlDirectory, 'task-start-fail'), 'utf8')
     expect(log).toContain('trial open failed; the web process was stopped')
+  })
+
+  it('seeds the data home with the worktree as a workspace, reports it present on a later open, and survives a seed failure', async () => {
+    const { service } = await makeService()
+    const dataHome = join(environment!.base, 'data-home')
+    const result = expectOpened(await service.openTrial('task-seed'))
+    const registry = JSON.parse(await readFile(join(dataHome, WORKSPACE_UNIT_FILE), 'utf8')) as {
+      global: { initialized: boolean; workspaceIds: string[] }
+      tables: { workspaces: Record<string, { path: string; title: string }> }
+    }
+    expect(registry.global.workspaceIds).toHaveLength(1)
+    const seeded = registry.tables.workspaces[registry.global.workspaceIds[0] as string]
+    expect(seeded).toMatchObject({ path: await realpath((await readRecord('task-seed')).worktree), title: 'task-seed (trial)' })
+    let log = await readFile(trialLogPath(environment!.controlDirectory, 'task-seed'), 'utf8')
+    expect(log).toContain(`trial workspace seeded: ${seeded?.path ?? ''}`)
+    await service.closeTrial('task-seed')
+    expect(isAlive(result.pid)).toBe(false)
+    // The registry now holds the worktree: a second open leaves it alone.
+    expectOpened(await service.openTrial('task-seed'))
+    log = await readFile(trialLogPath(environment!.controlDirectory, 'task-seed'), 'utf8')
+    expect(log).toContain(`trial workspace present: ${seeded?.path ?? ''}`)
+    await service.closeTrial('task-seed')
+    // A registry the seed does not recognise is refused, logged, and the trial still opens.
+    await writeFile(join(dataHome, WORKSPACE_UNIT_FILE), '[]\n')
+    expectOpened(await service.openTrial('task-seed'))
+    log = await readFile(trialLogPath(environment!.controlDirectory, 'task-seed'), 'utf8')
+    expect(log).toContain('trial workspace seeding failed; add the worktree as a workspace by hand: registry file is not a JSON object')
+    expect(await readFile(join(dataHome, WORKSPACE_UNIT_FILE), 'utf8')).toBe('[]\n')
+    // A pending mutation is left to the registry and reported as not seeded.
+    await service.closeTrial('task-seed')
+    await writeFile(join(dataHome, WORKSPACE_UNIT_FILE), JSON.stringify({
+      unit: { name: 'workspace', version: 2 },
+      global: { initialized: true, workspaceIds: [], archivedSessionIds: [], pendingMutation: { operation: 'delete', workspaceId: 'w' } },
+      tables: { workspaces: {} },
+    }))
+    expectOpened(await service.openTrial('task-seed'))
+    log = await readFile(trialLogPath(environment!.controlDirectory, 'task-seed'), 'utf8')
+    expect(log).toContain('trial workspace not seeded: registry has a pending delete; left for the host to recover')
   })
 
   it('uses the runner data home when the launch profile has none', async () => {
