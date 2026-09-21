@@ -1129,8 +1129,8 @@ describe('approveBudget preset: unlimited', () => {
       mode: 'time',
       maxRounds: undefined,
       durationMs: 86_400_000,
-      phaseTimeoutMs: 600_000,
-      maxStepsPerAttempt: 40,
+      phaseTimeoutMs: undefined,
+      maxStepsPerAttempt: undefined,
       noProgressAttemptLimit: 5,
     })
   })
@@ -1158,12 +1158,15 @@ describe('approveBudget preset: unlimited', () => {
     await facade.approveBudget(TASK_ID, revision, {
       preset: 'unlimited',
       maxStepsPerAttempt: 7,
+      phaseTimeoutMs: 90_000,
       testPlanVersion: TestPlanVersion(1),
       taskSpecVersion: TaskSpecVersion(1),
       approvedBy: 'tester',
     })
     const card = (await facade.getTask(TASK_ID)).card.budget
+    // Explicit per-attempt bounds travel; the preset supplies only the durationMs.
     expect(card.maxStepsPerAttempt).toBe(7)
+    expect(card.phaseTimeoutMs).toBe(90_000)
     expect(card.durationMs).toBe(86_400_000)
   })
 

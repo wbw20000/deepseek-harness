@@ -70,14 +70,15 @@ const confirmedPlanSchema = zod.strictObject({
 export const MAX_BUDGET_DURATION_MS = 24 * 60 * 60 * 1000
 
 /**
- * The `preset: 'unlimited'` expansion: a 24-hour time budget with a
- * conservative per-phase, per-attempt, and no-progress bound.
+ * The `preset: 'unlimited'` expansion: a `time`-mode budget bounded only by
+ * the 24-hour total the core requires for that mode and the no-progress stop.
+ * No per-attempt step/call cap (a `time`-mode budget is not required to carry
+ * one), no per-phase cap, and no token-total cap (the budget has no such
+ * field).
  */
 export const UNLIMITED_BUDGET_PRESET = {
   mode: 'time' as const,
   durationMs: MAX_BUDGET_DURATION_MS,
-  phaseTimeoutMs: 600_000,
-  maxStepsPerAttempt: 40,
   noProgressAttemptLimit: 5,
 }
 
@@ -117,8 +118,10 @@ function expandBudgetPreset(input: zod.infer<typeof budgetApprovalSchema>): Budg
     mode: explicit.mode ?? UNLIMITED_BUDGET_PRESET.mode,
     ...(explicit.maxRounds === undefined ? {} : { maxRounds: explicit.maxRounds }),
     durationMs: explicit.durationMs ?? UNLIMITED_BUDGET_PRESET.durationMs,
-    phaseTimeoutMs: explicit.phaseTimeoutMs ?? UNLIMITED_BUDGET_PRESET.phaseTimeoutMs,
-    maxStepsPerAttempt: explicit.maxStepsPerAttempt ?? UNLIMITED_BUDGET_PRESET.maxStepsPerAttempt,
+    // The unlimited preset carries no per-phase or step cap, so these travel
+    // only when the caller set them explicitly; absent means "no limit".
+    ...(explicit.phaseTimeoutMs === undefined ? {} : { phaseTimeoutMs: explicit.phaseTimeoutMs }),
+    ...(explicit.maxStepsPerAttempt === undefined ? {} : { maxStepsPerAttempt: explicit.maxStepsPerAttempt }),
     noProgressAttemptLimit: explicit.noProgressAttemptLimit ?? UNLIMITED_BUDGET_PRESET.noProgressAttemptLimit,
     testPlanVersion: explicit.testPlanVersion,
     taskSpecVersion: explicit.taskSpecVersion,

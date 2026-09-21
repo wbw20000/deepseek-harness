@@ -3984,7 +3984,7 @@ export interface UpgradeNoneConfig {
 }
 ```
 
-Source: [`packages/workflow/workflow-self-development-chat/src/config.ts:79`](../packages/workflow/workflow-self-development-chat/src/config.ts)
+Source: [`packages/workflow/workflow-self-development-chat/src/config.ts:100`](../packages/workflow/workflow-self-development-chat/src/config.ts)
 
 <a id="deepseek-aidsh-workflow-self-development-events"></a>
 

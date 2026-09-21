@@ -76,7 +76,7 @@ kind: "package-reference"
 | `plan.requiredCases` | `{ caseId, requirement, assertionIds }[]`——每轮战役都必须通过的验收用例。 |
 | `plan.manualCases` | 明确留给人工核验的验收项。 |
 | `acceptance` | 起草的验收定义：`{ "cases": [ { "caseId", "command": string[], "cwd"?, "timeoutMs", "assertions": [...] } ] }`，每条断言是以下之一：`{ assertionId, kind: "exit-code", expected }`、`{ assertionId, kind: "stdout-includes", text }`、`{ assertionId, kind: "file-exists", path }`、`{ assertionId, kind: "file-includes", path, text }`——工具参数 schema 显式声明了这个形状（是对象 schema，不是不透明的 JSON blob），对于无法直接生成嵌套对象的工具调用格式，也接受同形状的 JSON 字符串。`plan.requiredCases` 里每个 `caseId` 与 `assertionIds` 都必须在此定义；审批卡展示前即校验。 |
-| `budget` | `{ preset: 'unlimited' }`（时间上限 24 小时）、`{ mode: 'rounds', maxRounds }`，或 `{ mode: 'time', hours }`（`hours` ≤ 24，否则拒绝）。 |
+| `budget` | `{ preset: 'unlimited' }`（无步数/调用/token 上限；仅由 24 小时总时长与无进展停止兜底）、`{ mode: 'rounds', maxRounds }`，或 `{ mode: 'time', hours }`（`hours` ≤ 24，否则拒绝）。 |
 | `unattended` | 是否一次审批覆盖全部战役轮次。 |
 | `parallel` | `false` 时，若本进程发起的另一战役仍在运行则拒绝本次提案。 |
 
@@ -111,7 +111,7 @@ Host-only：这个工具会重建并重启它所在的这个稳定版，所以�
 4. **`authorizePlanning`**
 5. **`submitPlanDraft`**
 6. **`confirmPlan`**
-7. **`approveBudget`** ——`budget` 字段映射为门面的线上形式；`unlimited` 预设同时携带 `preset: 'unlimited'` 标记与其展开字段（`durationMs: 24 小时、phaseTimeoutMs: 600000、maxStepsPerAttempt: 40、noProgressAttemptLimit: 5`），因此该调用在 DH-a 线上变更落地前后都合法。
+7. **`approveBudget`** ——`budget` 字段映射为门面的线上形式；`unlimited` 预设同时携带 `preset: 'unlimited'` 标记与其展开字段（`durationMs: 24 小时、noProgressAttemptLimit: 5`——无步数/调用上限、无每阶段上限、无 token 上限），因此该调用在 DH-a 线上变更落地前后都合法。`rounds` 预算则携带核心要求的每次尝试边界（`phaseTimeoutMs: 6 小时、maxStepsPerAttempt: 1000`），使一轮无法藏匿无界工作。
 8. **`startCampaign(taskId, rev, { unattended, acceptedBy })`** ——启动无人值守（或逐轮）战役循环；成功时其返回的 `CampaignState` 即提案结果的 `campaign` 字段。
 
 返回的 `steps[]` 轨迹在这八步之前还有两个记账步骤——`approval`（已获批准）与 `baseline`（已读取的 `stableBaselineDigest`）——在上述八个门面操作之外，再多给出五个具名检查点，便于诊断部分失败。

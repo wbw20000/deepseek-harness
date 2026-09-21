@@ -322,7 +322,7 @@ export class SelfDevelopmentChat extends Service {
         },
         budget: {
           oneOf: [
-            { type: 'object', additionalProperties: false, properties: { preset: { type: 'string', required: true, const: 'unlimited', description: 'No round limit, time capped at 24 hours.' } } },
+            { type: 'object', additionalProperties: false, properties: { preset: { type: 'string', required: true, const: 'unlimited', description: 'No round, step/call, or token limit; bounded only by a 24-hour total-time ceiling and the no-progress stop.' } } },
             { type: 'object', additionalProperties: false, properties: { mode: { type: 'string', required: true, const: 'rounds' }, maxRounds: { type: 'integer', required: true, description: 'Maximum campaign rounds, positive.' } } },
             { type: 'object', additionalProperties: false, properties: { mode: { type: 'string', required: true, const: 'time' }, hours: { type: 'number', required: true, description: 'Time budget in hours; at most 24.' } } },
           ],

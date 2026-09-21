@@ -1,6 +1,5 @@
 /** Bilingual approval-card copy for the proposal approval request. */
 
-import { MAX_BUDGET_HOURS } from './config.ts'
 import type { ProposeBudget, ResolvedProposeInput } from './types.ts'
 
 /** The two card languages; the deployment picks one through `cardLocale`. */
@@ -8,7 +7,7 @@ export type CardLocale = 'zh' | 'en'
 
 /** Budget terms in card copy. */
 function budgetText(budget: ProposeBudget, locale: CardLocale): string {
-  if ('preset' in budget) return locale === 'zh' ? '不限制（时间上限 24 小时）' : `unlimited (time capped at ${MAX_BUDGET_HOURS}h)`
+  if ('preset' in budget) return locale === 'zh' ? '不限制（无步数/调用/token 上限；总时长 24 小时兜底）' : 'unlimited (no step, call, or token cap; 24h total ceiling)'
   if (budget.mode === 'rounds') {
     return locale === 'zh' ? `轮数上限 ${budget.maxRounds}` : `max ${budget.maxRounds} rounds`
   }

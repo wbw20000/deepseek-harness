@@ -1,6 +1,6 @@
 /** Budget selection validation and the mapping to the facade's budget-approval wire form. */
 
-import { MAX_BUDGET_HOURS, UNLIMITED_BUDGET } from './config.ts'
+import { MAX_BUDGET_HOURS, ROUNDS_ATTEMPT_BOUNDS, UNLIMITED_BUDGET } from './config.ts'
 import type { BudgetApprovalWire, ProposeBudget } from './types.ts'
 
 /**
@@ -47,8 +47,8 @@ export function toBudgetApproval(
     return {
       mode: 'rounds',
       maxRounds: budget.maxRounds,
-      phaseTimeoutMs: UNLIMITED_BUDGET.phaseTimeoutMs,
-      maxStepsPerAttempt: UNLIMITED_BUDGET.maxStepsPerAttempt,
+      phaseTimeoutMs: ROUNDS_ATTEMPT_BOUNDS.phaseTimeoutMs,
+      maxStepsPerAttempt: ROUNDS_ATTEMPT_BOUNDS.maxStepsPerAttempt,
       ...base,
     }
   }

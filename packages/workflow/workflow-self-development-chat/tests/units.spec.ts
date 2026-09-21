@@ -279,24 +279,22 @@ describe('budgetViolation', () => {
 describe('toBudgetApproval', () => {
   const base = { testPlanVersion: 1, taskSpecVersion: 1, approvedBy: 'user' }
 
-  it('expands the unlimited preset with the preset marker and the time fields', () => {
+  it('expands the unlimited preset with no step cap, bounded only by the 24-hour total', () => {
     expect(toBudgetApproval({ preset: 'unlimited' }, base)).toEqual({
       preset: 'unlimited',
       mode: 'time',
       durationMs: 24 * 3600 * 1000,
-      phaseTimeoutMs: 600_000,
-      maxStepsPerAttempt: 40,
       noProgressAttemptLimit: 5,
       ...base,
     })
   })
 
-  it('maps a rounds budget to the rounds wire form', () => {
+  it('maps a rounds budget to the rounds wire form with the raised per-attempt bounds', () => {
     expect(toBudgetApproval({ mode: 'rounds', maxRounds: 3 }, base)).toEqual({
       mode: 'rounds',
       maxRounds: 3,
-      phaseTimeoutMs: 600_000,
-      maxStepsPerAttempt: 40,
+      phaseTimeoutMs: 6 * 3600 * 1000,
+      maxStepsPerAttempt: 1000,
       ...base,
     })
   })
@@ -330,7 +328,7 @@ describe('approvalReason', () => {
     const reason = approvalReason(input, paths, 'en')
     expect(reason).toContain('Requirement: add search')
     expect(reason).toContain('Acceptance cases: c1; manual: manual-review')
-    expect(reason).toContain('Budget: unlimited (time capped at 24h)')
+    expect(reason).toContain('Budget: unlimited (no step, call, or token cap; 24h total ceiling)')
     expect(reason).toContain('Unattended: yes — one approval covers every round, no OS isolation')
     expect(reason).toContain('Workspace: /exp (task task-1)')
     expect(reason).toContain('Acceptance definition: /exp/control/acceptance/task-1.json')

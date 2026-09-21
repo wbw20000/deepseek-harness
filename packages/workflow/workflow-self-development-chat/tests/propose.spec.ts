@@ -335,7 +335,7 @@ describe('runPropose', () => {
     expect(request.callId).toBe('call-1')
     expect(request.reason).toContain('需求：add chat transcript search')
     expect(request.reason).toContain('验收用例：c1；人工核验：manual-review')
-    expect(request.reason).toContain('预算：不限制（时间上限 24 小时）')
+    expect(request.reason).toContain('预算：不限制（无步数/调用/token 上限；总时长 24 小时兜底）')
     expect(request.reason).toContain('无人值守：是——一次确认覆盖全部轮次，无 OS 隔离')
     expect(request.reason).toContain(`工作区：${join(control, '..', 'exp')}`)
 

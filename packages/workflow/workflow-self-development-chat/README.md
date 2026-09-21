@@ -76,7 +76,7 @@ Parameters (every field the model drafts from the user's words, except `budget`/
 | `plan.requiredCases` | `{ caseId, requirement, assertionIds }[]` — the acceptance cases every campaign round must pass. |
 | `plan.manualCases` | Acceptance items explicitly reserved for human verification. |
 | `acceptance` | The drafted acceptance definition: `{ "cases": [ { "caseId", "command": string[], "cwd"?, "timeoutMs", "assertions": [...] } ] }`, where each assertion is one of `{ assertionId, kind: "exit-code", expected }`, `{ assertionId, kind: "stdout-includes", text }`, `{ assertionId, kind: "file-exists", path }`, or `{ assertionId, kind: "file-includes", path, text }` — the tool parameter schema states this shape explicitly (an object schema, not an opaque JSON blob), and also accepts the same shape as a JSON-encoded string for a tool-calling format that cannot emit nested objects. Every `plan.requiredCases[].caseId` and `assertionIds` must be defined here; validated before the approval card is shown. |
-| `budget` | `{ preset: 'unlimited' }` (24h time cap), `{ mode: 'rounds', maxRounds }`, or `{ mode: 'time', hours }` (`hours` ≤ 24, rejected otherwise). |
+| `budget` | `{ preset: 'unlimited' }` (no step/call/token cap; bounded only by a 24h total and the no-progress stop), `{ mode: 'rounds', maxRounds }`, or `{ mode: 'time', hours }` (`hours` ≤ 24, rejected otherwise). |
 | `unattended` | Whether one approval covers every campaign round. |
 | `parallel` | `false` refuses the proposal while another campaign this process started is still running. |
 
@@ -111,7 +111,7 @@ After the single approval, `self_development_propose` drives the facade through 
 4. **`authorizePlanning`**
 5. **`submitPlanDraft`**
 6. **`confirmPlan`**
-7. **`approveBudget`** — the `budget` field maps to the facade's wire form; the `unlimited` preset carries both the `preset: 'unlimited'` marker and its expanded fields (`durationMs: 24h, phaseTimeoutMs: 600000, maxStepsPerAttempt: 40, noProgressAttemptLimit: 5`), so the call stays valid against the facade both before and after DH-a's wire change lands.
+7. **`approveBudget`** — the `budget` field maps to the facade's wire form; the `unlimited` preset carries both the `preset: 'unlimited'` marker and its expanded fields (`durationMs: 24h, noProgressAttemptLimit: 5` — no step/call cap, no per-phase cap, no token cap), so the call stays valid against the facade both before and after DH-a's wire change lands. A `rounds` budget instead carries the core-required per-attempt bounds (`phaseTimeoutMs: 6h, maxStepsPerAttempt: 1000`) so one round cannot hide unbounded work.
 8. **`startCampaign(taskId, rev, { unattended, acceptedBy })`** — starts the unattended (or per-round) campaign loop; its returned `CampaignState` is the proposal's `campaign` field on success.
 
 Two bookkeeping steps precede these eight in the returned `steps[]` trail — `approval` (the granted approval) and `baseline` (the read `stableBaselineDigest`) — giving five additional named checkpoints for diagnosing a partial failure, beyond the eight facade-affecting operations above.

@@ -3,20 +3,41 @@
 import { isAbsolute } from 'node:path'
 import type { ProposeBudget } from './types.ts'
 
-/** Upper bound of a time budget in hours, frozen by the 2026-09-20 DH wave decision. */
+/** Upper bound of an explicit `time` budget in hours (the `hours ≤ 24` validation for that mode). */
 export const MAX_BUDGET_HOURS = 24
 
 /**
+ * Total-time ceiling the `unlimited` preset carries. The core refuses a
+ * `time`-mode budget with no `durationMs` (its anti-runaway invariant), so
+ * `unlimited` cannot be literally infinite — it keeps this single 24-hour
+ * total, the ceiling the operator already chose on 2026-09-20. That is the
+ * only bound: `unlimited` sets no per-attempt step/call cap (a `time`-mode
+ * budget is not required to, and this is what let a real task run past the
+ * old 40-step cap) and no per-phase cap, and the budget has no token field.
+ */
+export const UNLIMITED_DURATION_MS = 24 * 3600 * 1000
+
+/**
+ * The per-attempt bounds a `rounds` budget carries. The core requires a
+ * `rounds` (non-`time`) budget to bound each attempt's phase time and step
+ * count so one round cannot hide unbounded work; these are raised far above
+ * any real task's needs (the previous 40-step / 10-minute values cut real
+ * work short) while keeping that invariant satisfiable.
+ */
+export const ROUNDS_ATTEMPT_BOUNDS = {
+  phaseTimeoutMs: 6 * 3600 * 1000,
+  maxStepsPerAttempt: 1000,
+} as const
+
+/**
  * The `unlimited` budget expansion, mirroring the DH-a facade's `preset: 'unlimited'`
- * wire expansion: a 24-hour time budget with the campaign's per-phase and
- * no-progress guardrails. The chat side sends the expanded fields alongside the
- * `preset` marker so the call stays valid against the facade before and after
- * the DH-a wire change.
+ * wire expansion: a `time`-mode budget bounded only by the {@link UNLIMITED_DURATION_MS}
+ * total and the no-progress stop — no step/call cap, no per-phase cap, no token
+ * cap. The chat side sends these fields alongside the `preset` marker so the
+ * call stays valid against the facade before and after the DH-a wire change.
  */
 export const UNLIMITED_BUDGET = {
-  durationMs: 24 * 3600 * 1000,
-  phaseTimeoutMs: 600_000,
-  maxStepsPerAttempt: 40,
+  durationMs: UNLIMITED_DURATION_MS,
   noProgressAttemptLimit: 5,
 } as const
 

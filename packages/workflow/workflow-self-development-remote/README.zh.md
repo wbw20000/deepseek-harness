@@ -126,7 +126,7 @@ running --[stopCampaign call]---------------------------------------------------
 
 战役记录存放在 `<controlDirectory>/campaigns/<taskId>.json`，原子写入（临时文件 + rename），文件 0600、目录 0700，是门面独占拥有的每任务运行时状态——核心日志从不记录它。构造时，本进程会把它发现的每个 `running` 战役标记为 `stopped`，reason 为 `process restarted`（惰性扫描一次，在第一次战役方法调用之前）——战役从不跨重启自动续跑，因此被崩溃进程留下的无人值守战役会保持停止状态，直到有人重新调用 `startCampaign`。这次重启恢复直接写记录，不发出 `campaign-ended` 事件；消费方必须轮询 `campaign(taskId)` 才能得知。
 
-**预算便捷项。** `approveBudget` 的 `preset: 'unlimited'` 在核心看到它之前展开为 `{ mode: 'time', durationMs: 86_400_000, phaseTimeoutMs: 600_000, maxStepsPerAttempt: 40, noProgressAttemptLimit: 5 }`；任何同时显式设置的字段都会覆盖其展开默认值。`durationMs`——无论显式还是由 preset 展开——硬性上限为 24 小时；更大的值一律以 `self-development/config-invalid` 拒绝，与是否使用 `preset` 无关。
+**预算便捷项。** `approveBudget` 的 `preset: 'unlimited'` 在核心看到它之前展开为 `{ mode: 'time', durationMs: 86_400_000, noProgressAttemptLimit: 5 }`——无每次尝试步数/调用上限（`time` 模式无需携带,故 `unlimited` 不设）、无每阶段上限、无 token 上限；任何同时显式设置的字段都会覆盖或补充该默认值。`durationMs`——无论显式还是由 preset 展开——硬性上限为 24 小时；更大的值一律以 `self-development/config-invalid` 拒绝，与是否使用 `preset` 无关。
 
 <a id="permission-model"></a>
 ## 权限模型
