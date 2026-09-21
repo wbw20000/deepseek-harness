@@ -40,7 +40,7 @@ The plugin config defines the preset table and the default for fresh sessions. E
         approval: ask
       danger-full-access:
         sandbox: danger-full-access
-        approval: never
+        approval: ask
     defaultPreset: workspace-write
 ```
 
@@ -50,6 +50,10 @@ The plugin config defines the preset table and the default for fresh sessions. E
 | `defaultPreset` | inferred | Preset pinned into fresh sessions; required when composition defaults match no preset |
 
 The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-permission-presets) is the exhaustive source for every accepted field and its JSDoc. `custom` is reserved for the derived not-a-preset state, while `auto` is reserved for the Auto review integration. Mounting requires a confining bash executor (one that reports a `sandboxMode`) and the approval service.
+
+### Auto-granting in the full-access sandbox
+
+The `danger-full-access` preset keeps the ordinary `ask` approval policy, but this service registers a prepended `approval/request` answerer that grants deterministically — before the notification and UI card answerers — whenever the requesting session's effective sandbox mode is `danger-full-access`. So the full-access preset ("full access, do not prompt") proceeds through every approval gate without a card, while `workspace-write` and any other sandbox delegate to the usual answerers. The answerer reads the effective sandbox the way the current-value resolver does (the folded `sandbox/mode` knob, else the composition default) and delegates on any read failure, so a grant is only ever an explicit full-access read. The fixed `auto` preset is unaffected: it carries the `never` policy, which the approval service rejects before any answerer runs.
 
 ### Switching presets
 
@@ -136,6 +140,7 @@ These limits define what the preset service does not offer. They are current pac
 - **The configured preset table is fixed for the plugin lifetime** — only the fixed Auto contribution can change the live process catalog without reloading this service.
 - **Auto cannot become a default** — it exists only while its integration effect is live and is intentionally absent from the `permission` settings schema.
 - **Stored defaults must remain in the preset table** — removing the referenced preset makes Permission settings registration fail until the `permission` section in `settings.yaml` is updated or reset.
+- **Full-access auto-grant removes the human gate for every approval-gated action, not just the one you had in mind** — a session in the `danger-full-access` sandbox auto-grants *all* `approval/request` decisions (destructive tool retries, and any consumer that gates a side effect on approval, such as a self-development merge to a stable branch), with no card and no per-action opt-out. It is a runtime answerer, so the session's durable approval policy still reads `ask`; the grant is not visible in the policy fold. Keep this preset for sessions the operator has genuinely pre-authorized end to end, and use `workspace-write` (which keeps `ask`) when any action should still surface a card.
 
 <a id="dev-note"></a>
 ### Dev Note

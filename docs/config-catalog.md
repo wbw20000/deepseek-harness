@@ -1862,8 +1862,10 @@ export interface Config {
   /**
    * The preset table: name → knob bundle. Defaults to `workspace-write`
    * (workspace-write + ask) and `danger-full-access` (danger-full-access +
-   * never). The names `custom` and `auto` are reserved for derived state and
-   * the Auto review integration respectively.
+   * ask, whose approval requests this service auto-grants — see
+   * {@link PermissionPresetService.autoGrantFullAccessApprovals}). The names
+   * `custom` and `auto` are reserved for derived state and the Auto review
+   * integration respectively.
    */
   presets?: Record<string, PresetSpec>
   /**

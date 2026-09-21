@@ -23,7 +23,7 @@ import { SANDBOX_MODES, setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 // Side-effect type import: declaration-merges `ctx.shell` (the capability fact
 // `sandboxMode` this service reads), without a value dependency on the seam.
 import type {} from '@deepseek-ai/dsh-shell'
-import type { ApprovalPolicy } from '@deepseek-ai/dsh-user-approval'
+import type { ApprovalOutcome, ApprovalPolicy } from '@deepseek-ai/dsh-user-approval'
 import { APPROVAL_POLICIES, setApprovalPolicy } from '@deepseek-ai/dsh-user-approval'
 import type {} from '@deepseek-ai/dsh-settings'
 // Type-only: resolves the required projection service and optional settings/command children.
@@ -157,8 +157,10 @@ export interface Config {
   /**
    * The preset table: name → knob bundle. Defaults to `workspace-write`
    * (workspace-write + ask) and `danger-full-access` (danger-full-access +
-   * never). The names `custom` and `auto` are reserved for derived state and
-   * the Auto review integration respectively.
+   * ask, whose approval requests this service auto-grants — see
+   * {@link PermissionPresetService.autoGrantFullAccessApprovals}). The names
+   * `custom` and `auto` are reserved for derived state and the Auto review
+   * integration respectively.
    */
   presets?: Record<string, PresetSpec>
   /**
@@ -188,8 +190,8 @@ export class PermissionPresetService extends TypertRemoteService {
         name: 'workspace-write', description: 'Write inside the workspace and permitted temporary directories; wider retries require approval.',
       },
       'danger-full-access': {
-        sandbox: 'danger-full-access', approval: 'never',
-        name: 'danger-full-access', description: 'Full file access without approval prompts.',
+        sandbox: 'danger-full-access', approval: 'ask',
+        name: 'danger-full-access', description: 'Full file access; approval-gated actions are pre-approved and proceed without a prompt.',
       },
     }),
     defaultPreset: z.string(),
@@ -258,6 +260,13 @@ export class PermissionPresetService extends TypertRemoteService {
     for (const session of ctx.sessions.list()) {
       this.pinInitialPermission(session)
     }
+
+    // Auto-grant approvals in the full-access sandbox. Prepended so it decides
+    // before the notification and UI answerers: a `danger-full-access` session
+    // ("full access, do not prompt") never surfaces a card. The `auto` preset
+    // keeps its own `never` policy, which the approval service rejects before
+    // any answerer runs, so this grant never reaches it.
+    ctx.on('approval/request', (request, next) => this.autoGrantFullAccessApprovals(request.agent.session, next), { prepend: true })
 
     // The /permission command: the one write path a web client uses (the
     // popup contribution submits the picked preset as this line). The child
@@ -335,6 +344,28 @@ export class PermissionPresetService extends TypertRemoteService {
     const state = this.ctx.sessionProjections.stateOf(session, 'permissions')
     if (state === undefined) throw new Error('permission: permissions session projection is not registered')
     return state
+  }
+
+  /**
+   * Approval answerer: grant deterministically when the session's effective
+   * sandbox is `danger-full-access`, otherwise delegate. This is what makes
+   * the full-access preset ("full access, do not prompt") proceed without a
+   * card. It reads the effective sandbox the same way {@link derive} does (the
+   * folded `sandbox/mode` knob, else the composition default); any failure to
+   * read it delegates rather than deciding, so a grant is only ever an
+   * explicit full-access read — the answerer never fails a request closed.
+   * @param session - the requesting agent's session.
+   * @param next - delegate to the remaining answerers (the notification and UI card).
+   * @returns `'allowed-once'` in the full-access sandbox, otherwise the delegated outcome.
+   */
+  private autoGrantFullAccessApprovals(session: Session, next: () => Promise<ApprovalOutcome>): Promise<ApprovalOutcome> {
+    let sandbox: SandboxMode | undefined
+    try {
+      sandbox = this.permissionState(session).sandbox ?? this.ctx.shell.sandboxMode
+    } catch {
+      return next()
+    }
+    return sandbox === 'danger-full-access' ? Promise.resolve<ApprovalOutcome>('allowed-once') : next()
   }
 
   /**

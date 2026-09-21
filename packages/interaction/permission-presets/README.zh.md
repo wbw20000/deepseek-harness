@@ -40,7 +40,7 @@ kind: "package-reference"
         approval: ask
       danger-full-access:
         sandbox: danger-full-access
-        approval: never
+        approval: ask
     defaultPreset: workspace-write
 ```
 
@@ -50,6 +50,10 @@ kind: "package-reference"
 | `defaultPreset` | 推断 | 固定到新会话的预设；组合默认值不匹配任何预设时必填 |
 
 生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-permission-presets)是每个受支持字段及其 JSDoc 的穷尽式真源。`custom` 保留给推导出的非预设状态，`auto` 则保留给 Auto review integration。挂载需要具有约束能力的 bash 执行器（会报告 `sandboxMode` 的执行器）与审批服务。
+
+### 完全访问沙箱下自动放行
+
+`danger-full-access` 预设保留普通的 `ask` 审批策略，但本服务注册了一个前置的 `approval/request` 应答器：当发起请求的会话有效沙箱模式为 `danger-full-access` 时，它在通知与 UI 卡片应答器之前确定性地放行。因此完全访问预设（"完全权限、不弹提示"）会无卡片地通过每一道审批闸，而 `workspace-write` 及其他沙箱仍委托给常规应答器。该应答器读取有效沙箱的方式与当前值解析器一致（折叠的 `sandbox/mode` 旋钮，否则用组合默认值），读取失败时委托，所以放行只会源自一次明确的完全访问读取。固定的 `auto` 预设不受影响：它带 `never` 策略，审批服务会在任何应答器运行之前直接拒绝。
 
 ### 切换预设
 
@@ -136,6 +140,7 @@ kind: "package-reference"
 - **配置预设表在插件生命周期内固定**：只有固定的 Auto contribution 可以在不重新加载本服务的情况下改变实时进程目录。
 - **Auto 不能成为默认值**：它只在 integration effect 存活期间存在，并且有意不进入 `permission` 设置 schema。
 - **已存储的默认值必须保留在 preset 表中**：移除被引用的 preset 会导致权限设置注册失败，直到更新或重置 `settings.yaml` 中的 `permission` 分节。
+- **完全访问自动放行会移除人工闸，且作用于所有受审批门控的操作，而不仅是你当下想放行的那一个**：处于 `danger-full-access` 沙箱的会话会自动放行*全部* `approval/request` 决定（破坏性工具重试，以及任何把副作用挂在审批上的消费方，例如把自开发合并到稳定分支），既无卡片也无按操作退出。它是一个运行时应答器，所以会话的持久审批策略仍读作 `ask`，放行不体现在策略折叠里。请只把该预设用于操作者已真正端到端预授权的会话；只要还想让某个操作弹卡片，就用保留 `ask` 的 `workspace-write`。
 
 <a id="dev-note"></a>
 ### 开发备注

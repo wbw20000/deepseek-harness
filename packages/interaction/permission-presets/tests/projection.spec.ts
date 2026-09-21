@@ -68,10 +68,12 @@ describe('permissions projection unit', () => {
     })
     ctx.permissionPresets.set(session, 'danger-full-access')
     const permissionChanges = changes.filter(change => change.key === 'permissions')
-    expect(permissionChanges).toHaveLength(3)
+    // Both default presets share approval 'ask', so the switch appends the
+    // preset event and the sandbox knob only — two projection changes.
+    expect(permissionChanges).toHaveLength(2)
     expect(permissionChanges.at(-1)).toMatchObject({ key: 'permissions', value: { currentValue: 'danger-full-access' } })
     session.append('turn/start', { turn: 1 })
-    expect(changes).toHaveLength(3)
+    expect(changes).toHaveLength(2)
   })
 
   it('projects custom as a current value when the knobs match no preset', async () => {
@@ -154,18 +156,15 @@ describe('/permission command', () => {
     expect(ctx.permissionPresets.current(session)).toBe(AUTO_PRESET)
   })
 
-  it('switches through permission.set and logs the lifecycle pair', async () => {
+  it('switches the sandbox knob and records the command run without an approval-policy notice', async () => {
     const { ctx, session } = await harness()
     const { agent, inject } = await agentFor(ctx, session)
     const execution = await ctx.commands.execute(agent, '/permission danger-full-access', [], new AbortController().signal)
     expect(execution?.result).toEqual({ kind: 'success', text: 'preset danger-full-access' })
     expect(ctx.permissionPresets.current(session)).toBe('danger-full-access')
-    expect(inject.mock.calls[0]?.[0]).toMatchObject({
-      content: [{
-        type: 'text',
-        text: 'The approval policy changed from "ask" to "never" (changed by the user).',
-      }],
-    })
+    // Both default presets share approval 'ask', so the switch flips only the
+    // sandbox knob and queues no approval-policy change notice.
+    expect(inject).not.toHaveBeenCalled()
     const run = session.snapshotEvents().find(event => event.type === 'command/run')
     expect(run?.data).toMatchObject({ name: 'permission', args: ' danger-full-access' })
   })
@@ -196,5 +195,55 @@ describe('/permission command', () => {
     })
     expect(session.snapshotEvents().filter(event =>
       event.type !== 'command/run' && event.type !== 'command/done')).toEqual(before)
+  })
+})
+
+describe('full-access approval auto-grant', () => {
+  /** A live tracked session and a scoped agent with an open turn for approval.request. */
+  async function ask(ctx: Context, session: Session): Promise<{ agent: Agent; request: () => Promise<string> }> {
+    const { agent } = await agentFor(ctx, session)
+    session.append('turn/start', { turn: 1 })
+    return { agent, request: () => ctx.approval.request({ agent, toolName: 'bash' }) }
+  }
+
+  it('grants without a card when the session is in the full-access sandbox', async () => {
+    const { ctx, session } = await harness()
+    ctx.permissionPresets.set(session, 'danger-full-access')
+    const consulted = vi.fn()
+    // A downstream answerer that would REJECT proves the grant preempts every card.
+    ctx.on('approval/request', () => { consulted(); return Promise.resolve('rejected' as const) })
+    const { request } = await ask(ctx, session)
+    await expect(request()).resolves.toBe('allowed-once')
+    expect(consulted).not.toHaveBeenCalled()
+  })
+
+  it('delegates in a non-full-access sandbox, so a workspace-write session still asks', async () => {
+    const { ctx, session } = await harness()
+    // The default workspace-write session keeps its sandbox; with no card answerer
+    // composed the request falls through to the fail-closed unavailable outcome,
+    // which proves the auto-grant answerer delegated rather than deciding.
+    const { request } = await ask(ctx, session)
+    await expect(request()).resolves.toBe('unavailable')
+  })
+
+  it('delegates rather than failing closed when the permission projection state is unavailable', async () => {
+    const { ctx, session } = await harness()
+    ctx.permissionPresets.set(session, 'danger-full-access')
+    // A missing projection state makes the sandbox read throw; the answerer must
+    // delegate (not grant, not fail the request closed).
+    vi.spyOn(ctx.sessionProjections, 'stateOf').mockReturnValueOnce(undefined)
+    const { request } = await ask(ctx, session)
+    await expect(request()).resolves.toBe('unavailable')
+  })
+
+  it('reads the composition-default sandbox when no sandbox knob is folded', async () => {
+    const { ctx, session } = await harness()
+    const real = ctx.sessionProjections.stateOf.bind(ctx.sessionProjections)
+    // No folded sandbox knob: the answerer falls back to ctx.shell.sandboxMode
+    // (workspace-write here), so it delegates rather than granting.
+    vi.spyOn(ctx.sessionProjections, 'stateOf').mockImplementation((s, key) =>
+      key === 'permissions' ? { preset: null, sandbox: null, approval: null, seeded: false } : real(s, key))
+    const { request } = await ask(ctx, session)
+    await expect(request()).resolves.toBe('unavailable')
   })
 })

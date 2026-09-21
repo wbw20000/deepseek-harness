@@ -111,7 +111,7 @@ describe('PermissionPresetService', () => {
   it('advertises the preset table in declaration order and resolves bundles', async () => {
     const ctx = await mounted()
     expect(ctx.permissionPresets.names).toEqual(['workspace-write', 'danger-full-access'])
-    expect(ctx.permissionPresets.resolve('danger-full-access')).toMatchObject({ sandbox: 'danger-full-access', approval: 'never' })
+    expect(ctx.permissionPresets.resolve('danger-full-access')).toMatchObject({ sandbox: 'danger-full-access', approval: 'ask' })
     expect(() => ctx.permissionPresets.resolve('plan')).toThrow(/unknown preset "plan"/)
   })
 
@@ -237,14 +237,15 @@ describe('PermissionPresetService', () => {
     expect(ctx.permissionPresets.current(session)).toBe('danger-full-access')
   })
 
-  it('set() writes through: one preset event plus both knob events', async () => {
+  it('set() writes through: the preset event plus only the changed knobs', async () => {
     const ctx = await mounted()
     const session = freshSession('sess-set')
+    // Both default presets carry approval 'ask', so selecting danger-full-access
+    // from the workspace-write default flips only the sandbox knob.
     ctx.permissionPresets.set(session, 'danger-full-access')
     expect(session.snapshotEvents().map(e => [e.type, e.data])).toEqual([
       ['permission/preset', { preset: 'danger-full-access' }],
       ['sandbox/mode', { mode: 'danger-full-access' }],
-      ['approval/policy', { policy: 'never' }],
     ])
   })
 
@@ -263,7 +264,9 @@ describe('PermissionPresetService', () => {
     // the changed knob.
     session.append('sandbox/mode', { mode: 'read-only' })
     ctx.permissionPresets.set(session, 'danger-full-access')
-    const tail = session.snapshotEvents().slice(4)
+    // First set wrote 2 events (preset + sandbox; approval unchanged), then the
+    // manual sandbox append is 1, so the re-assert's events start at index 3.
+    const tail = session.snapshotEvents().slice(3)
     expect(tail.map(e => [e.type, e.data])).toEqual([
       ['permission/preset', { preset: 'danger-full-access' }],
       ['sandbox/mode', { mode: 'danger-full-access' }],
@@ -277,7 +280,7 @@ describe('PermissionPresetService', () => {
 
   it('optionOf() presents shipped labels/descriptions, falls back to the raw key, and fixes custom', async () => {
     const ctx = await mounted()
-    expect(ctx.permissionPresets.optionOf('danger-full-access')).toEqual({ value: 'danger-full-access', name: 'danger-full-access', description: 'Full file access without approval prompts.' })
+    expect(ctx.permissionPresets.optionOf('danger-full-access')).toEqual({ value: 'danger-full-access', name: 'danger-full-access', description: 'Full file access; approval-gated actions are pre-approved and proceed without a prompt.' })
     expect(ctx.permissionPresets.optionOf('custom')).toEqual({ value: 'custom', name: 'Custom', description: 'Current sandbox and approval settings do not match a preset.' })
     const bare = await mounted({ config: { presets: { plain: { sandbox: 'workspace-write', approval: 'ask' } } } })
     expect(bare.permissionPresets.optionOf('plain')).toEqual({ value: 'plain', name: 'plain' })
