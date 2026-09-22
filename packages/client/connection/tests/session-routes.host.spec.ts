@@ -13,6 +13,7 @@ import {
   CERTIFICATES_REVOKE_ROUTE_PATH,
   LOGOUT_ROUTE_PATH,
   PAIRING_MINT_ROUTE_PATH,
+  PAIRING_ORIGINS_ROUTE_PATH,
   SESSIONS_REVOKE_ROUTE_PATH,
   SESSIONS_ROUTE_PATH,
   type ConnectionConfig,
@@ -327,6 +328,86 @@ describe('connection session routes', () => {
     // A port-less trusted entry admits any port of that host, as the fence does.
     const { dispose } = await mounted({ trustedHosts: ['dsh.example'], publicOrigin: 'http://dsh.example:8080' })
     await dispose()
+  })
+
+  it('offers every declared pairing origin and mints from the one a request names', async () => {
+    const { routes, connection, dispose } = await mounted({
+      trustedHosts: ['dsh.example:8443', 'desk.tailnet.ts.net'],
+      publicOrigin: 'https://dsh.example:8443',
+      // The duplicate collapses, and the second entry survives it.
+      alternatePublicOrigins: ['https://desk.tailnet.ts.net', 'https://dsh.example:8443'],
+    })
+    try {
+      const headers = { host: 'localhost', cookie: browserCookie(connection, 'localhost') }
+      const listed = await serve(routes, fakeRequest(headers, PAIRING_ORIGINS_ROUTE_PATH))
+      expect(listed.status).toBe(200)
+      // Configured public origin first — what a request naming none receives.
+      expect(JSON.parse(listed.body as string)).toEqual({
+        origins: ['https://dsh.example:8443', 'https://desk.tailnet.ts.net'],
+      })
+
+      const named = await serve(routes, fakePost(headers, PAIRING_MINT_ROUTE_PATH, {
+        deviceLabel: 'phone', origin: 'https://desk.tailnet.ts.net',
+      }))
+      expect(named.status).toBe(200)
+      const url = new URL((JSON.parse(named.body as string) as { authenticatedUrl: string }).authenticatedUrl)
+      expect(url.origin).toBe('https://desk.tailnet.ts.net')
+
+      const silent = await serve(routes, fakePost(headers, PAIRING_MINT_ROUTE_PATH, { deviceLabel: 'phone' }))
+      const fallback = new URL((JSON.parse(silent.body as string) as { authenticatedUrl: string }).authenticatedUrl)
+      expect(fallback.origin).toBe('https://dsh.example:8443')
+    } finally { await dispose() }
+  })
+
+  it('falls back to the request origin when the deployment declared none', async () => {
+    const { routes, connection, dispose } = await mounted()
+    try {
+      const headers = { host: 'localhost', cookie: browserCookie(connection, 'localhost') }
+      const listed = await serve(routes, fakeRequest(headers, PAIRING_ORIGINS_ROUTE_PATH))
+      expect(JSON.parse(listed.body as string)).toEqual({ origins: ['http://localhost'] })
+    } finally { await dispose() }
+  })
+
+  it('refuses a mint naming an origin this deployment never declared', async () => {
+    const { routes, connection, dispose } = await mounted({
+      trustedHosts: ['dsh.example:8443'],
+      publicOrigin: 'https://dsh.example:8443',
+    })
+    try {
+      const headers = { host: 'localhost', cookie: browserCookie(connection, 'localhost') }
+      for (const origin of ['https://attacker.example', 'https://dsh.example:8443/', 42]) {
+        const refused = await serve(routes, fakePost(headers, PAIRING_MINT_ROUTE_PATH, { deviceLabel: 'phone', origin }))
+        expect(refused.status).toBe(400)
+        expect(String(refused.body)).toContain('configured pairing origins')
+      }
+    } finally { await dispose() }
+  })
+
+  it('refuses an alternate pairing origin a phone could not use', async () => {
+    const cases: Array<[ConnectionConfig, RegExp]> = [
+      [{ alternatePublicOrigins: ['not a url'] }, /alternatePublicOrigins .* not an absolute URL/u],
+      [{ trustedHosts: ['dsh.example'], alternatePublicOrigins: ['https://dsh.example/app'] }, /alternatePublicOrigins .* bare origin/u],
+      [{ trustedHosts: ['dsh.example'], alternatePublicOrigins: ['https://other.example'] }, /alternatePublicOrigins authority .* not listed in trustedHosts/u],
+    ]
+    for (const [config, expected] of cases) {
+      await expect(mounted(config)).rejects.toThrow(expected)
+    }
+  })
+
+  it('keeps the pairing origin list on the stable host and needs a Host header', async () => {
+    const { routes, connection, dispose } = await mounted({ trustedHosts: ['dsh.example'] })
+    try {
+      const refused = await serve(routes, fakeRequest(
+        { host: 'dsh.example', cookie: browserCookie(connection, 'dsh.example') },
+        PAIRING_ORIGINS_ROUTE_PATH,
+      ))
+      expect(refused.status).toBe(403)
+      expect(String(refused.body)).toContain('stable host only')
+
+      const handler = connection.createSharedFetchHandler(API_PATH)
+      const hostless = await handler.fetch(new Request(`http://dsh.internal${PAIRING_ORIGINS_ROUTE_PATH}`))
+      expect(hostless.status).toBe(400)
+    } finally { await dispose() }
   })
 
   it('refuses to mint a pairing link for a caller that is not the stable host', async () => {

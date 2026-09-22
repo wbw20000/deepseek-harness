@@ -69,6 +69,21 @@ function timestamp(ms: number): string {
 }
 
 /**
+ * Name one mintable origin in the route picker. The authority alone is what
+ * distinguishes the routes and what the person recognises; the scheme is the
+ * same for every entry a deployment offers in practice.
+ * @param origin - the origin as Connection returned it.
+ * @returns its authority, or the whole origin when it does not parse.
+ */
+function originLabel(origin: string): string {
+  try {
+    return new URL(origin).host
+  } catch {
+    return origin
+  }
+}
+
+/**
  * Render the section.
  * @param props - the injected face and the dictionary seat.
  * @returns the section element tree.
@@ -77,6 +92,8 @@ export function PhonePairingPanel(props: PhonePairingPanelProps): ReactNode {
   const { t, api, phone, now } = props
   const [deviceLabel, setDeviceLabel] = useState('')
   const [ttlMinutes, setTtlMinutes] = useState<number>(10)
+  const [origins, setOrigins] = useState<readonly string[]>([])
+  const [origin, setOrigin] = useState<string | undefined>(undefined)
   const [minting, setMinting] = useState(false)
   const [mintError, setMintError] = useState<string | undefined>(undefined)
   const [minted, setMinted] = useState<MintedPairing | undefined>(undefined)
@@ -100,6 +117,23 @@ export function PhonePairingPanel(props: PhonePairingPanelProps): ReactNode {
 
   useEffect(() => { void loadSessions() }, [loadSessions])
 
+  // The route picker only exists where links are minted. A deployment that
+  // declared no alternate answers with one origin and the picker stays hidden;
+  // a failure here leaves the picker hidden too, and minting still works
+  // because a request naming no origin takes the deployment's first choice.
+  useEffect(() => {
+    if (phone) return
+    void (async () => {
+      try {
+        const available = await api.origins()
+        setOrigins(available)
+        setOrigin(available[0])
+      } catch {
+        setOrigins([])
+      }
+    })()
+  }, [api, phone])
+
   // Countdown: re-render once a second while a minted link is on screen.
   useEffect(() => {
     if (minted === undefined) return undefined
@@ -112,7 +146,12 @@ export function PhonePairingPanel(props: PhonePairingPanelProps): ReactNode {
     setMintError(undefined)
     setCopied(undefined)
     try {
-      setMinted(await api.mint({ deviceLabel: deviceLabel.trim(), ttlMs: ttlMinutes * 60_000 }))
+      // An origin travels only when the person had a choice to make: with one
+      // route, or none read, the field stays out and the route takes the
+      // deployment's own first choice — the same request an older client sends.
+      const chosen = origins.length > 1 ? origin : undefined
+      const request = { deviceLabel: deviceLabel.trim(), ttlMs: ttlMinutes * 60_000 }
+      setMinted(await api.mint(chosen === undefined ? request : { ...request, origin: chosen }))
     } catch (error) {
       setMinted(undefined)
       setMintError(error instanceof Error ? error.message : String(error))
@@ -151,6 +190,7 @@ export function PhonePairingPanel(props: PhonePairingPanelProps): ReactNode {
     <section className={css.panel} aria-label={t('title')}>
       <h2 className={css.heading}>{t('title')}</h2>
       <p className={css.text}>{t('intro')}</p>
+      {!phone && origins.length > 1 && <p className={css.text}>{t('originHint')}</p>}
       {phone
         ? <p className={css.text}>{t('phoneOnly')}</p>
         : (
@@ -166,6 +206,20 @@ export function PhonePairingPanel(props: PhonePairingPanelProps): ReactNode {
                 onChange={(event) => { setDeviceLabel(event.currentTarget.value) }}
               />
             </label>
+            {origin !== undefined && origins.length > 1 && (
+              <label className={css.field}>
+                {t('origin')}
+                <select
+                  className={css.select}
+                  value={origin}
+                  onChange={(event) => { setOrigin(event.currentTarget.value) }}
+                >
+                  {origins.map(entry => (
+                    <option key={entry} value={entry}>{originLabel(entry)}</option>
+                  ))}
+                </select>
+              </label>
+            )}
             <label className={css.field}>
               {t('ttl')}
               <select

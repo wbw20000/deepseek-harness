@@ -3,7 +3,7 @@
  * decoding, and the error carried from a non-2xx reply.
  */
 import { describe, expect, it } from 'vitest'
-import { fetchPairingApi, MINT_PATH, REVOKE_PATH, SESSIONS_PATH } from '../src/client/api.ts'
+import { fetchPairingApi, MINT_PATH, ORIGINS_PATH, REVOKE_PATH, SESSIONS_PATH } from '../src/client/api.ts'
 
 /** One recorded fetch call: the path, the init, and the body when it was a string. */
 interface Call {
@@ -35,6 +35,16 @@ describe('fetchPairingApi', () => {
     expect(calls[0]?.input).toBe(MINT_PATH)
     expect(calls[0]?.init).toMatchObject({ method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' } })
     expect(JSON.parse(calls[0]?.body ?? '')).toEqual({ ttlMs: 600_000, deviceLabel: 'phone' })
+  })
+
+  it('names a chosen origin in the mint body and leaves the field out otherwise', async () => {
+    const minted = { authenticatedUrl: 'https://desk.tailnet.ts.net/?token=t', expiresAt: 42 }
+    const { fetch, calls } = recorder([Response.json(minted), Response.json({ origins: ['a', 'b'] })])
+    const api = fetchPairingApi(fetch)
+    await expect(api.mint({ deviceLabel: 'phone', ttlMs: 1, origin: 'https://desk.tailnet.ts.net' })).resolves.toEqual(minted)
+    expect(JSON.parse(calls[0]?.body ?? '')).toEqual({ ttlMs: 1, deviceLabel: 'phone', origin: 'https://desk.tailnet.ts.net' })
+    await expect(api.origins()).resolves.toEqual(['a', 'b'])
+    expect(calls[1]).toEqual({ input: ORIGINS_PATH, init: { credentials: 'same-origin' } })
   })
 
   it('lists sessions and revokes one', async () => {

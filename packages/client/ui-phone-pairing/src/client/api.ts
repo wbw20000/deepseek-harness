@@ -26,8 +26,19 @@ export interface MintedPairing {
 
 /** The pairing section's port onto Connection's routes. */
 export interface PairingApi {
-  /** Mint one single-use pairing URL for a device label, valid `ttlMs` milliseconds. */
-  mint(input: { readonly deviceLabel: string; readonly ttlMs: number }): Promise<MintedPairing>
+  /**
+   * Mint one single-use pairing URL for a device label, valid `ttlMs`
+   * milliseconds. `origin` picks which route the link points at and must be
+   * one {@link PairingApi.origins} returned; omitted, the deployment's own
+   * first choice is used.
+   */
+  mint(input: {
+    readonly deviceLabel: string
+    readonly ttlMs: number
+    readonly origin?: string
+  }): Promise<MintedPairing>
+  /** The origins this deployment can mint a link from, most-preferred first. */
+  origins(): Promise<readonly string[]>
   /** List every registered browser session, revoked ones included. */
   sessions(): Promise<readonly PairedSession[]>
   /** Revoke one session by id; its cookies and mux connections stop working at once. */
@@ -36,6 +47,8 @@ export interface PairingApi {
 
 /** Same-origin path of the mint route (Connection's `PAIRING_MINT_ROUTE_PATH`). */
 export const MINT_PATH = '/api/connection.pairing.mint'
+/** Same-origin path of the mintable-origin list (Connection's `PAIRING_ORIGINS_ROUTE_PATH`). */
+export const ORIGINS_PATH = '/api/connection.pairing.origins'
 /** Same-origin path of the session list route. */
 export const SESSIONS_PATH = '/api/connection.sessions'
 /** Same-origin path of the session revoke route. */
@@ -68,9 +81,18 @@ export function fetchPairingApi(fetchImpl: typeof fetch): PairingApi {
         method: 'POST',
         credentials: 'same-origin',
         headers: json,
-        body: JSON.stringify({ ttlMs: input.ttlMs, deviceLabel: input.deviceLabel }),
+        // `origin` is left out rather than sent as undefined: the route
+        // distinguishes "no preference" from a named origin it must check.
+        body: JSON.stringify(input.origin === undefined
+          ? { ttlMs: input.ttlMs, deviceLabel: input.deviceLabel }
+          : { ttlMs: input.ttlMs, deviceLabel: input.deviceLabel, origin: input.origin }),
       }))
       return await response.json() as MintedPairing
+    },
+    async origins() {
+      const response = await okOrThrow(await fetchImpl(ORIGINS_PATH, { credentials: 'same-origin' }))
+      const body = await response.json() as { origins: readonly string[] }
+      return body.origins
     },
     async sessions() {
       const response = await okOrThrow(await fetchImpl(SESSIONS_PATH, { credentials: 'same-origin' }))

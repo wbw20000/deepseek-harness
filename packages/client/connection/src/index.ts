@@ -74,6 +74,8 @@ export const SESSIONS_ROUTE_PATH = '/api/connection.sessions'
 export const SESSIONS_REVOKE_ROUTE_PATH = '/api/connection.sessions.revoke'
 /** Exact Fetch route minting one single-use pairing login URL. */
 export const PAIRING_MINT_ROUTE_PATH = '/api/connection.pairing.mint'
+/** Exact Fetch route listing the origins a pairing link may be minted from. */
+export const PAIRING_ORIGINS_ROUTE_PATH = '/api/connection.pairing.origins'
 /** Exact Fetch route revoking the caller's own browser session. */
 export const LOGOUT_ROUTE_PATH = '/api/connection.logout'
 /** Exact Fetch route revoking every session bound to one client-certificate serial. */
@@ -152,6 +154,20 @@ export interface ConnectionConfig {
    */
   publicOrigin?: string
   /**
+   * Further origins a paired device may reach this deployment through, offered
+   * alongside {@link ConnectionConfig.publicOrigin} so the person minting a
+   * link picks the route that device will take. Default: empty, and
+   * `publicOrigin` is the only choice. Each entry carries the same rules as
+   * `publicOrigin` — bare origin, `https` while `cookieSecure` is on, and an
+   * authority listed in `trustedHosts` — and anything else fails plugin load.
+   *
+   * A deployment reachable two ways wants this: a LAN or VPN origin that is
+   * fast but only resolves on that network, and a relayed public origin that
+   * works anywhere but pays the relay's latency. Neither is right for every
+   * device, so the choice belongs to whoever mints the link.
+   */
+  alternatePublicOrigins?: string[]
+  /**
    * HTTP header carrying the client certificate's serial number, as forwarded
    * by the mTLS-terminating reverse proxy (Caddy:
    * `header_up X-DSH-Client-Serial {http.request.tls.client.serial}`). Default:
@@ -179,6 +195,7 @@ export const Config: z<ConnectionConfig> = z.object({
   cookieMaxAgeDays: z.natural().min(1).default(30),
   cookieSecure: z.boolean().default(false),
   maxRequestBodyBytes: z.natural().min(1).default(DEFAULT_MAX_REQUEST_BODY_BYTES),
+  alternatePublicOrigins: z.array(String).default([]),
   // publicOrigin stays a runtime-only declared field for the same reason as
   // mtlsClientSerialHeader below: unset must stay distinguishable from empty.
   // mtlsClientSerialHeader stays a runtime-only declared field: the vendored
@@ -207,6 +224,7 @@ export async function apply(ctx: Context, config?: ConnectionConfig): Promise<vo
   // silently authorizing its hostname prefix at request time.
   for (const entry of trustedHosts) assertTrustedAuthority(entry)
   const publicOrigin = resolvePublicOrigin(config?.publicOrigin, cookieSecure, trustedHosts)
+  const alternatePublicOrigins = resolveAlternatePublicOrigins(config?.alternatePublicOrigins, cookieSecure, trustedHosts)
   // Config boundary: a malformed serial-header policy fails the load loudly
   // instead of trusting a header from the wrong peer or trusting nothing.
   const mtlsPolicy: MtlsClientCertificatePolicy = resolveMtlsClientCertificatePolicy(config ?? {})
@@ -236,7 +254,7 @@ export async function apply(ctx: Context, config?: ConnectionConfig): Promise<vo
       },
     }
     webCtx.effect(() => webCtx.webServer.register(route), 'client-connection: /api route')
-    registerConnectionRoutes(webCtx, connection, cookieSecure, publicOrigin)
+    registerConnectionRoutes(webCtx, connection, cookieSecure, publicOrigin, alternatePublicOrigins)
   })
   ctx.inject(['attachments'], (attachmentCtx) => {
     assertImageBodyCapacity(attachmentCtx, maxRequestBodyBytes)
@@ -279,6 +297,8 @@ function requestOrigin(request: Request, cookieSecure: boolean): string | undefi
  * @param configured - the raw `publicOrigin` config value, or undefined.
  * @param cookieSecure - the deployment's cookie `Secure` setting.
  * @param trustedHosts - the deployment's trusted authorities.
+ * @param field - config field named in every error, so an alternate origin's
+ *   rejection points at the list it came from rather than at `publicOrigin`.
  * @returns the normalized origin (no trailing slash), or undefined when unset.
  * @throws Error naming the offending value when it is not usable.
  */
@@ -286,22 +306,23 @@ export function resolvePublicOrigin(
   configured: string | undefined,
   cookieSecure: boolean,
   trustedHosts: readonly string[],
+  field = 'publicOrigin',
 ): string | undefined {
   if (configured === undefined) return undefined
   let url: URL
   try {
     url = new URL(configured)
   } catch {
-    throw new Error(`client-connection: publicOrigin ${JSON.stringify(configured)} is not an absolute URL`)
+    throw new Error(`client-connection: ${field} ${JSON.stringify(configured)} is not an absolute URL`)
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw new Error(`client-connection: publicOrigin ${JSON.stringify(configured)} must use http or https`)
+    throw new Error(`client-connection: ${field} ${JSON.stringify(configured)} must use http or https`)
   }
   if (url.pathname !== '/' || url.search !== '' || url.hash !== '' || url.username !== '' || url.password !== '') {
-    throw new Error(`client-connection: publicOrigin ${JSON.stringify(configured)} must be a bare origin (scheme and authority only)`)
+    throw new Error(`client-connection: ${field} ${JSON.stringify(configured)} must be a bare origin (scheme and authority only)`)
   }
   if (cookieSecure && url.protocol !== 'https:') {
-    throw new Error(`client-connection: publicOrigin ${JSON.stringify(configured)} must use https while cookieSecure is on`)
+    throw new Error(`client-connection: ${field} ${JSON.stringify(configured)} must use https while cookieSecure is on`)
   }
   const authority = url.host.toLowerCase()
   const hostname = url.hostname.toLowerCase()
@@ -310,9 +331,58 @@ export function resolvePublicOrigin(
     return normalized === authority || normalized === hostname
   })
   if (!trusted) {
-    throw new Error(`client-connection: publicOrigin authority ${JSON.stringify(url.host)} is not listed in trustedHosts, so its pages would be refused`)
+    throw new Error(`client-connection: ${field} authority ${JSON.stringify(url.host)} is not listed in trustedHosts, so its pages would be refused`)
   }
   return url.origin
+}
+
+/**
+ * Validate the alternate pairing origins at load, under the same rules as
+ * {@link resolvePublicOrigin}. Duplicates collapse, so the mint form offers
+ * each route once however the config spells it.
+ * @param configured - the raw `alternatePublicOrigins` config value, or undefined.
+ * @param cookieSecure - the deployment's cookie `Secure` setting.
+ * @param trustedHosts - the deployment's trusted authorities.
+ * @returns the normalized origins, in configured order, without duplicates.
+ * @throws Error naming the offending entry when one is not usable.
+ */
+export function resolveAlternatePublicOrigins(
+  configured: readonly string[] | undefined,
+  cookieSecure: boolean,
+  trustedHosts: readonly string[],
+): readonly string[] {
+  const origins = new Set<string>()
+  for (const entry of configured ?? []) {
+    // Every entry is a set string, so the shared validator never returns
+    // undefined here; it stays optional only for `publicOrigin`, which may be
+    // unset.
+    const origin = resolvePublicOrigin(entry, cookieSecure, trustedHosts, 'alternatePublicOrigins')
+    /* v8 ignore next -- a set entry always resolves to an origin. */
+    if (origin !== undefined) origins.add(origin)
+  }
+  return [...origins]
+}
+
+/**
+ * The origins one mint request may choose between: the deployment's configured
+ * public origin — or, unset, the origin the request itself arrived on — first,
+ * then every alternate. The first entry is what a client naming no origin
+ * gets, so a client that does not know about the choice keeps the previous
+ * behaviour.
+ * @param publicOrigin - the configured public origin, or undefined.
+ * @param alternates - the validated alternate origins, already deduplicated.
+ * @param requestBase - the origin the mint request arrived on.
+ * @returns the choosable origins, most-preferred first, without duplicates.
+ *   The head is always present, which is what lets a request naming no origin
+ *   take it without a further check.
+ */
+function pairingOrigins(
+  publicOrigin: string | undefined,
+  alternates: readonly string[],
+  requestBase: string,
+): readonly [string, ...string[]] {
+  const preferred = publicOrigin ?? requestBase
+  return [preferred, ...alternates.filter(origin => origin !== preferred)]
 }
 
 /**
@@ -323,12 +393,14 @@ export function resolvePublicOrigin(
  * @param connection - Host Connection service carrying the session registry.
  * @param cookieSecure - cookie `Secure` setting; also selects the pairing URL scheme.
  * @param publicOrigin - the configured origin paired devices use, which every pairing URL is minted from when set.
+ * @param alternatePublicOrigins - further origins a mint request may name instead.
  */
 function registerConnectionRoutes(
   owner: Context,
   connection: HostConnectionService,
   cookieSecure: boolean,
   publicOrigin: string | undefined,
+  alternatePublicOrigins: readonly string[],
 ): void {
   owner.effect(() => connection.fetch.register({
     path: SESSIONS_ROUTE_PATH,
@@ -368,15 +440,23 @@ function registerConnectionRoutes(
       if (!connection.callerOf(request).loopback) {
         return plainResponse(403, 'connection: pairing links are minted from the stable host only')
       }
-      // The configured public origin wins: behind a relay the desktop's own
-      // origin is a loopback address no phone can open.
-      const origin = publicOrigin ?? requestBase
       const body = (await readJsonObject(request)) ?? {}
       const ttlMs = body.ttlMs === undefined ? DEFAULT_PAIRING_TTL_MS : body.ttlMs
       const deviceLabel = body.deviceLabel
       if (typeof ttlMs !== 'number' || typeof deviceLabel !== 'string') {
         return plainResponse(400, 'connection: ttlMs must be a number and deviceLabel must be a string')
       }
+      // The configured public origin wins over the request's own: behind a
+      // relay the desktop's origin is a loopback address no phone can open.
+      // A request may name another origin instead, but only one this
+      // deployment declared — an origin off that list would mint a link to a
+      // page the trust fence refuses, or to somewhere else entirely.
+      const choosable = pairingOrigins(publicOrigin, alternatePublicOrigins, requestBase)
+      const requested = body.origin
+      if (requested !== undefined && (typeof requested !== 'string' || !choosable.includes(requested))) {
+        return plainResponse(400, 'connection: origin must be one of this deployment\'s configured pairing origins')
+      }
+      const origin = requested ?? choosable[0]
       try {
         const minted = connection.mintPairingUrl(origin, ttlMs, deviceLabel)
         return Response.json(
@@ -388,6 +468,28 @@ function registerConnectionRoutes(
       }
     },
   }), 'client-connection: /api/connection.pairing.mint route')
+  owner.effect(() => connection.fetch.register({
+    path: PAIRING_ORIGINS_ROUTE_PATH,
+    methods: ['GET'],
+    requestBody: 'buffered',
+    // The route table hands back a promise; this one answers from config
+    // alone, so it resolves what it already has rather than being `async`.
+    fetch: (request) => {
+      const requestBase = requestOrigin(request, cookieSecure)
+      if (requestBase === undefined) {
+        return Promise.resolve(plainResponse(400, 'connection: request carries no Host header'))
+      }
+      // Same host-only rule as minting: the list exists to drive the mint
+      // form, and a phone has no business reading the deployment's routes.
+      if (!connection.callerOf(request).loopback) {
+        return Promise.resolve(plainResponse(403, 'connection: pairing links are minted from the stable host only'))
+      }
+      return Promise.resolve(Response.json(
+        { origins: pairingOrigins(publicOrigin, alternatePublicOrigins, requestBase) },
+        { headers: { 'cache-control': 'no-store' } },
+      ))
+    },
+  }), 'client-connection: /api/connection.pairing.origins route')
   owner.effect(() => connection.fetch.register({
     path: LOGOUT_ROUTE_PATH,
     methods: ['POST'],

@@ -27,8 +27,12 @@ function scriptableApi(overrides: Partial<PairingApi> = {}): PairingApi & { call
   return {
     calls,
     mint: async (input) => {
-      calls.push(`mint:${input.deviceLabel}:${String(input.ttlMs)}`)
+      calls.push(`mint:${input.deviceLabel}:${String(input.ttlMs)}:${input.origin ?? 'default'}`)
       return { authenticatedUrl: `https://dsh.example:8443/?token=${'A'.repeat(43)}`, expiresAt: 1_000_000 + 600_000 }
+    },
+    origins: async () => {
+      calls.push('origins')
+      return ['https://dsh.example:8443']
     },
     sessions: async () => {
       calls.push('sessions')
@@ -85,7 +89,10 @@ describe('PhonePairingPanel', () => {
       expect(mint.hasAttribute('disabled')).toBe(false)
       fireEvent.click(mint)
       await vi.waitFor(() => { expect(view.getByRole('region', { name: 'Scan to sign in' })).toBeDefined() })
-      expect(api.calls).toContain('mint:my iphone:300000')
+      // One offered origin: no choice to make, so the picker stays hidden and
+      // the request names no origin at all.
+      expect(view.queryByText('Route')).toBeNull()
+      expect(api.calls).toContain('mint:my iphone:300000:default')
       expect(view.getByRole('img', { name: 'Pairing QR code' })).toBeDefined()
       expect(view.getByText(`https://dsh.example:8443/?token=${'A'.repeat(43)}`)).toBeDefined()
       expect(view.getByText('Expires in 600 s')).toBeDefined()
@@ -187,5 +194,47 @@ describe('PhonePairingPanel', () => {
     fireEvent.click(again.getByLabelText('I understand, revoke now'))
     fireEvent.click(again.getByRole('button', { name: 'Revoke' }))
     await vi.waitFor(() => { expect(again.getByText('Revoking failed: gone')).toBeDefined() })
+  })
+
+  it('offers the route picker only when the deployment has more than one origin, and mints from the chosen one', async () => {
+    const lan = 'https://desk.tail1234.ts.net'
+    const relay = 'https://dsh.example:8443'
+    const api = scriptableApi({ origins: async () => [lan, relay] })
+    const view = render(<PhonePairingPanel {...props({ api })} />)
+    await vi.waitFor(() => { expect(view.getByText('Route')).toBeDefined() })
+    // The picker names each route by its authority, and the deployment's own
+    // first choice is preselected.
+    const picker = view.getAllByRole('combobox')[0] as HTMLSelectElement
+    expect([...picker.options].map(option => option.textContent)).toEqual(['desk.tail1234.ts.net', 'dsh.example:8443'])
+    expect(picker.value).toBe(lan)
+    fireEvent.change(view.getByPlaceholderText('e.g. My iPhone'), { target: { value: 'my iphone' } })
+    fireEvent.change(picker, { target: { value: relay } })
+    fireEvent.click(view.getByRole('button', { name: 'Mint pairing link' }))
+    await vi.waitFor(() => { expect(api.calls).toContain(`mint:my iphone:600000:${relay}`) })
+  })
+
+  it('names an origin the URL parser rejects by its own text rather than failing to render', async () => {
+    const api = scriptableApi({ origins: async () => ['not an origin', 'https://dsh.example:8443'] })
+    const view = render(<PhonePairingPanel {...props({ api })} />)
+    await vi.waitFor(() => { expect(view.getByText('Route')).toBeDefined() })
+    const picker = view.getAllByRole('combobox')[0] as HTMLSelectElement
+    expect([...picker.options].map(option => option.textContent)).toEqual(['not an origin', 'dsh.example:8443'])
+  })
+
+  it('hides the picker when the origin list cannot be read, and still mints without naming one', async () => {
+    const api = scriptableApi({ origins: async () => { throw new Error('HTTP 500') } })
+    const view = render(<PhonePairingPanel {...props({ api })} />)
+    await vi.waitFor(() => { expect(view.getByText('my iphone')).toBeDefined() })
+    expect(view.queryByText('Route')).toBeNull()
+    fireEvent.change(view.getByPlaceholderText('e.g. My iPhone'), { target: { value: 'my iphone' } })
+    fireEvent.click(view.getByRole('button', { name: 'Mint pairing link' }))
+    await vi.waitFor(() => { expect(api.calls).toContain('mint:my iphone:600000:default') })
+  })
+
+  it('does not ask a phone for the routes it cannot mint from', async () => {
+    const api = scriptableApi()
+    render(<PhonePairingPanel {...props({ api, phone: true })} />)
+    await vi.waitFor(() => { expect(api.calls).toContain('sessions') })
+    expect(api.calls).not.toContain('origins')
   })
 })
