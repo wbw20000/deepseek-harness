@@ -230,6 +230,21 @@ describe('deriveTaskId', () => {
     expect(deriveTaskId('纯中文需求 -> ##', 'a1b2c3')).toBe('task-a1b2c3')
     expect(deriveTaskId('add search')).toMatch(/^add-search-[0-9a-f]{6}$/)
   })
+
+  it('cuts the stem so the id stays within the 64 characters the core accepts', () => {
+    // The requirement whose 67-character id made `createTask` fail after its
+    // workspace was already allocated (2026-09-23).
+    const requirement = '新增脚本 scripts/selfdev-daily-smoke.mjs（端到端冒烟测试，部署验收用）：'
+      + '运行 node scripts/selfdev-daily-smoke.mjs 时输出 daily-ok'
+    const id = deriveTaskId(requirement, 'b6be6e')
+    expect(id).toBe('scriptsselfdevdailysmokemjs-node-scriptsselfdevdailysmoke-b6be6e')
+    expect(id).toHaveLength(64)
+    expect(id).toMatch(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u)
+  })
+
+  it('never leaves the cut stem ending on a separator', () => {
+    expect(deriveTaskId(`${'a'.repeat(56)} bb`, 'c0ffee')).toBe(`${'a'.repeat(56)}-c0ffee`)
+  })
 })
 
 describe('readBaselineDigest', () => {

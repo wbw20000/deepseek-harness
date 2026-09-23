@@ -14,10 +14,17 @@ const TASK_ID_WORD_COUNT = 4
 const TASK_ID_FALLBACK = 'task'
 
 /**
- * Derive the task id from the requirement: kebab-cased first words plus a random suffix.
+ * Longest task id the core accepts: `validateTaskId` in
+ * `@deepseek-ai/dsh-workflow-self-development` takes 1–64 characters.
+ */
+const TASK_ID_MAX_LENGTH = 64
+
+/**
+ * Derive the task id from the requirement: kebab-cased first words plus a random suffix,
+ * the stem cut short when needed so the whole id stays within the core's 64 characters.
  * @param requirement - the consolidated requirement text.
  * @param suffix - six-character random suffix; defaults to hex from `randomBytes`.
- * @returns a kebab-case task id such as `add-json-flag-a1b2c3`.
+ * @returns a kebab-case task id such as `add-json-flag-a1b2c3`, at most 64 characters long.
  */
 export function deriveTaskId(requirement: string, suffix: string = randomBytes(3).toString('hex')): string {
   const words = requirement
@@ -31,7 +38,12 @@ export function deriveTaskId(requirement: string, suffix: string = randomBytes(3
     .map(word => word.replace(/[^a-z0-9]/gu, ''))
     .filter(word => word.length > 0)
   const stem = words.length > 0 ? words.join('-') : TASK_ID_FALLBACK
-  return `${stem}-${suffix}`
+  // A requirement opening with long paths (`scripts/...`, `packages/...`) runs
+  // past the core's limit, which then refuses `createTask` after the workspace
+  // was already allocated. Keep the suffix whole, cut the stem, and never let
+  // the cut stem end on a separator.
+  const clipped = stem.slice(0, Math.max(1, TASK_ID_MAX_LENGTH - suffix.length - 1)).replace(/-+$/u, '')
+  return `${clipped}-${suffix}`
 }
 
 /**
